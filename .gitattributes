@@ -1,0 +1,7 @@
+# Normalize line endings to LF in the repository.
+#
+# The same tree runs on both sides of the boundary: the host half is loaded by a
+# Windows Node process, while `lib/wsl/terminal-bridge.py` is uploaded to and run
+# inside the Linux distribution. Normalizing avoids CRLF churn in diffs and keeps
+# the in-distribution Python source byte-identical to what was reviewed.
+* text=auto eol=lf

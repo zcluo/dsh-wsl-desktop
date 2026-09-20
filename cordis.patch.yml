@@ -1,0 +1,9 @@
+# Bundle patch for dsh-wsl-desktop.
+#
+# The Host half registers the WSL discovery route the browser half calls; the
+# `dsh.client` manifest in package.json supplies the browser half. Later
+# milestones add the WSL execution-world providers (fs / subprocess / shell /
+# sandbox) and the `wsl` agent preset here.
+- insert:
+    - id: wsl-desktop
+      name: 'dsh-wsl-desktop'

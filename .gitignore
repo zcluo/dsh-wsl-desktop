@@ -1,0 +1,16 @@
+# Editor and OS noise.
+.DS_Store
+Thumbs.db
+*.swp
+
+# Node.
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+
+# Local staging the installer writes; never part of the source tree.
+.install/
+*.log
+
+# Verification residue (a suite that throws mid-run can leave these behind).
+/tmp-probe/
