@@ -149,34 +149,42 @@ class Bridge:
         except (ValueError, UnicodeDecodeError):
             reply({"ok": False, "error": "control line is not JSON"})
             return
+        request_id = request.get("id")
+
+        def ans(payload):
+            """Answer the request, echoing its id so the host can pair the reply."""
+            if request_id is not None:
+                payload = {"id": request_id, **payload}
+            reply(payload)
+
         op = request.get("op")
         if op == "resize":
             self.resize(request.get("cols", 80), request.get("rows", 24))
-            reply({"ok": True})
+            ans({"ok": True})
         elif op == "foreground":
             pgrp = self.foreground_pgrp()
-            reply({"ok": True, "pgrp": pgrp, "shellPgrp": self.shell_pgrp})
+            ans({"ok": True, "pgrp": pgrp, "shellPgrp": self.shell_pgrp})
         elif op == "activity":
-            reply({"ok": True, **self.activity()})
+            ans({"ok": True, **self.activity()})
         elif op == "signal":
             name = request.get("signal")
             number = SIGNALS.get(name)
             if number is None:
-                reply({"ok": False, "error": "unsupported signal %s" % name})
+                ans({"ok": False, "error": "unsupported signal %s" % name})
                 return
             pgrp = self.foreground_pgrp()
             if pgrp is None:
-                reply({"ok": False, "error": "no foreground process group"})
+                ans({"ok": False, "error": "no foreground process group"})
                 return
             try:
                 os.killpg(pgrp, number)
-                reply({"ok": True, "pgrp": pgrp})
+                ans({"ok": True, "pgrp": pgrp})
             except OSError as error:
-                reply({"ok": False, "error": str(error)})
+                ans({"ok": False, "error": str(error)})
         elif op == "terminate":
-            reply({"ok": True, "terminated": self.terminate()})
+            ans({"ok": True, "terminated": self.terminate()})
         else:
-            reply({"ok": False, "error": "unknown op"})
+            ans({"ok": False, "error": "unknown op"})
 
     def terminate(self):
         """Signal the whole session and report the group that received it."""

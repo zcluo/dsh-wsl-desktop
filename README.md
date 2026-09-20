@@ -5,9 +5,9 @@
 > 发布时代码里有以下已知状态，细节与每项的证据强度见下方「目标能力」表与「fs 工具的围栏」一节：
 >
 > - **① 路由的未认证命令执行洞已关闭**：`connection.requestRejection` 围栏 + 强制 `application/json` + 64KiB 体积上限 + 命令类方法移出浏览器命名空间。有活体 18/18 验证，其中包含"未认证请求携带的命令没有执行"的副作用断言。
-> - **④ WSL 会话的 fs 工具没有围栏（未解决）**：`lib/wsl/fs.js` 不覆写 `sandboxMode`，于是 `tool-fs` 对每次调用都解析不出策略，`write`/`edit` 可以写到 9P 共享可达的任何地方，**包括 `/mnt/c`（整个 Windows 文件系统）**。同一文件里 shell 侧的约束已修并验证。
-> - **② / ③ 的绑定与清扫**：代码已改，宿主侧效果待观察；绑定接缝的活体验证曾被 fs 的挂载问题挡住，**尚未完成**。
-> - 离线 9 个校验套件当前全绿；`verify-post-restart.mjs` 说明了活体侧还缺什么。
+> - **④ WSL 会话的 fs 工具围栏已实现，活体待验**：`lib/wsl/fs.js` 现在声明 `sandboxMode`，`writeText`/`editText` 都过 `checkedTarget`（拒绝抛结构化 `FS_SANDBOX_DENIED`）；纯比较逻辑在 `lib/wsl/fence.js`，离线由 `verify-fs-fence.mjs` 覆盖、由 `verify-modules.mjs` 钉住。**活体验证需要重启 DSH Desktop 后跑 `verify-post-restart.mjs`，尚未完成。**
+> - **② / ③ 的绑定接缝已改为创建时命名**：浏览器半边在会话创建请求里带 `agentPreset`（`wslPresetFor` 解析变体 id）；宿主只保留 `api-session/added` 兜底并告警。代码与离线校验已就位，宿主侧效果同样待重启观察。
+> - 离线 10 个校验套件当前全绿；`verify-post-restart.mjs` 说明了活体侧还缺什么。
 
 DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 Linux 工作区，并让该工作区内的工具真正在发行版里执行。
 
@@ -18,15 +18,19 @@ DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 L
 | # | 能力 | 状态 |
 |---|---|---|
 | ① | 工作区可选择 WSL 发行版里的 Linux 目录 | 对话框与宿主调用已实现；**浏览器内交互仍未被自动化覆盖**（2 项 PENDING） |
-| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | **仅 selftest 路径被证明**。GUI 创建的会话绑定失败（见下），因此真实 GUI 会话目前跑在 Windows 世界 |
-| ③ | 同一实例里 Windows 与 WSL 工作区并存 | 设计成立（按会话 preset realm），但**自动绑定这条路是坏的**，见「会话绑定」 |
-| ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧已加围栏，活体待验**（见下）|
+| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | selftest 路径已被证明（`verify-post-restart.mjs` 的 session-level 段）。GUI 会话的执行世界现在**在创建请求里命名**（见「会话绑定」），GUI 侧效果待重启后活体确认 |
+| ③ | 同一实例里 Windows 与 WSL 工作区并存 | 设计成立（按会话 preset realm），绑定接缝见「会话绑定」；并存本身待活体确认 |
+| ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧围栏已实现**（`sandboxMode` + `checkedTarget`，见「fs 工具的围栏」），离线钉住；**活体验证待重启后做**（见下）|
 
-## 会话绑定：必须发生在创建时
+## 会话绑定：在创建请求里命名执行世界
 
-harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.agentPreset` → `composeAgent` 的 `setup: presets.mount(...)`，挂载发生在会话发布之前）。事后用 `agentPresets.select` 只能作用于"还没有跑过任何 turn"的会话，一旦有过 turn 就被 `agent-preset/locked` 拒绝，而且拒绝只写进内存日志、不报给用户。实测 `bindingLog`：唯一一个真实 GUI WSL 会话（`\\wsl.localhost\<发行版>\home\<用户>\<项目>`）被记录了两次 `ok:false "has already started; its agent preset is fixed"` —— 也就是说它一直在 Windows 世界里跑。
+harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.agentPreset` → `composeAgent` 的 `setup: presets.mount(...)`，挂载发生在会话发布之前）。事后用 `agentPresets.select` 只能作用于"还没有跑过任何 turn"的会话，一旦有过 turn 就被 `agent-preset/locked` 拒绝，而且拒绝只写进内存日志、不报给用户。
 
-**当前实现（事后绑定）是错的**，正确做法是让创建请求带上 `agentPreset`（浏览器半边自己创建会话时传，宿主提供 `wslPresetFor` 解析变体 id）。修好之前，`verify-post-restart.mjs` 的绑定检查会**如实报 FAIL**，而不是拿本脚本自己创建的 selftest 会话冒充绿灯。
+**当前实现就是围绕这个事实做的**：
+
+- 浏览器半边在 W 对话框里创建会话时，先调宿主的 `wslPresetFor` 解析变体 id，然后把 `agentPreset` 放进**创建请求**（`lib/client.js` 的 `commit()`）。这是唯一无竞态的接缝：preset 随会话一起组合，不存在"先跑在 Windows 世界再切"的窗口。
+- 宿主半边保留一个 `api-session/added` 监听（`lib/index.js` 的 `bindWslSession`）作为**兜底**：只处理"cwd 是 WSL 路径、但创建时没带 preset"的会话（比如从别的入口创建的）。它尝试事后 `select`，成功就补绑，失败就写 `bindingLog` 并在宿主日志里告警——这类条目现在是**异常信号**，不再是正常路径的一部分。
+- 因此 `verify-post-restart.mjs` 的 binding 段语义是：非 selftest 的 `bindingLog` 条目 = 有人绕过创建接缝建了 WSL 会话；零条目 = 一切经创建请求绑定的会话都正常。GUI 侧的最终确认仍是一项 PENDING 的人工步骤。
 
 ## 界面入口
 
@@ -50,7 +54,9 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 控制进程  wsl.exe -e bash -c 'exec 3>"$fifo"; while read -r l; do printf "%s\n" "$l" >&3; done'
 ```
 
-桥用 `pty.fork()` 分配 PTY，把 master 与管道对泵，并把 `resize`/`foreground`/`activity`/`signal`/`terminate` 实现为 FIFO 上的 JSON 行协议。**发行版内零安装**（只用 python3 标准库）。
+桥用 `pty.fork()` 分配 PTY，把 master 与管道对泵，并把 `resize`/`foreground`/`activity`/`signal`/`terminate` 实现为 FIFO 上的 JSON 行协议。**每个控制请求携带 id，桥在应答里回显同一 id**，宿主按 id 配对：超时先把条目摘除，迟到的或无主的应答直接丢弃——否则一次超时之后，迟到的应答会被下一条请求消费，整条控制通道从此错位（这正是旧版 `verify-terminal.mjs` 偶发失败的机制之一）。宿主侧的清理契约：announce 超时或控制进程启动失败时，终止已 spawn 的两个进程并等待退出（旧版在这里泄漏数据进程与 PTY 会话）；桥退出后，未决与后续控制请求立即失败，不再空等整个控制超时。**发行版内零安装**（只用 python3 标准库）。
+
+残余限制：宿主进程被硬杀（SIGKILL 级）时，桥的 `finally` 不会执行，`/tmp/dsh-pty-*.fifo` 会残留到发行版重启；下次分配时桥会先 unlink 同名 FIFO，所以这只是临时垃圾，不影响行为。
 
 两个实测前提：
 
@@ -81,7 +87,7 @@ Windows 工作区会话                      WSL 工作区会话
 
 `wsl.exe` 本身是普通 Windows 进程，所以 WSL 执行器通过**继承来的** `ctx.subprocess` 启动它 —— realm 只隔离 `shell` 和 `fs`，托管进程的终止、输出溢出与回收仍归本地 provider。
 
-**预设绑定在 Host 侧自动完成。** 会话创建时 `agent/created`（serial 事件）里按 `session.header.cwd` 是否为 UNC 路径（`\\wsl.localhost\<distro>\…`）决定是否切到 `wsl-<原预设>`。浏览器半边因此不依赖任何 preset 客户端 API。
+**执行世界的命名发生在创建请求里。** 浏览器半边创建 WSL 会话时通过 `wslPresetFor` 把变体 id 写进 `agentPreset`；宿主半边只在 `api-session/added` 里对"没带 preset 的 WSL 路径会话"做兜底并告警（见「会话绑定」）。浏览器半边因此不依赖任何 preset 客户端 API 之外的东西。
 
 ## 约束（Linux 侧，M2）
 
@@ -123,6 +129,7 @@ lib/wsl/pty.js         终端句柄：两个进程驱动发行版内的 PTY 桥
 lib/wsl/terminal-bridge.py 发行版内运行的 PTY 桥（python3 标准库，零安装）
 lib/wsl/host-refs.js    宿主 subprocess provider 的跨模块引用（realm 隔离后必需）
 lib/wsl/confinement.js  mount namespace 约束（纯函数 + 探测，可独立测试）
+lib/wsl/fence.js        fs 围栏的包含性比较与可写根推导（纯函数，可独立测试）
 lib/wsl/preset.js       预设重写（纯文本，可独立测试）
 scripts/sync.ps1        把插件 stage 进 profile（随后由 plugin_manager 安装）
 scripts/env.mjs         校验用的发行版/用户/home 解析（不硬编码机器身份）
@@ -142,6 +149,7 @@ node scripts/verify-all.mjs --live   # 追加需要已安装插件 + 运行中�
 ```powershell
 node scripts/verify-world.mjs        # 路径互译 + 在发行版里执行命令 + 目录事实
 node scripts/verify-preset.mjs       # 预设重写（对着随附 standard 预设跑）
+node scripts/verify-fs-fence.mjs     # fs 围栏的纯逻辑：包含性、跨发行版、可写根推导
 node scripts/verify-9p.mjs           # 9P 共享原语画像
 node scripts/verify-confinement.mjs  # 约束围栏：工作区可写、外部被拒、属主正确
 node scripts/verify-terminal.mjs     # PTY 桥：resize / 前台进程组 / 信号 / 终止
@@ -154,19 +162,19 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 发行版与用户不再硬编码：`DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DSH_WSL_HOME` 可覆盖，默认从 `wsl.exe` 现读。
 
-**已知不稳定**：`verify-terminal.mjs` 偶发失败（实测 6 次里 1 次，两项失败），紧接着上一次运行之后更容易出现，与 PTY 桥的清理问题（见审查发现的 I11–I13）一致；连续重跑会恢复。修桥的清理之前，不要把它当成稳定信号。
+**已知不稳定 → 已修，待观察**：`verify-terminal.mjs` 曾偶发失败（实测 6 次里 1 次，两项失败，紧接上一次运行之后更容易出现）。根因在宿主侧 `lib/wsl/pty.js`，不是桥：分配失败路径（announce 超时、控制进程启动失败）不终止已 spawn 的数据进程，泄漏的桥会干扰后续运行；且控制应答不携带请求 id，一次超时之后迟到的应答会被下一条请求消费，整个控制通道从此错位。修复：失败路径现在终止并等待两个进程退出；每个请求带 id、桥回显同一 id，超时先摘除条目、迟到应答直接丢弃。修复后连续 3 次背靠背全绿——稳定性结论请以更多次连续重跑为准。
 
 宿主代码改动需要**重启 DSH Desktop** 才会加载；重启后先跑 `verify-post-restart.mjs`，它会在旧模块仍生效时直接报「请重启」而不是给假绿。**浏览器半边改动不需要重启**：就地改写当前那一代的 `lib/client.js` 会改变投放 rev 并由 `/plugins/events` 推给已打开的页面（`patchReload: live`）。`verify-post-restart.mjs` 会从 `/plugins/events` 读实时模块图并取回真正投放的那份 bundle 来断言这一点。
 
 `sync.ps1` 每次 stage 到新的时间戳目录（Node 按 URL 缓存模块，同目录重装仍服务旧代码），但**保留当前 profile 链接着的那一代**：运行中的宿主生成的预设里写的是它自己目录内的绝对模块路径，把那个目录删掉会让所有 WSL 会话在下一次重启前失效。
 
-## fs 工具的围栏：两次失败之后的结论
+## fs 工具的围栏
 
-`WslFileSystem` 自带围栏（`sandboxMode` + `checkedTarget` + `isUnder`），**不是**继承官方的沙箱后端。
+`WslFileSystem` 自带围栏：声明 `sandboxMode`，`writeText`/`editText` 两个变更入口都先过 `checkedTarget`（拒绝抛结构化 `FS_SANDBOX_DENIED`，工具层把它映射成模型可见的 `[sandbox: …]` 标记与升级提示）；包含性比较与可写根推导是纯函数，放在 `lib/wsl/fence.js`。**不是**继承官方的沙箱后端——官方后端会把本行包进第二个后端，凭空多出一层组合依赖，而围栏本来就是"可信代码里的策略检查"，放在本行即可。（最初"realm 看不到 `sandboxPolicy` 所以不能继承"的归因是错的，见下面教训 1：同 realm 的 `shell.js` 一直注入着这个服务。）
 
-**为什么不能继承**：`SandboxedFileSystem` 注入 `sandboxPolicy`，而本后端挂在 preset realm 内部，多一个 realm 里拿不到的服务就多一种整行不激活的失败。
+**可写根与比较命名空间**：`workspace-write` 的允许集 = 会话 cwd（工作区根）+ **发行版的** `/tmp`（9P 分享上的 `\\wsl.localhost\<distro>\tmp`，这是 Linux 侧 `/tmp/…` 请求在本世界解析到的位置；官方推导里的宿主 POSIX `/tmp` 在 Windows 上无意义）+ Windows 临时目录（经 `/mnt/<盘符>` 可达）。比较在**宿主命名空间**做：targetKey 是 Windows 拼写，UNC 前缀自带发行版身份，所以"另一个发行版里恰好同拼写的 Linux 路径"出不了界；未知模式给空允许集，即拒绝（fail-closed）。
 
-**为什么必须有围栏**：`LocalFileSystem` 从不覆写 `FileSystem.sandboxMode`。一个什么都不宣称的后端会让 `tool-fs` 的 `FsSandboxController` 对每次调用都解析不出策略（`tool-fs/src/sandbox.ts:43-50`：`defaultMode === undefined` ⇒ `escalationModes = []`、`policy = undefined`），于是 `write`/`edit` 完全不受管，能写到共享可达的任何地方，包括 `/mnt/c`。
+**为什么必须有围栏**：`LocalFileSystem` 从不覆写 `FileSystem.sandboxMode`。一个什么都不宣称的后端会让 `tool-fs` 的 `FsSandboxController` 对每次调用都解析不出策略（`tool-fs/src/sandbox.ts:43-50`：`defaultMode === undefined` ⇒ `escalationModes = []`、`policy = undefined`），于是 `write`/`edit` 完全不受管，能写到共享可达的任何地方，包括 `/mnt/c`——`toHostPath` 也接受直接的 `C:\…` 拼写，所以未围栏时的实际暴露面是整个 Windows 文件系统，不只是分享。
 
 **两次失败尝试的教训**（记在这里以免再犯）：
 
@@ -175,4 +183,4 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 **因此 selftest 也改了**：它现在像真实调用方一样显式传策略 `{ mode: 'workspace-write', workspaceRoot: <会话 cwd> }`。之前它不传，是"用一个真实调用方永远不会用的方式调 fs"，那才是上次被拒的原因——不是围栏太严。
 
-`scripts/verify-modules.mjs` 会把这三行钉住（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、包含性比较有分隔符边界），避免以后有人（包括我）再把围栏悄悄删掉。
+**两层钉子**：`scripts/verify-modules.mjs` 钉住围栏的存在（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、拒绝用 `FS_SANDBOX_DENIED`、包含性比较有分隔符边界）；`scripts/verify-fs-fence.mjs` 离线验证纯逻辑（分隔符边界、大小写、**跨发行版同拼写路径被拒**、可写根推导、未知模式 fail-closed）。类的接线（`sandboxPolicy` 注入、per-call 策略真正的传递）仍属活体验证范围，待重启后由 `verify-post-restart.mjs` 覆盖。

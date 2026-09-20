@@ -36,13 +36,14 @@ function check(label, ok, detail) {
 }
 
 /** Modules that import nothing from the harness, so the source tree can load them. */
-const PURE = ['lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/http-admission.js']
+const PURE = ['lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/http-admission.js']
 
 /** Every module the host half loads, including the ones that need the host's resolution. */
 const ALL = [
   'lib/index.js',
   'lib/wsl/paths.js',
   'lib/wsl/preset.js',
+  'lib/wsl/fence.js',
   'lib/wsl/world.js',
   'lib/wsl/confinement.js',
   'lib/wsl/shell.js',
@@ -75,18 +76,25 @@ for (const relative of ALL) {
   check(`${relative}: every base class is imported`, missing.length === 0, missing)
 }
 
-// The fs fence is UNRESOLVED: `lib/wsl/fs.js` advertises no `sandboxMode`, so the
-// tool layer resolves no policy and a WSL session's `write`/`edit` are unfenced
-// (a known Critical, documented in the README). This check fails the moment the
-// fence is restored, so the gap cannot be closed quietly AND cannot be forgotten
-// quietly: whichever way it changes, this line and the README move together.
+// The fs fence is REQUIRED: `lib/wsl/fs.js` must advertise `sandboxMode` (the
+// capability fact that makes `tool-fs` resolve a per-call policy at all), route
+// both mutation entry points through `checkedTarget`, deny with the structured
+// `FS_SANDBOX_DENIED` code, and compare containment with a separator boundary.
+// This pins the fence in place so it cannot disappear quietly again; when it
+// changes, this check and the README move together.
 {
   const source = await readFile(join(pluginRoot, 'lib/wsl/fs.js'), 'utf8')
+  const fence = await readFile(join(pluginRoot, 'lib/wsl/fence.js'), 'utf8')
   const readme = await readFile(join(pluginRoot, 'README.md'), 'utf8')
-  check('the unresolved fs fence is still recorded in the README',
-    readme.includes('fs 工具的围栏'))
-  check('lib/wsl/fs.js still advertises no sandboxMode (restore the fence to flip this)',
-    !/\bget sandboxMode\s*\(/.test(source))
+  check('the fs fence is recorded in the README', readme.includes('fs 工具的围栏'))
+  check('lib/wsl/fs.js declares a sandboxMode', /\bget sandboxMode\s*\(/.test(source))
+  check('both mutation entry points route through checkedTarget',
+    (source.match(/checkedTarget\(/g) ?? []).length >= 3,
+    (source.match(/checkedTarget\(/g) ?? []).length)
+  check('refusals throw the structured FS_SANDBOX_DENIED',
+    (source.match(/FS_SANDBOX_DENIED/g) ?? []).length >= 2)
+  check('containment compares with a separator boundary',
+    /isLexicallyUnderHost/.test(fence) && /startsWith\(bounded\)/.test(fence))
 }
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)

@@ -22,6 +22,7 @@ const live = process.argv.includes('--live')
 /** Suites that run against the distribution and the source tree alone. */
 const STANDALONE = [
   'verify-modules.mjs',
+  'verify-fs-fence.mjs',
   'verify-world.mjs',
   'verify-preset.mjs',
   'verify-9p.mjs',
@@ -45,10 +46,15 @@ for (const suite of suites) {
 }
 
 console.log('\n=== summary ===')
+// Exit code 2 is a suite's own SKIP (a check that could not run here, e.g.
+// `verify-client-ui` without the harness checkout). It is shown, but it is
+// neither a pass nor a failure.
 for (const { suite, code } of results) {
-  console.log(`  ${code === 0 ? 'PASS' : `FAIL (exit ${code})`}  ${suite}`)
+  console.log(`  ${code === 0 ? 'PASS' : code === 2 ? 'SKIP' : `FAIL (exit ${code})`}  ${suite}`)
 }
-const failed = results.filter((entry) => entry.code !== 0)
-console.log(`\n${results.length - failed.length}/${results.length} suites passed`
+const failed = results.filter((entry) => entry.code !== 0 && entry.code !== 2)
+const skippedCount = results.length - failed.length - results.filter((entry) => entry.code === 0).length
+console.log(`\n${results.filter((entry) => entry.code === 0).length}/${results.length} suites passed`
+  + `${skippedCount > 0 ? ` (${skippedCount} skipped)` : ''}`
   + `${live ? '' : ' (live suites skipped; add --live to include them)'}`)
 process.exit(failed.length === 0 ? 0 : 1)

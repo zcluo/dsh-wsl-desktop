@@ -35,7 +35,12 @@ if (Test-Path $plugins) {
   $linked = $null
   if (Test-Path $link) {
     $item = Get-Item $link -Force
-    if ($item.LinkType -eq 'SymbolicLink') {
+    # Any reparse point counts, not just a symbolic link: without Windows
+    # symlink privilege the profile link is a junction, and treating that as
+    # "no link" would delete EVERY generation here - including the one the
+    # running host resolves, dangling the absolute module paths in generated
+    # presets until the next restart.
+    if ($item.LinkType -and $item.Target) {
       $linked = (Resolve-Path (Join-Path (Split-Path -Parent $link) $item.Target)).Path
     }
   }

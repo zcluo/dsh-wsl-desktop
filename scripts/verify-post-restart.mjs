@@ -177,23 +177,27 @@ check('the verification workspace is removed again', flow.deleted === true, flow
 
 console.log('\nsession binding')
 const bindings = await call('bindingLog')
-// This script's own `selftest` calls create sessions and bind them explicitly,
-// so their entries prove nothing about the automatic path a GUI session takes.
-// Only an entry for a session this script did not create is evidence.
-const observed = bindings.entries.filter((entry) => !String(entry.sessionId ?? '').startsWith('wsl-selftest'))
-if (observed.length === 0) {
-  todo('a GUI-created WSL session is bound automatically',
-    'Click the W button in the sidebar, add a WSL workspace, and open a session, then run this script again.')
+// Since the browser half names the WSL preset in its create request, a session
+// bound at creation produces NO fallback entry: the `api-session/added`
+// listener exists only to catch a WSL-workspace session that was created
+// WITHOUT the preset — the one way a session can still end up in the Windows
+// world. Selftest sessions are excluded: this script creates and disposes them.
+const anomalous = bindings.entries.filter((entry) => !String(entry.sessionId ?? '').startsWith('wsl-selftest'))
+if (anomalous.length === 0) {
+  console.log('        no fallback binding attempts — every WSL-workspace session so far was bound at creation')
 } else {
-  const latest = observed[observed.length - 1]
-  check('the newest GUI session was bound to a WSL preset',
-    latest.ok === true && latest.to.startsWith('wsl-'), latest)
-  if (latest.ok !== true) {
-    console.log('        A refused binding means that session runs in the Windows world:')
-    console.log('        the harness fixes a preset at creation, so a post-hoc select is refused')
-    console.log('        for any session that has already taken a turn.')
+  const latest = anomalous[anomalous.length - 1]
+  if (latest.ok === true) {
+    console.log(`        fallback bound ${latest.sessionId}: ${latest.from} → ${latest.to}`)
+  } else {
+    check('no WSL-workspace session was left in the Windows world', false, latest)
+    console.log('        This session was created without the WSL preset, and the post-hoc fallback was')
+    console.log('        refused (the harness fixes a preset at creation). It runs in the Windows world:')
+    console.log('        open a fresh session from the W dialog, which names the preset at creation.')
   }
 }
+todo('a GUI-created WSL session runs on the WSL preset',
+  'Click the W button in the sidebar, add a WSL workspace, and open a session; its preset should read WSL · <base>.')
 
 console.log('\nbrowser half served to the page')
 

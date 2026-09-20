@@ -16,9 +16,15 @@ import {
   DEV_TOKEN_HEADER as HOST_TOKEN_HEADER, MAX_BODY_BYTES, bodyAdmission, dispatchAdmission, methodAdmission, preflight, tokenMatches,
 } from '../lib/http-admission.js'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
+import { resolveDistro } from './env.mjs'
 
 const baseUrl = process.argv[2] ?? 'http://127.0.0.1:19387'
 const endpoint = `${baseUrl}/wsl-desktop/api`
+// The side-effect probe needs a share this distribution actually exposes; a
+// hardcoded name would make the load-bearing "it did not run" assertion check
+// the wrong share and pass vacuously on any other machine.
+const distro = resolveDistro()
+const shareRoot = `\\\\wsl.localhost\\${distro}`
 
 let failures = 0
 
@@ -89,14 +95,14 @@ check('the token comparison is length- and value-checked',
 check('the host half uses the same header name', DEV_TOKEN_HEADER === HOST_TOKEN_HEADER)
 
 const probeFile = '/tmp/dsh-wsl-fence-probe.txt'
-rmSync(`\\\\wsl.localhost\\debian${probeFile}`, { force: true })
+rmSync(`${shareRoot}${probeFile}`, { force: true })
 
 console.log('\ntransport fence (live host)')
 const unauthenticated = await post({ method: 'execInWsl', params: { cwd: '/tmp', command: `echo BYPASSED > ${probeFile}` } }, {
   contentType: 'text/plain',
 })
 check('an unauthenticated text/plain POST is refused', unauthenticated.status === 401, unauthenticated.status)
-const escaped = existsSync(`\\\\wsl.localhost\\debian${probeFile}`)
+const escaped = existsSync(`${shareRoot}${probeFile}`)
 check('and the command it carried did not run', escaped === false, `probe file exists: ${escaped}`)
 
 const unauthenticatedJson = await post({ method: 'listDistros', params: {} })
