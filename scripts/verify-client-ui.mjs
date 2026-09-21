@@ -155,6 +155,13 @@ check('names the WSL preset in the create request',
   && picker.includes('agentPreset: preset.agentPreset')
   && !picker.includes('ctx.uiWorkspace.startSession('))
 check('discards responses of a superseded directory listing', picker.includes('token !== state.token'))
+check('gates browsing on the entered user, then lands in their home',
+  picker.includes("state.phase = 'browse'")
+  && picker.includes("call('resolveHome'")
+  && picker.includes('username: name')
+  && picker.includes('go(resolved.home)'))
+check('switching distros re-prompts for the user',
+  picker.includes('function chooseDistro(') && picker.includes('chooseDistro(name)'))
 check('offers the distribution selector as themed buttons, not a <select>',
   picker.includes('function pill(') && !picker.includes("'select'"))
 check('closes on Escape', picker.includes("event.key === 'Escape'"))

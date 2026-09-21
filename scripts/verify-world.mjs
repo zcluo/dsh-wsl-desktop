@@ -11,7 +11,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
-import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, hostExecutable, planWsl, buildWslExecArgv } from '../lib/wsl/world.js'
+import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, hostExecutable, planWsl, buildWslExecArgv } from '../lib/wsl/world.js'
 import {
   parseWslUnc,
   joinWslUnc,
@@ -114,6 +114,37 @@ const identityRun = spawnSync(identityArgv[0], identityArgv.slice(1), { encoding
 check('an argument containing spaces stays one argument', identityRun.stdout.includes('one two'), identityRun.stdout)
 const bareName = spawnSync(execArgv[0], buildWslExecArgv(execPlan, ['echo', 'bare-name']).slice(1), { encoding: 'utf8', cwd: process.env.SystemRoot ?? process.cwd() })
 check('a bare name resolves against the distribution PATH', bareName.status === 0 && bareName.stdout.includes('bare-name'), `status=${bareName.status} err=${bareName.stderr}`)
+
+console.log('\nhome resolution')
+const resolved = await resolveDistroHome(distro)
+check("the default user's home resolves to an absolute Linux path",
+  resolved.user.length > 0 && resolved.home.startsWith('/'), resolved)
+const byName = await resolveDistroHome(distro, resolved.user)
+check('resolving an explicit user matches the default-user resolution',
+  byName.user === resolved.user && byName.home === resolved.home, byName)
+
+console.log('\nexec-boundary validation')
+let threw = false
+try {
+  runWslShell({ distro: 'x -u root', linuxCwd: '/', command: 'true' })
+} catch {
+  threw = true
+}
+check('a separator-bearing distro is rejected before any spawn', threw)
+threw = false
+try {
+  buildWslExecArgv({ distro: 'x', linuxCwd: '/' }, ['id'], { username: 'u\n-w' })
+} catch {
+  threw = true
+}
+check('a separator-bearing username is rejected before any spawn', threw)
+threw = false
+try {
+  runWslShell({ distro: '../escape', linuxCwd: '/', command: 'true' })
+} catch {
+  threw = true
+}
+check('a traversal-shaped distro is rejected before any spawn', threw)
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1

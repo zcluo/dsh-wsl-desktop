@@ -32,6 +32,18 @@ function probe(label, available, expected, detail) {
   if (!matches) failures += 1
 }
 
+/**
+ * Record one identity-mapping assertion (fence load-bearing; boolean, not an
+ * availability probe).
+ * @param {string} label - what was asserted.
+ * @param {boolean} ok - the outcome.
+ * @param {unknown} [detail] - context shown on failure.
+ */
+function identityCheck(label, ok, detail) {
+  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : ` — ${String(detail)}`}`)
+  if (!ok) failures += 1
+}
+
 await rm(root, { recursive: true, force: true })
 await mkdir(root, { recursive: true })
 console.log(`probing ${root}\n`)
@@ -84,6 +96,23 @@ try {
   probe('chmod is accepted', true, 'available')
 } catch (error) {
   probe('chmod is accepted', false, 'available', `${error.code} ${error.message}`)
+}
+
+// The fs fence's identity fallback (lib/wsl/fence.js isUnderHost) authorizes
+// containment on stat (dev,ino) equality against writable roots that live on
+// THIS share, so the fence is only as strong as the share's identity mapping:
+// distinct files must map to distinct identities, and one file must keep the
+// same identity across the wsl.localhost / wsl$ host spellings.
+try {
+  await writeFile(join(root, 'identity-a.txt'), 'a', 'utf8')
+  await writeFile(join(root, 'identity-b.txt'), 'b', 'utf8')
+  const [ia, ib] = await Promise.all([stat(join(root, 'identity-a.txt')), stat(join(root, 'identity-b.txt'))])
+  identityCheck('distinct files map to distinct (dev,ino)', ia.dev !== ib.dev || ia.ino !== ib.ino, `a=(${ia.dev},${ia.ino}) b=(${ib.dev},${ib.ino})`)
+  const dollarRoot = root.replace('wsl.localhost', 'wsl$')
+  const [inoHost, inoDollar] = await Promise.all([stat(join(root, 'identity-a.txt')), stat(join(dollarRoot, 'identity-a.txt'))])
+  identityCheck('identity stable across wsl.localhost / wsl$ spellings', inoHost.ino === inoDollar.ino && inoHost.dev === inoDollar.dev, `host=${inoHost.ino} dollar=${inoDollar.ino}`)
+} catch (error) {
+  identityCheck('9P identity mapping (fence load-bearing)', false, `${error.code} ${error.message}`)
 }
 
 await rm(root, { recursive: true, force: true })

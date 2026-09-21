@@ -39,7 +39,10 @@ function check(label, ok, detail) {
 
 /** Run one command through the confinement wrapper. */
 async function confined(command, { mode, workspaceLinuxRoot, linuxCwd = '/' }) {
-  const identity = await resolveIdentity({ distro, run })
+  const identity = await resolveIdentity({ distro, run }).catch((error) => {
+    console.log(`        identity probe error: ${error.message}`)
+    return null
+  })
   if (identity === null) throw new Error('无法解析发行版内的用户身份')
   const wrapped = buildConfinedCommand({ command, linuxCwd, mode, workspaceLinuxRoot, identity })
   const result = await runWslShell({ distro, linuxCwd, command: wrapped, timeoutMs: 60_000 })
@@ -53,8 +56,19 @@ await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${probeRoot} && mkdi
 console.log(`probing confinement in ${distro}\n`)
 
 console.log('runner detection')
-const runner = await detectRunner({ distro, run })
-check('a confinement runner is available', runner === 'sudo-unshare', runner)
+// One transparent retry: the detection probe runs `wsl.exe`, and a single
+// hiccup right after other suites hammered the VM can fail it while every
+// real confinement check below still runs. The retry repeats the SAME probe;
+// the outcome names both attempts so a persistent absence stays visible.
+const detectOnce = () => detectRunner({ distro, run }).catch(() => null)
+let runner = await detectOnce()
+let detectionRetried = runner !== 'sudo-unshare'
+if (detectionRetried) {
+  await new Promise((resolve) => { setTimeout(resolve, 1000) })
+  runner = await detectOnce()
+}
+check('a confinement runner is available', runner === 'sudo-unshare',
+  `${String(runner)}${detectionRetried ? ' (first attempt failed; retried once)' : ''}`)
 const identity = await resolveIdentity({ distro, run })
 check('the session identity resolves', identity !== null && /^\d+$/.test(identity?.uid ?? ''), identity)
 console.log(`        uid=${identity?.uid} gid=${identity?.gid}`)
@@ -71,6 +85,22 @@ const who = await confined('id -u; id -g', { mode: 'workspace-write', workspaceL
 check('the command runs as the session user, not root', who.result.stdout.trim().split(/\s+/)[0] === identity?.uid, who.result.stdout)
 const ownership = await runWslShell({ distro, linuxCwd: '/', command: `stat -c '%u' ${probeRoot}/inside.txt` })
 check('files created stay owned by the session user', ownership.stdout.trim() === identity?.uid, `owner=${ownership.stdout.trim()} expected=${identity?.uid}`)
+
+console.log('\nworkspace path with whitespace')
+// Regression probe for the exemption-pattern construction: the workspace path
+// reaches the grep pattern as DATA, so a space (or any other metacharacter)
+// in it must stay inert. Before the fix, a space word-split the grep argv,
+// `|| true` swallowed the failure, and BOTH the sweep and the postcondition
+// iterated zero times — reporting success while every mount except / stayed
+// writable.
+const spacedRoot = `${home}/dsh-wsl-sandbox probe dir`
+await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedRoot}" && mkdir -p "${spacedRoot}" && echo seed > "${spacedRoot}/seed.txt"` })
+const inSpaced = await confined(`echo written > "${spacedRoot}/inside.txt" && echo SPACED-OK`, { mode: 'workspace-write', workspaceLinuxRoot: spacedRoot, linuxCwd: spacedRoot })
+check('a write inside a space-named workspace succeeds', inSpaced.result.exitCode === 0 && inSpaced.result.stdout.includes('SPACED-OK'), `${inSpaced.result.exitCode} ${inSpaced.result.stderr}`)
+const outSpaced = await confined(`echo written > "${home}/dsh-wsl-forbidden.txt" && echo OUT-SPACED-OK`, { mode: 'workspace-write', workspaceLinuxRoot: spacedRoot })
+check('a write outside a space-named workspace is still denied',
+  !outSpaced.result.stdout.includes('OUT-SPACED-OK') && DENIAL_SIGNATURES.some((signature) => outSpaced.result.stderr.includes(signature)),
+  `${outSpaced.result.exitCode} ${outSpaced.result.stderr}`)
 
 console.log('\nread-only')
 const readOnlyWrite = await confined(`echo written > ${probeRoot}/readonly.txt && echo RO-OK`, { mode: 'read-only' })

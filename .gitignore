@@ -14,3 +14,4 @@ pnpm-debug.log*
 
 # Verification residue (a suite that throws mid-run can leave these behind).
 /tmp-probe/
+_debug-*.mjs

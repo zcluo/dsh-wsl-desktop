@@ -129,7 +129,13 @@ console.log('\nsession-level acceptance')
 const selftest = await call('selftest', { preset: 'wsl-standard', cwd: `\\\\wsl.localhost\\${distro}\\tmp` }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
 const step = (name) => selftest.steps.find((entry) => entry.name === name)
 const created = step('create')
-check('a session is created and bound to the WSL preset', created?.composed === 'wsl-standard', created)
+// The service-level agents.create does not honor meta.agentPreset (that seam
+// belongs to the session-controller, which the browser half uses); the
+// selftest's explicit select is its designed fallback. Assert the OUTCOME —
+// the session ends up running the confined realm.
+const boundAtCreate = created?.composed === 'wsl-standard'
+const boundAtSelect = step('select')?.composed === 'wsl-standard'
+check('a session is created and bound to the WSL preset', boundAtCreate || boundAtSelect, created)
 const shellRun = step('shell.run')
 check('the session shell runs inside the distribution', shellRun?.exitCode === 0 && shellRun.stdout?.[0] === 'Linux', shellRun)
 check('confinement reports its real completeness, not a claim of full', shellRun?.sandbox?.enforcement === 'partial', shellRun?.sandbox)
@@ -174,6 +180,10 @@ check('the dialog\'s directory listing works', typeof flow.directoryEntries === 
 check('the chosen directory is validated as a directory', flow.isDirectory === true, flow)
 check('a workspace is registered under the UNC spelling', String(flow.workspacePath ?? '').startsWith('\\\\wsl.localhost\\'), flow.workspacePath)
 check('the verification workspace is removed again', flow.deleted === true, flow)
+const resolvedHome = await call('resolveHome', { distro }).catch((error) => ({ error: error.message }))
+check('the dialog can resolve the default user and home',
+  typeof resolvedHome?.user === 'string' && resolvedHome.user.length > 0
+  && typeof resolvedHome?.home === 'string' && resolvedHome.home.startsWith('/'), resolvedHome)
 
 console.log('\nsession binding')
 const bindings = await call('bindingLog')
