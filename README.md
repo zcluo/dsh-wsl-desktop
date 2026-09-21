@@ -1,26 +1,26 @@
 # dsh-wsl-desktop
 
-> ## ⚠️ 开发中快照，未完成，暂勿用于生产
+> ## ⚠️ 开发快照（核心能力已活体验收，暂勿用于生产）
 >
-> 发布时代码里有以下已知状态，细节与每项的证据强度见下方「目标能力」表与「fs 工具的围栏」一节：
+> 状态基线：**2026-09-21，`verify-post-restart.mjs` 全绿（NO AUTOMATED FAILURES）+ 离线 10 套件全绿**。逐项现状：
 >
-> - **① 路由的未认证命令执行洞已关闭**：`connection.requestRejection` 围栏 + 强制 `application/json` + 64KiB 体积上限 + 命令类方法移出浏览器命名空间。有活体 18/18 验证，其中包含"未认证请求携带的命令没有执行"的副作用断言。
-> - **④ WSL 会话的 fs 工具围栏已实现，活体待验**：`lib/wsl/fs.js` 现在声明 `sandboxMode`，`writeText`/`editText` 都过 `checkedTarget`（拒绝抛结构化 `FS_SANDBOX_DENIED`）；纯比较逻辑在 `lib/wsl/fence.js`，离线由 `verify-fs-fence.mjs` 覆盖、由 `verify-modules.mjs` 钉住。**活体验证需要重启 DSH Desktop 后跑 `verify-post-restart.mjs`，尚未完成。**
-> - **② / ③ 的绑定接缝已改为创建时命名**：浏览器半边在会话创建请求里带 `agentPreset`（`wslPresetFor` 解析变体 id）；宿主只保留 `api-session/added` 兜底并告警。代码与离线校验已就位，宿主侧效果同样待重启观察。
-> - 离线 10 个校验套件当前全绿；`verify-post-restart.mjs` 说明了活体侧还缺什么。
+> - **① 路由的未认证命令执行洞已关闭**：`connection.requestRejection` 围栏 + 强制 `application/json` + 64KiB 体积上限 + 命令类方法移出浏览器命名空间。活体验证含"未认证请求携带的命令没有执行"的副作用断言。
+> - **② / ③ 会话执行世界与并存已活体验收**：selftest 全链 PASS——绑定（创建请求命名 preset，`select` 为服务级兜底）、shell 进发行版、`enforcement: partial` 如实上报、fs 工具 Linux 路径寻址、越界写拒绝、subprocess POSIX 环境、bash 工具在发行版内、Windows 工作区不受影响。剩余 **3 项浏览器人工步骤**（GUI 会话预设 / 对话框渲染 / 终端面板）。
+> - **④ fs 工具围栏已活体验证**：`sandboxMode` + `checkedTarget`（从 targetKey 重解析，跨发行版 UNC 请求正确拒绝）；越界写拒绝 PASS。
+> - **安全审计（run-1，source-only）**：5 条 needs_validation 候选——2 条已被 owner 探针关闭（wsl.exe 分词不分裂、9P 身份唯一且跨拼写稳定，探针已永久化进 verify-9p）、1 条待 owner 观察（GUI 会话的 tool 层策略，在 GUI 会话里读 `result.sandbox` 即可关闭）、2 条修复已加载待 disposable 发行版动态确认（exempt 模式转义、身份探针哨兵）。报告在仓库外的 `security-audit-skill/dsh-wsl-desktop/run-1/`。
 
 DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 Linux 工作区，并让该工作区内的工具真正在发行版里执行。
 
 ## 目标能力
 
-**2026-09-19 三方代码审查后的诚实状态**（审查报告见 `docs/` 之外的会话记录；下面每条都注明证据强度）：
+**2026-09-21 活体验收通过后的诚实状态**（`verify-post-restart.mjs` 全绿 + 离线 10 套件；下面每条都注明证据强度）：
 
 | # | 能力 | 状态 |
 |---|---|---|
-| ① | 工作区可选择 WSL 发行版里的 Linux 目录 | 对话框与宿主调用已实现；**浏览器内交互仍未被自动化覆盖**（2 项 PENDING） |
-| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | selftest 路径已被证明（`verify-post-restart.mjs` 的 session-level 段）。GUI 会话的执行世界现在**在创建请求里命名**（见「会话绑定」），GUI 侧效果待重启后活体确认 |
-| ③ | 同一实例里 Windows 与 WSL 工作区并存 | 设计成立（按会话 preset realm），绑定接缝见「会话绑定」；并存本身待活体确认 |
-| ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧围栏已实现**（`sandboxMode` + `checkedTarget`，见「fs 工具的围栏」），离线钉住；**活体验证待重启后做**（见下）|
+| ① | 工作区可选择 WSL 发行版里的 Linux 目录 | 对话框与宿主调用已实现并活体通过（listDir/checkPath/resolveHome/工作区注册与清理）；**浏览器内交互仍未被自动化覆盖**（3 项 PENDING） |
+| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | **活体验收 PASS**：绑定（创建请求命名 preset）、shell 进发行版、fs 工具 Linux 寻址、越界写拒绝、subprocess POSIX 环境、bash 工具、工具层约束；终端传输由 PTY 套件覆盖，面板打开仍属人工 PENDING |
+| ③ | 同一实例里 Windows 与 WSL 工作区并存 | **活体验收 PASS**：Windows 工作区停留在宿主 preset（PowerShell 可用、无 bash），WSL 会话并行运行 confined realm |
+| ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并活体验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧围栏已实现并活体验证**（越界写拒绝 PASS，见「fs 工具的围栏」）|
 
 ## 会话绑定：在创建请求里命名执行世界
 
@@ -106,6 +106,8 @@ read-only:        tmpfs /tmp        →  remount,ro,bind /
 
 - **必须 root。** WSL 内核拒绝在 user namespace 里做 bind mount：`unshare -Ur --mount` 能起，但 `mount --bind` 报 "wrong fs type"。所以用 `sudo -n unshare …`；没有免密 sudo 时受限模式**明确失败**（`SandboxUnavailableError`），而不是裸跑。
 - **进 namespace 后必须降回原用户。** 经 `sudo` 进入后 euid 是 root，直接用会让工作区里出现 root 属主文件；用 `setpriv --reuid --regid --init-groups` 降回会话用户（有断言覆盖属主）。
+- **所有输出被解析的探针一律非登录。** `resolveIdentity` / `detectRunner` / `listLinuxDir` / `checkLinuxPath` / `resolveDistroHome` / `resolveExecutable` / pty 的 python3 探测全部 `loginShell: false`——登录 shell 的 rc 会先于探针命令输出，位置性解析就会把 profile 打印的内容当作 uid/gid/home（模型可写 dotfiles 时等于把 setpriv 的 uid 交给攻击者）。`resolveIdentity` 额外用 `__DSH_IDENTITY__` 哨兵行界定 + 恰好四行校验，解析失败抛**携带探针实际输出**的错误（不再静默 null）。探针超时 60s + 超时后一次透明重试：桌面重启后的首个 wsl.exe 冷启动可以超过短上限。
+- **wsl.exe 的选项值在 spawn 前过语法校验。** `runWslShell` / `buildWslExecArgv` 顶部对 distro（`DISTRO_NAME`）与 username（`LINUX_USER`）拒绝分隔符字符——exec 路径的安全性不依赖 wsl.exe 外部未文档化的分词规则；checkPath 也在任何 wsl.exe 副作用之前先做 UNC 校验（回归钉在 verify-world）。
 
 ## 关键约束（都是实测得出，不是推断）
 
@@ -149,11 +151,11 @@ node scripts/verify-all.mjs --live   # 追加需要已安装插件 + 运行中�
 单跑某一项：
 
 ```powershell
-node scripts/verify-world.mjs        # 路径互译 + 在发行版里执行命令 + 目录事实
+node scripts/verify-world.mjs        # 路径互译 + 在发行版里执行命令 + 目录事实 + exec 边界拒绝
 node scripts/verify-preset.mjs       # 预设重写（对着随附 standard 预设跑）
 node scripts/verify-fs-fence.mjs     # fs 围栏的纯逻辑：包含性、跨发行版、可写根推导
-node scripts/verify-9p.mjs           # 9P 共享原语画像
-node scripts/verify-confinement.mjs  # 约束围栏：工作区可写、外部被拒、属主正确
+node scripts/verify-9p.mjs           # 9P 共享原语画像 + 身份映射（围栏负载假设）
+node scripts/verify-confinement.mjs  # 约束围栏：工作区可写、外部被拒、属主正确、含空格路径
 node scripts/verify-terminal.mjs     # PTY 桥：resize / 前台进程组 / 信号 / 终止
 node scripts/verify-pty-handle.mjs   # JS 终端句柄（对着真实桥跑）
 node scripts/verify-client-ui.mjs    # 浏览器半边的静态检查（不注册槽位、定位几何、宿主调用）
@@ -174,7 +176,7 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 `WslFileSystem` 自带围栏：声明 `sandboxMode`，`writeText`/`editText` 两个变更入口都先过 `checkedTarget`（拒绝抛结构化 `FS_SANDBOX_DENIED`，工具层把它映射成模型可见的 `[sandbox: …]` 标记与升级提示）；包含性比较与可写根推导是纯函数，放在 `lib/wsl/fence.js`。**不是**继承官方的沙箱后端——官方后端会把本行包进第二个后端，凭空多出一层组合依赖，而围栏本来就是"可信代码里的策略检查"，放在本行即可。（最初"realm 看不到 `sandboxPolicy` 所以不能继承"的归因是错的，见下面教训 1：同 realm 的 `shell.js` 一直注入着这个服务。）
 
-**可写根与比较命名空间**：`workspace-write` 的允许集 = 会话 cwd（工作区根）+ **发行版的** `/tmp`（9P 分享上的 `\\wsl.localhost\<distro>\tmp`，这是 Linux 侧 `/tmp/…` 请求在本世界解析到的位置；官方推导里的宿主 POSIX `/tmp` 在 Windows 上无意义）+ Windows 临时目录（经 `/mnt/<盘符>` 可达）。比较在**宿主命名空间**做：targetKey 是 Windows 拼写，UNC 前缀自带发行版身份，所以"另一个发行版里恰好同拼写的 Linux 路径"出不了界；未知模式给空允许集，即拒绝（fail-closed）。
+**可写根与比较命名空间**：`workspace-write` 的允许集 = 会话 cwd（工作区根）+ **发行版的** `/tmp`（9P 分享上的 `\\wsl.localhost\<distro>\tmp`，这是 Linux 侧 `/tmp/…` 请求在本世界解析到的位置；官方推导里的宿主 POSIX `/tmp` 在 Windows 上无意义）+ Windows 临时目录（经 `/mnt/<盘符>` 可达）。比较在**宿主命名空间**做：targetKey 是 Windows 拼写，UNC 前缀自带发行版身份，所以"另一个发行版里恰好同拼写的 Linux 路径"出不了界；未知模式给空允许集，即拒绝（fail-closed）。`checkedTarget` 的重规范化也从 **targetKey** 出发而不是 displayPath——displayPath 是 Linux 拼写、不带发行版，从它重解析会把路径钉到本行固定的发行版上，跨发行版 UNC 请求被静默改写（活体踩过：写进 debian-dev、读 debian 报 not found）；现在跨发行版请求直接 `FS_SANDBOX_DENIED`。
 
 **为什么必须有围栏**：`LocalFileSystem` 从不覆写 `FileSystem.sandboxMode`。一个什么都不宣称的后端会让 `tool-fs` 的 `FsSandboxController` 对每次调用都解析不出策略（`tool-fs/src/sandbox.ts:43-50`：`defaultMode === undefined` ⇒ `escalationModes = []`、`policy = undefined`），于是 `write`/`edit` 完全不受管，能写到共享可达的任何地方，包括 `/mnt/c`——`toHostPath` 也接受直接的 `C:\…` 拼写，所以未围栏时的实际暴露面是整个 Windows 文件系统，不只是分享。
 
@@ -185,4 +187,4 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 **因此 selftest 也改了**：它现在像真实调用方一样显式传策略 `{ mode: 'workspace-write', workspaceRoot: <会话 cwd> }`。之前它不传，是"用一个真实调用方永远不会用的方式调 fs"，那才是上次被拒的原因——不是围栏太严。
 
-**两层钉子**：`scripts/verify-modules.mjs` 钉住围栏的存在（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、拒绝用 `FS_SANDBOX_DENIED`、包含性比较有分隔符边界）；`scripts/verify-fs-fence.mjs` 离线验证纯逻辑（分隔符边界、大小写、**跨发行版同拼写路径被拒**、可写根推导、未知模式 fail-closed）。类的接线（`sandboxPolicy` 注入、per-call 策略真正的传递）仍属活体验证范围，待重启后由 `verify-post-restart.mjs` 覆盖。
+**两层钉子 + 活体验收**：`scripts/verify-modules.mjs` 钉住围栏的存在（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、拒绝用 `FS_SANDBOX_DENIED`、包含性比较有分隔符边界）；`scripts/verify-fs-fence.mjs` 离线验证纯逻辑（分隔符边界、大小写、**跨发行版同拼写路径被拒**、可写根推导、未知模式 fail-closed）；`verify-9p.mjs` 增补了身份映射探针（不同文件 (dev,ino) 互异、wsl.localhost/wsl$ 拼写稳定——围栏的身份回退以此为负载假设）。类的接线已由 `verify-post-restart.mjs` 活体验收（越界写拒绝 PASS）。
