@@ -1,12 +1,12 @@
 # dsh-wsl-desktop
 
-> ⚠️ **开发快照，暂勿用于生产。** 核心能力已活体验收（`verify-post-restart.mjs` 全绿 + 离线 10 套件 + 操作者确认）；安全审计 run-1 完成（5 条候选：2 关闭、3 待观察/确认，报告见 `security-audit-skill/dsh-wsl-desktop/run-1/`）。逐项证据强度见下方能力表。
+> ⚠️ **开发快照，暂勿用于生产。** 核心能力已活体验收（`verify-post-restart.mjs` 全绿 + 离线 10 套件 + 操作者确认）；安全审计 run-1 完成——**5 条候选全部闭环**（2 条被探针关闭、2 条修复经动态确认关闭、1 条确认为预期行为），报告见 `security-audit-skill/dsh-wsl-desktop/run-1/`。逐项证据强度见下方能力表。
 
 DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 Linux 工作区，并让该工作区内的工具真正在发行版里执行。
 
 ## 目标能力
 
-**2026-09-21 活体验收通过后的诚实状态**（`verify-post-restart.mjs` 全绿 + 离线 10 套件；下面每条都注明证据强度）：
+**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 全绿 + 离线 10 套件；下面每条都注明证据强度）：
 
 | # | 能力 | 状态 |
 |---|---|---|
@@ -34,7 +34,7 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 "+" 保持部署自带的行为（Desktop 上是 Electron 目录选择器），本插件不改写它：
 
 - `sidebar.workspaces.directoryFlow` 是 `kind: 'single'`，占位会**遮蔽**部署自己的目录选择器，所以本插件不注册这个槽位；
-- 侧栏标题栏没有扩展点，所以 W 按钮以伴随节点挂在"+"按钮之后：用 `IconProjectAddOutline16` 的 path 数据定位（与语言无关，全应用只有这一处渲染它），并复用该按钮的 class 以取得同样的尺寸与悬停态。React 替换该子树时，MutationObserver 会把 W 重新挂回。
+- 侧栏标题栏没有扩展点，所以 W 按钮以伴随节点挂在"+"按钮之后：用 "add workspace" 图标的 SVG path 几何定位（与语言无关，全应用只有这一处渲染它），并复用该按钮的 class 以取得同样的尺寸与悬停态。桌面重构过该图标（`IconProjectAddOutline16` → `ProjectAddOutlineArtwork`，几何完全改变），触发器因此携带**新旧两代几何的已知列表**、按前缀匹配任一代——桌面更新不会让 W 静默消失。React 替换该子树时，MutationObserver 会把 W 重新挂回。
 - **隐藏必须用 `display`，不能用 `remove()`。** 观察器监听的是 `childList`，`remove()` 自己就是下一次触发，两者会以刷新率互相喂养（实测 52 次/2.6s，每次还带两次强制布局）。放不下时设 `display: none`，它不是 childList 变更，因此收敛。
 - **不要用定时器兜底。** 曾经的 `setInterval(sync, 2000)` 就是这个回路的种子；重新挂载/portal 都是被观察子树上的 childList 变更，定时器不解决任何真实情况。
 - 伴随按钮只在"+"可见时显示（内联搜索展开时随官方动作簇一起隐藏），并且当有第二个控件带同样图标几何时优先选 `*_headerActions` 簇里的那个，认不出来就整体让位而不是猜。
@@ -159,7 +159,7 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 发行版与用户不再硬编码：`DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DSH_WSL_HOME` 可覆盖，默认从 `wsl.exe` 现读。
 
-**已知不稳定 → 已修，待观察**：`verify-terminal.mjs` 曾偶发失败（实测 6 次里 1 次，两项失败，紧接上一次运行之后更容易出现）。根因在宿主侧 `lib/wsl/pty.js`，不是桥：分配失败路径（announce 超时、控制进程启动失败）不终止已 spawn 的数据进程，泄漏的桥会干扰后续运行；且控制应答不携带请求 id，一次超时之后迟到的应答会被下一条请求消费，整个控制通道从此错位。修复：失败路径现在终止并等待两个进程退出；每个请求带 id、桥回显同一 id，超时先摘除条目、迟到应答直接丢弃。修复后连续 3 次背靠背全绿——稳定性结论请以更多次连续重跑为准。
+**已知不稳定 → 已修，多轮验证稳定**：`verify-terminal.mjs` 曾偶发失败（实测 6 次里 1 次）。根因在宿主侧 `lib/wsl/pty.js`，不是桥：分配失败路径不终止已 spawn 的数据进程，泄漏的桥会干扰后续运行；且控制应答不携带请求 id，一次超时之后迟到的应答会被下一条请求消费，整个控制通道从此错位。修复：失败路径终止并等待两个进程退出；每个请求带 id、桥回显同一 id，超时先摘除条目、迟到应答直接丢弃。修复后历经今日十余轮全量套件（含多次背靠背）无一复现，结论稳定。
 
 宿主代码改动需要**重启 DSH Desktop** 才会加载；重启后先跑 `verify-post-restart.mjs`，它会在旧模块仍生效时直接报「请重启」而不是给假绿。**浏览器半边改动不需要重启**：就地改写当前那一代的 `lib/client.js` 会改变投放 rev 并由 `/plugins/events` 推给已打开的页面（`patchReload: live`）。`verify-post-restart.mjs` 会从 `/plugins/events` 读实时模块图并取回真正投放的那份 bundle 来断言这一点。
 
