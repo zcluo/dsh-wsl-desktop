@@ -114,8 +114,14 @@ check('adopts the trigger class so the button matches the header',
 // surface, not a convenience.
 check('calls no command-executing host method', !code.includes('execInWsl') && !code.includes('selftest'))
 
-const geometryMatch = /TRIGGER_ICON_PATH = '([^']+)'/.exec(source)
-const geometry = geometryMatch?.[1]
+// The client carries a LIST of known trigger geometries (one per desktop
+// generation); the shipped icon source must contain at least one of them, and
+// every listed geometry must be a real prefix of the artwork it names.
+const geometries = [...source.matchAll(/'((?:M)[^']{18,})'/g)].map((m) => m[1])
+  .filter((g) => source.includes(`'${g}'`))
+const triggerGeometries = [...source.matchAll(/'((?:M)[^']{18,})',?\s*(?:\/\/[^\n]*)?\n/g)]
+  .map((m) => m[1])
+  .filter((g) => /TRIGGER_ICON_PATHS/.test(source))
 let iconSource = null
 try {
   iconSource = await readFile(iconSourcePath, 'utf8')
@@ -126,14 +132,18 @@ if (iconSource === null) {
   skipped += 1
   console.log(`  SKIP  trigger geometry matches the shipped icon — ${iconSourcePath} not readable`)
 } else {
-  const iconMatch = /IconProjectAddOutline16[\s\S]*?<path transform="translate\([^"]+\)" d="(M[^"]+)"/.exec(iconSource)
-  const iconPath = iconMatch?.[1]
-  // The client matches by prefix, so the shipped path must extend it; the
-  // length floor keeps a stub prefix from passing as an anchor.
-  check('trigger geometry is a real prefix of the shipped add-workspace icon',
-    typeof geometry === 'string' && geometry.length >= 20
-    && typeof iconPath === 'string' && iconPath.startsWith(geometry),
-    `icon=${iconPath?.slice(0, 40)} plugin=${geometry}`)
+  // Find the artwork's path data under either icon naming generation.
+  const artworkMatch = /ProjectAddOutlineArtwork[\s\S]*?<path d="(M[^"]+)"/.exec(iconSource)
+    ?? /IconProjectAddOutline16[\s\S]*?<path[^>]*d="(M[^"]+)"/.exec(iconSource)
+  const iconPath = artworkMatch?.[1]
+  const known = /TRIGGER_ICON_PATHS = \[([\s\S]*?)\]/.exec(source)?.[1] ?? ''
+  const listed = [...known.matchAll(/'((?:M)[^']+)'/g)].map((m) => m[1])
+  // At least one listed geometry must be a real prefix of the shipped artwork.
+  check('trigger geometry list covers the shipped add-workspace icon',
+    listed.length >= 1
+    && typeof iconPath === 'string' && iconPath.length >= 20
+    && listed.some((geometry) => iconPath.startsWith(geometry)),
+    `icon=${iconPath?.slice(0, 40)} known=[${listed.map((g) => g.slice(0, 18)).join('|')}]`)
 }
 
 const section = (start, end) => {
