@@ -1,13 +1,6 @@
 # dsh-wsl-desktop
 
-> ## ⚠️ 开发快照（核心能力已活体验收，暂勿用于生产）
->
-> 状态基线：**2026-09-21，`verify-post-restart.mjs` 全绿（NO AUTOMATED FAILURES）+ 离线 10 套件全绿**。逐项现状：
->
-> - **① 路由的未认证命令执行洞已关闭**：`connection.requestRejection` 围栏 + 强制 `application/json` + 64KiB 体积上限 + 命令类方法移出浏览器命名空间。活体验证含"未认证请求携带的命令没有执行"的副作用断言。
-> - **② / ③ 会话执行世界与并存已活体验收**：selftest 全链 PASS——绑定（创建请求命名 preset，`select` 为服务级兜底）、shell 进发行版、`enforcement: partial` 如实上报、fs 工具 Linux 路径寻址、越界写拒绝、subprocess POSIX 环境、bash 工具在发行版内、Windows 工作区不受影响。**浏览器内交互已由操作者人工确认**（GUI 会话预设 WSL · PTC 模式、终端面板、对话框流程均正常）。
-> - **④ fs 工具围栏已活体验证**：`sandboxMode` + `checkedTarget`（从 targetKey 重解析，跨发行版 UNC 请求正确拒绝）；越界写拒绝 PASS。
-> - **安全审计（run-1，source-only）**：5 条 needs_validation 候选——2 条已被 owner 探针关闭（wsl.exe 分词不分裂、9P 身份唯一且跨拼写稳定，探针已永久化进 verify-9p）、1 条待 owner 观察（GUI 会话的 tool 层策略，在 GUI 会话里读 `result.sandbox` 即可关闭）、2 条修复已加载待 disposable 发行版动态确认（exempt 模式转义、身份探针哨兵）。报告在仓库外的 `security-audit-skill/dsh-wsl-desktop/run-1/`。
+> ⚠️ **开发快照，暂勿用于生产。** 核心能力已活体验收（`verify-post-restart.mjs` 全绿 + 离线 10 套件 + 操作者确认）；安全审计 run-1 完成（5 条候选：2 关闭、3 待观察/确认，报告见 `security-audit-skill/dsh-wsl-desktop/run-1/`）。逐项证据强度见下方能力表。
 
 DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 Linux 工作区，并让该工作区内的工具真正在发行版里执行。
 
