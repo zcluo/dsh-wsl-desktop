@@ -5,7 +5,7 @@
 > 状态基线：**2026-09-21，`verify-post-restart.mjs` 全绿（NO AUTOMATED FAILURES）+ 离线 10 套件全绿**。逐项现状：
 >
 > - **① 路由的未认证命令执行洞已关闭**：`connection.requestRejection` 围栏 + 强制 `application/json` + 64KiB 体积上限 + 命令类方法移出浏览器命名空间。活体验证含"未认证请求携带的命令没有执行"的副作用断言。
-> - **② / ③ 会话执行世界与并存已活体验收**：selftest 全链 PASS——绑定（创建请求命名 preset，`select` 为服务级兜底）、shell 进发行版、`enforcement: partial` 如实上报、fs 工具 Linux 路径寻址、越界写拒绝、subprocess POSIX 环境、bash 工具在发行版内、Windows 工作区不受影响。剩余 **3 项浏览器人工步骤**（GUI 会话预设 / 对话框渲染 / 终端面板）。
+> - **② / ③ 会话执行世界与并存已活体验收**：selftest 全链 PASS——绑定（创建请求命名 preset，`select` 为服务级兜底）、shell 进发行版、`enforcement: partial` 如实上报、fs 工具 Linux 路径寻址、越界写拒绝、subprocess POSIX 环境、bash 工具在发行版内、Windows 工作区不受影响。**浏览器内交互已由操作者人工确认**（GUI 会话预设 WSL · PTC 模式、终端面板、对话框流程均正常）。
 > - **④ fs 工具围栏已活体验证**：`sandboxMode` + `checkedTarget`（从 targetKey 重解析，跨发行版 UNC 请求正确拒绝）；越界写拒绝 PASS。
 > - **安全审计（run-1，source-only）**：5 条 needs_validation 候选——2 条已被 owner 探针关闭（wsl.exe 分词不分裂、9P 身份唯一且跨拼写稳定，探针已永久化进 verify-9p）、1 条待 owner 观察（GUI 会话的 tool 层策略，在 GUI 会话里读 `result.sandbox` 即可关闭）、2 条修复已加载待 disposable 发行版动态确认（exempt 模式转义、身份探针哨兵）。报告在仓库外的 `security-audit-skill/dsh-wsl-desktop/run-1/`。
 
@@ -18,7 +18,7 @@ DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 L
 | # | 能力 | 状态 |
 |---|---|---|
 | ① | 工作区可选择 WSL 发行版里的 Linux 目录 | 对话框与宿主调用已实现并活体通过（listDir/checkPath/resolveHome/工作区注册与清理）；**浏览器内交互已由操作者人工确认**（门控流、目录浏览、终端面板均正常） |
-| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | **活体验收 PASS**：绑定（创建请求命名 preset）、shell 进发行版、fs 工具 Linux 寻址、越界写拒绝、subprocess POSIX 环境、bash 工具、工具层约束；终端传输由 PTY 套件覆盖，面板打开仍属人工 PENDING |
+| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | **活体验收 PASS**：绑定（创建请求命名 preset）、shell 进发行版、fs 工具 Linux 寻址、越界写拒绝、subprocess POSIX 环境、bash 工具、工具层约束；终端传输由 PTY 套件覆盖 |
 | ③ | 同一实例里 Windows 与 WSL 工作区并存 | **活体验收 PASS**：Windows 工作区停留在宿主 preset（PowerShell 可用、无 bash），WSL 会话并行运行 confined realm |
 | ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并活体验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧围栏已实现并活体验证**（越界写拒绝 PASS，见「fs 工具的围栏」）|
 
@@ -30,7 +30,7 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 
 - 浏览器半边在 W 对话框里创建会话时，先调宿主的 `wslPresetFor` 解析变体 id，然后把 `agentPreset` 放进**创建请求**（`lib/client.js` 的 `commit()`）。这是唯一无竞态的接缝：preset 随会话一起组合，不存在"先跑在 Windows 世界再切"的窗口。
 - 宿主半边保留一个 `api-session/added` 监听（`lib/index.js` 的 `bindWslSession`）作为**兜底**：只处理"cwd 是 WSL 路径、但创建时没带 preset"的会话（比如从别的入口创建的）。它尝试事后 `select`，成功就补绑，失败就写 `bindingLog` 并在宿主日志里告警——这类条目现在是**异常信号**，不再是正常路径的一部分。
-- 因此 `verify-post-restart.mjs` 的 binding 段语义是：非 selftest 的 `bindingLog` 条目 = 有人绕过创建接缝建了 WSL 会话；零条目 = 一切经创建请求绑定的会话都正常。GUI 侧的最终确认仍是一项 PENDING 的人工步骤。
+- 因此 `verify-post-restart.mjs` 的 binding 段语义是：非 selftest 的 `bindingLog` 条目 = 有人绕过创建接缝建了 WSL 会话；零条目 = 一切经创建请求绑定的会话都正常。GUI 侧的最终确认已由操作者完成（会话预设显示 WSL · PTC 模式，工具在发行版内执行）。
 
 ## 界面入口
 
