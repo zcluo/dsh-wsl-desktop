@@ -58,6 +58,17 @@ check('re-registration does not compound the persona sentence', sentenceCount(se
 check('both variants carry exactly one sentence', sentenceCount(first.plugins[0].config.suffix) === 1 && sentenceCount(second.plugins[0].config.suffix) === 1)
 check('world-row removal does not mutate the base array', sharedBase.length === 2 && sharedBase.some((row) => row.id === 'tool-pwsh'), sharedBase.map((row) => row.id))
 
+console.log('\ngroup rows survive the clone (config arrays stay arrays)')
+const withGroup = [
+  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { suffix: 'Base.' } },
+  { id: 'team', name: 'cordis:group', group: true, config: [{ id: 'inner', name: '@deepseek-ai/dsh-tool-web' }] },
+]
+const groupOut = buildVariantPlugins(withGroup, MODULES)
+const carried = groupOut.plugins.find((row) => row.id === 'team')
+check('group row kept with its child list intact', carried !== undefined && Array.isArray(carried.config) && carried.config.some((child) => child.id === 'inner'), carried)
+check('group child was cloned, not shared', carried.config[0] !== withGroup[1].config[0])
+check('group row passes the entry-list shape rules', carried.group === true && Array.isArray(carried.config))
+
 console.log('\nrelative name rewrite')
 const rel = buildVariantPlugins(
   [{ id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} }, { id: 'custom', name: './tool-bootstrap.mjs' }],
