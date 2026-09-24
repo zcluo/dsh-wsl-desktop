@@ -74,7 +74,7 @@ const rel = buildVariantPlugins(
   [{ id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} }, { id: 'custom', name: './tool-bootstrap.mjs' }],
   { ...MODULES, distro: undefined, sourceDir: 'E:/src/preset' },
 )
-check('relative row name rewritten against sourceDir', rel.plugins.some((row) => row.name === 'E:/src/preset/tool-bootstrap.mjs'), rel.plugins.map((row) => row.name))
+check('relative row name rewritten to a file URL under sourceDir', rel.plugins.some((row) => row.name === 'file:///E:/src/preset/tool-bootstrap.mjs'), rel.plugins.map((row) => row.name))
 check('distro omitted when unpinned', rel.plugins.at(-1).config.every((row) => row.distro === undefined))
 
 console.log('\nbuildWorldGroup direct')
