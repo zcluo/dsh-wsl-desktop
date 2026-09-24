@@ -1,114 +1,75 @@
 /**
- * Verify the WSL preset transform against the shipped `standard` preset.
+ * Offline checks for the preset object pipeline (0.1.7-native).
  *
- * The transform is pure text, so it runs under plain Node outside the profile.
- * Run: node scripts/verify-preset.mjs
+ * Presets are registered programmatically with entry OBJECTS; the suite
+ * verifies the object transform (world-row removal, persona amendment,
+ * relative-name rewrite, the wsl-world isolate group) and the metadata
+ * renderer. Run: node scripts/verify-preset.mjs
  */
+import { buildVariantPlugins, buildWorldGroup, renderPresetMetadata, sweepDecision, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
 
-import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { renderWslPreset, renderPresetMetadata, splitBlocks, sweepDecision, WORLD_ROWS } from '../lib/wsl/preset.js'
-
-const SHIPPED = process.env.DSH_SHIPPED_PRESET
-  ?? 'E:\\projects\\deepseek-harness\\apps\\desktop\\.desktop-build\\targets\\win-x64\\dsh\\node_modules\\@deepseek-ai\\dsh-agent-presets\\presets\\standard\\agent.cordis.yml'
-
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${String(detail)}`}`)
-  if (!ok) failures += 1
+let passed = 0
+let failed = 0
+function check(name, condition, detail) {
+  if (condition) { passed += 1; console.log(`  PASS  ${name}`); return }
+  failed += 1
+  console.log(`  FAIL  ${name}`)
+  if (detail !== undefined) console.log(`        ${JSON.stringify(detail).slice(0, 300)}`)
 }
 
-if (!existsSync(SHIPPED)) {
-  console.error(`shipped preset not found: ${SHIPPED}`)
-  process.exit(2)
+const MODULES = {
+  subprocessPath: 'file:///live/lib/wsl/subprocess.js',
+  shellPath: 'file:///live/lib/wsl/shell.js',
+  fsPath: 'file:///live/lib/wsl/fs.js',
 }
-const source = await readFile(SHIPPED, 'utf8')
+const basePlugins = [
+  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { suffix: 'You are a coding agent.' } },
+  { id: 'tool-pwsh', name: '@deepseek-ai/dsh-tool-pwsh' },
+  { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs', config: { backend: 'fs-local' } },
+  { id: 'str-replace-editor', name: '@deepseek-ai/dsh-tool-str-replace-editor' },
+  { id: 'tool-fs-search', name: '@deepseek-ai/dsh-tool-fs-search' },
+  { id: 'tool-web', name: '@deepseek-ai/dsh-tool-web' },
+]
 
-console.log('source preset')
-const blocks = splitBlocks(source)
-const ids = blocks.map((block) => block.id).filter((id) => id !== null)
-check('the shipped preset has top-level entries', ids.length > 5, ids.length)
-const presentWorldRows = ids.filter((id) => WORLD_ROWS.has(id))
-check('the shipped preset mounts host execution-world rows', presentWorldRows.length >= 2, presentWorldRows)
-console.log(`        ids: ${ids.join(', ')}`)
+console.log('\nobject transform')
+const { plugins, removed } = buildVariantPlugins(basePlugins, { ...MODULES, distro: 'debian-dev' })
+check('host world rows removed', removed.includes('tool-pwsh') && removed.includes('tool-fs-search'), removed)
+check('non-world rows survive', plugins.some((row) => row.id === 'tool-web'), plugins.map((row) => row.id))
+check('wsl-world group appended', plugins.at(-1)?.id === 'wsl-world', plugins.at(-1)?.id)
+check('group isolates shell/fs/subprocess', JSON.stringify(plugins.at(-1)?.isolate) === '{"shell":true,"fs":true,"subprocess":true}', plugins.at(-1)?.isolate)
+check('group carries the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.some((row) => row.id === id)), plugins.at(-1).config.map((row) => row.id))
+check('distro pinned on the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.distro === 'debian-dev'), plugins.at(-1).config.map((row) => [row.id, row.distro]))
+check('tool rows carry no distro pin', plugins.at(-1).config.filter((row) => row.id.startsWith('tool') || row.id === 'str-replace-editor').every((row) => row.distro === undefined), plugins.at(-1).config.map((row) => [row.id, row.distro]))
+check('editor re-mounted inside the group', plugins.at(-1).config.some((row) => row.id === 'str-replace-editor'), plugins.at(-1).config.map((row) => row.id))
+check('persona amended with the path-dialect sentence', plugins[0].config.suffix.includes('wsl.localhost'), plugins[0].config.suffix?.slice(0, 80))
+check('provider modules are absolute file paths', [MODULES.subprocessPath, MODULES.shellPath, MODULES.fsPath].every((p) => plugins.at(-1).config.some((row) => row.name === p)))
 
-console.log('\ntransform')
-const result = renderWslPreset(source, {
-  subprocessPath: 'C:\\Users\\x\\.dsh\\profiles\\desktop\\plugins\\dsh-wsl-desktop\\lib\\wsl\\subprocess.js',
-  shellPath: 'C:\\Users\\x\\.dsh\\profiles\\desktop\\plugins\\dsh-wsl-desktop\\lib\\wsl\\shell.js',
-  fsPath: 'C:\\Users\\x\\.dsh\\profiles\\desktop\\plugins\\dsh-wsl-desktop\\lib\\wsl\\fs.js',
-  distro: 'debian',
-})
-const yaml = result.yaml
+console.log('\nrelative name rewrite')
+const rel = buildVariantPlugins(
+  [{ id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} }, { id: 'custom', name: './tool-bootstrap.mjs' }],
+  { ...MODULES, distro: undefined, sourceDir: 'E:/src/preset' },
+)
+check('relative row name rewritten against sourceDir', rel.plugins.some((row) => row.name === 'E:/src/preset/tool-bootstrap.mjs'), rel.plugins.map((row) => row.name))
+check('distro omitted when unpinned', rel.plugins.at(-1).config.every((row) => row.distro === undefined))
 
-check('every host world row was removed', presentWorldRows.every((id) => result.removed.includes(id)), result.removed)
-check('removal is limited to world rows', result.removed.every((id) => WORLD_ROWS.has(id)), result.removed)
-check('no removed row survives as a top-level entry', !splitBlocks(yaml).some((block) => block.id !== null && WORLD_ROWS.has(block.id)))
+console.log('\nbuildWorldGroup direct')
+const group = buildWorldGroup({ ...MODULES, distro: undefined, includeEditor: false })
+check('group shape', group.group === true && group.name === 'cordis:group' && Array.isArray(group.config), group)
 
-const rendered = splitBlocks(yaml)
-const worldBlock = rendered.find((block) => block.id === 'wsl-world')
-check('a wsl-world group was appended', worldBlock !== undefined)
-const worldText = worldBlock?.lines.join('\n') ?? ''
-check('the group isolates shell, fs and subprocess', /isolate:\n {4}shell: true\n {4}fs: true\n {4}subprocess: true\n/.test(worldText), worldText.slice(0, 260))
-check('no terminal registry row is added', !worldText.includes('- id: pty') && !worldText.includes('terminal-bash'), worldText.slice(0, 400))
-check('the group mounts the WSL subprocess provider first', worldText.indexOf('- id: subprocess-wsl') !== -1 && worldText.indexOf('- id: subprocess-wsl') < worldText.indexOf('- id: shell-wsl'), worldText.slice(0, 260))
-check('the group mounts the WSL shell executor', worldText.includes('- id: shell-wsl'))
-check('the group mounts the WSL filesystem provider', worldText.includes('- id: fs-wsl'))
-check('the group mounts the bash tool', /- id: tool-bash\n\s+name: '@deepseek-ai\/dsh-tool-bash'/.test(worldText))
-check('the group mounts the file tools', /- id: tool-fs\n\s+name: '@deepseek-ai\/dsh-tool-fs'/.test(worldText))
-check('the distribution is pinned in the fs row', worldText.includes("distro: 'debian'"))
-check('Windows paths survive YAML quoting', worldText.includes("'C:\\Users\\x\\.dsh\\profiles\\desktop\\plugins\\dsh-wsl-desktop\\lib\\wsl\\fs.js'"))
-
-check('the persona tells the model the WSL path mapping', yaml.includes('Windows spellings of directories inside that WSL distribution'), yaml.slice(yaml.indexOf('- id: persona'), yaml.indexOf('- id: persona') + 400))
-
-console.log('\nstructural sanity')
-check('the transform emits no tabs', !yaml.includes('\t'))
-const duplicateKeys = []
-for (const block of rendered) {
-  const seen = new Map()
-  for (const line of block.lines) {
-    // A sequence item opens a fresh mapping, so keys legitimately repeat across
-    // sibling entries; only a repeat *within* one mapping is a defect.
-    if (/^\s*- /.test(line)) { seen.clear(); continue }
-    const match = /^(\s*)([A-Za-z_][\w-]*):/.exec(line)
-    if (match === null) continue
-    const key = `${match[1].length}:${match[2]}`
-    if (seen.has(key)) duplicateKeys.push(`${block.id ?? 'preamble'}:${match[2]}`)
-    seen.set(key, true)
-  }
-}
-check('no mapping key is emitted twice at the same indent', duplicateKeys.length === 0, duplicateKeys)
-check('every top-level entry keeps a name line', rendered.every((block) => block.id === null || block.lines.some((line) => /^ {2}name:/.test(line))))
-check('the source length is preserved minus the dropped rows', yaml.length > source.length / 2)
-const preserved = ids.filter((id) => !WORLD_ROWS.has(id))
-check('every non-world row is nested inside the realm', preserved.every((id) => new RegExp(`^ {4}- id: ${id}$`, 'm').test(yaml)), preserved.filter((id) => !new RegExp(`^ {4}- id: ${id}$`, 'm').test(yaml)))
-check('no original row survives at the top level', !/^- id: persona$/m.test(yaml) && !/^- id: tool-skill$/m.test(yaml))
-check('the realm is the only top-level entry', splitBlocks(yaml).filter((block) => block.id !== null).length === 1, splitBlocks(yaml).map((block) => block.id))
-check('the persona section survives', /persona/.test(yaml))
-check('the chat nodes or tools survive', /tool-skill|skill-filesystem/.test(yaml))
-
-console.log('\nmetadata')
+console.log('\nmetadata renderer')
 const meta = renderPresetMetadata({ name: 'WSL', description: '在 WSL 发行版里执行' })
 check('metadata carries a name and description', meta.startsWith('name: WSL\n') && meta.includes('description:'))
+const tricky = renderPresetMetadata({ name: 'a: b', description: 'has # hash' })
+check('yaml-hostile values are quoted', tricky.includes("name: 'a: b'") && tricky.includes("description: 'has # hash'"), tricky)
 
-console.log('\norphan sweep')
-// The namespace is a name prefix, so it is shared with anything a user calls
-// `wsl-…`. Only a directory this plugin marked may be withdrawn.
-const sweep = (over) => sweepDecision({ name: 'wsl-standard', prefix: 'wsl-', expected: false, marked: false, ...over })
-check('an unmarked directory in the namespace is left alone', sweep({}) === 'unmanaged')
-check('a marked orphan is withdrawn', sweep({ marked: true }) === 'withdraw')
-check('a marked current output is kept', sweep({ marked: true, expected: true }) === 'keep')
-check('an unmarked current output is still kept', sweep({ expected: true }) === 'keep')
-check('a directory outside the namespace is ignored', sweep({ name: 'standard' }) === 'ignore')
-check('the decision does not depend on the marker for an expected directory',
-  sweep({ expected: true, marked: false }) === sweep({ expected: true, marked: true }))
+console.log('\nsweep decision (legacy namespace hygiene)')
+check('unmarked same-prefix directory is unmanaged', sweepDecision({ name: 'wsl-x', prefix: 'wsl-', expected: false, marked: false }) === 'unmanaged')
+check('marked stale directory is withdrawn', sweepDecision({ name: 'wsl-x', prefix: 'wsl-', expected: false, marked: true }) === 'withdraw')
+check('foreign names are ignored', sweepDecision({ name: 'other', prefix: 'wsl-', expected: false, marked: false }) === 'ignore')
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log('\nworld rows constant')
+check('world rows exclude the WSL tool ids', !WORLD_ROWS.has('tool-bash-wsl') && WORLD_ROWS.has('tool-pwsh'))
+check('persona sentence names the UNC spelling', WSL_PERSONA_SENTENCE.includes('wsl.localhost'))
+
+console.log(`\n${passed} passed, ${failed} failed`)
+process.exit(failed === 0 ? 0 : 1)

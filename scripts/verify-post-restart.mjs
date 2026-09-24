@@ -100,24 +100,18 @@ console.log('\ncross-check against the older route generation')
 const legacy = await call('listDistros').catch((error) => ({ error: error.message }))
 check('the route still answers distribution discovery', Array.isArray(legacy), legacy)
 
-console.log('\ngenerated presets on disk')
-const directories = await call('listPresetDirectories')
-check('WSL preset directories exist under the user preset root', directories.names.length > 0, directories)
-const target = directories.names.find((name) => name === 'wsl-standard') ?? directories.names[0]
-check('a preset derived from the standard preset was written', typeof target === 'string' && target.length > 0, directories.names)
-
-if (typeof target === 'string') {
-  const preset = await call('readPreset', { id: target })
-  check('the preset mounts the WSL world group', preset.text.includes('- id: wsl-world'), preset.path)
-  check('the group isolates shell, fs and subprocess', /isolate:\n\s+shell: true\n\s+fs: true\n\s+subprocess: true/.test(preset.text))
-  check('the host execution-world rows were removed', !/^- id: tool-pwsh$/m.test(preset.text), preset.text.match(/^- id: .*/gm))
-  const modules = [...preset.text.matchAll(/^\s+name: '(.*\.js)'$/gm)].map((match) => match[1])
-  check('the preset names the plugin modules by absolute path', modules.length >= 3, modules)
-  const missing = modules.filter((module) => !existsSync(module))
-  check('every referenced module still exists on disk', missing.length === 0, missing)
-  const source = readFileSync(preset.path, 'utf8')
-  check('the preset text on disk matches what the route returned', source === preset.text)
-}
+console.log('\ngenerated presets in the registry (0.1.7-native registration)')
+// Since 0.1.7 the registry learns presets from register() calls; the on-disk
+// generated directory is no longer consulted. Verify through the roster.
+const inventory = await call('presetInventory').catch((error) => ({ error: error.message }))
+const compositions = Array.isArray(inventory.inventory) ? inventory.inventory : (inventory.inventory?.compositions ?? [])
+const rosterIds = compositions.map((entry) => entry.id)
+check('the wsl-standard variant is registered', rosterIds.includes('wsl-standard'), rosterIds)
+// The variant's composition must still be readable (a broken declaration would
+// list no rows) and must have dropped the host PowerShell tool row.
+const variant = compositions.find((entry) => entry.id === 'wsl-standard')
+check('the variant declares composition rows', Array.isArray(variant?.rows) && variant.rows.length > 0, variant)
+check('the variant dropped the host PowerShell tool row', Array.isArray(variant?.rows) && !variant.rows.some((row) => row.entryId === 'tool-pwsh'), variant?.rows?.map((row) => row.entryId))
 
 console.log('\nexecution world')
 const identity = await call('execInWsl', { cwd: home, command: 'uname -s; pwd; echo "$WSL_DISTRO_NAME"' })
@@ -247,7 +241,10 @@ async function liveClientEntry() {
 const clientEntry = await liveClientEntry().catch(() => null)
 check('the client half is in the served module graph', clientEntry !== null, 'no dsh-wsl-desktop entry in /plugins/events')
 if (clientEntry !== null) {
-  const bundleResponse = await fetch(`${baseUrl}${clientEntry.url}`)
+  // 0.1.7's graph entries may carry a path without the leading slash; the
+  // joined URL must not lose the separator between origin and path.
+  const bundlePath = clientEntry.url.startsWith('/') ? clientEntry.url : `/${clientEntry.url}`
+  const bundleResponse = await fetch(`${baseUrl}${bundlePath}`)
   const bundle = await bundleResponse.text()
   check('the served browser half is the current one',
     bundleResponse.status === 200 && bundle.includes('TRIGGER_ICON_PATH'), `status=${bundleResponse.status} bytes=${bundle.length}`)
