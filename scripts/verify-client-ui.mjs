@@ -115,13 +115,7 @@ check('adopts the trigger class so the button matches the header',
 check('calls no command-executing host method', !code.includes('execInWsl') && !code.includes('selftest'))
 
 // The client carries a LIST of known trigger geometries (one per desktop
-// generation); the shipped icon source must contain at least one of them, and
-// every listed geometry must be a real prefix of the artwork it names.
-const geometries = [...source.matchAll(/'((?:M)[^']{18,})'/g)].map((m) => m[1])
-  .filter((g) => source.includes(`'${g}'`))
-const triggerGeometries = [...source.matchAll(/'((?:M)[^']{18,})',?\s*(?:\/\/[^\n]*)?\n/g)]
-  .map((m) => m[1])
-  .filter((g) => /TRIGGER_ICON_PATHS/.test(source))
+// generation); the shipped icon source must contain at least one of them.
 let iconSource = null
 try {
   iconSource = await readFile(iconSourcePath, 'utf8')

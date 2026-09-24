@@ -1,6 +1,6 @@
 # dsh-wsl-desktop
 
-> ⚠️ **开发快照，暂勿用于生产。** 核心能力已活体验收（`verify-post-restart.mjs` 全绿 + 离线 10 套件 + 操作者确认）；安全审计 run-1 完成——**5 条候选全部闭环**（2 条被探针关闭、2 条修复经动态确认关闭、1 条确认为预期行为），报告见 `security-audit-skill/dsh-wsl-desktop/run-1/`。逐项证据强度见下方能力表。
+> ⚠️ **开发快照，暂勿用于生产。** 需要 **DSH Desktop 0.1.7+**（预设通过运行时注册而非目录加载，旧版宿主不支持）。核心能力已活体验收（`verify-post-restart.mjs` 全绿 + 离线 10 套件 + 操作者确认）；安全审计 run-1 完成——**5 条候选全部闭环**（2 条被探针关闭、2 条修复经动态确认关闭、1 条确认为预期行为），报告见 `security-audit-skill/dsh-wsl-desktop/run-1/`。逐项证据强度见下方能力表。
 
 DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 Linux 工作区，并让该工作区内的工具真正在发行版里执行。
 

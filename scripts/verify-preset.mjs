@@ -44,6 +44,20 @@ check('editor re-mounted inside the group', plugins.at(-1).config.some((row) => 
 check('persona amended with the path-dialect sentence', plugins[0].config.suffix.includes('wsl.localhost'), plugins[0].config.suffix?.slice(0, 80))
 check('provider modules are absolute file paths', [MODULES.subprocessPath, MODULES.shellPath, MODULES.fsPath].every((p) => plugins.at(-1).config.some((row) => row.name === p)))
 
+console.log('\ntransform purity (the registry shares row objects by reference)')
+const sharedBase = [
+  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { suffix: 'Base.' } },
+  { id: 'tool-pwsh', name: '@deepseek-ai/dsh-tool-pwsh' },
+]
+const first = buildVariantPlugins(sharedBase, MODULES)
+const second = buildVariantPlugins(sharedBase, MODULES)
+const baseUntouched = sharedBase[0].config.suffix === 'Base.'
+const sentenceCount = (suffix) => (suffix.match(new RegExp(WSL_PERSONA_SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length
+check('base definition not polluted by the transform', baseUntouched, sharedBase[0].config.suffix)
+check('re-registration does not compound the persona sentence', sentenceCount(second.plugins[0].config.suffix) === 1, second.plugins[0].config.suffix)
+check('both variants carry exactly one sentence', sentenceCount(first.plugins[0].config.suffix) === 1 && sentenceCount(second.plugins[0].config.suffix) === 1)
+check('world-row removal does not mutate the base array', sharedBase.length === 2 && sharedBase.some((row) => row.id === 'tool-pwsh'), sharedBase.map((row) => row.id))
+
 console.log('\nrelative name rewrite')
 const rel = buildVariantPlugins(
   [{ id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} }, { id: 'custom', name: './tool-bootstrap.mjs' }],
