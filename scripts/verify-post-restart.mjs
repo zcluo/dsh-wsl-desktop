@@ -131,7 +131,7 @@ const boundAtCreate = created?.composed === 'wsl-standard'
 const boundAtSelect = step('select')?.composed === 'wsl-standard'
 check('a session is created and bound to the WSL preset', boundAtCreate || boundAtSelect, created)
 const shellRun = step('shell.run')
-check('the session shell runs inside the distribution', shellRun?.exitCode === 0 && shellRun.stdout?.[0] === 'Linux', shellRun)
+check('the session shell runs inside the distribution', shellRun?.exitCode === 0 && (shellRun.stdoutText?.[0] ?? shellRun.stdout?.[0]) === 'Linux', shellRun)
 check('confinement reports its real completeness, not a claim of full', shellRun?.sandbox?.enforcement === 'partial', shellRun?.sandbox)
 const fsRoundtrip = step('fs.roundtrip')
 check('the file tools address Linux paths', fsRoundtrip?.processPath?.startsWith('/'), fsRoundtrip)
@@ -164,7 +164,10 @@ console.log('\nwindows workspace unaffected')
 const win = await call('selftest', { preset: 'standard', cwd: 'E:\\' }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
 const winStep = (name) => win.steps.find((entry) => entry.name === name)
 check('a Windows workspace stays on the host preset', winStep('select')?.composed === 'standard', winStep('select'))
-check('no realm-scoped shell is mounted', winStep('shell.service')?.found === false, winStep('shell.service'))
+// 0.1.7: the host registers its own shell at the root scope, so a Windows
+// session's shell.service IS found — the assertion is that it is NOT the WSL
+// realm's confining executor (whose prototype carries confinementFor).
+check('no realm-scoped shell is mounted', !(winStep('shell.service')?.proto ?? '').includes('confinementFor'), winStep('shell.service'))
 check('the host PowerShell tool works', (winStep('tools.pwsh')?.text ?? '').includes('"isError":false'), winStep('tools.pwsh')?.text?.slice(0, 160))
 check('no bash tool exists in the host world', (winStep('tools.bash')?.text ?? '').includes('UNKNOWN_TOOL'), winStep('tools.bash')?.text?.slice(0, 160))
 
