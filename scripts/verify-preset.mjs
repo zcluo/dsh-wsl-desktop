@@ -6,7 +6,7 @@
  * relative-name rewrite, the wsl-world isolate group) and the metadata
  * renderer. Run: node scripts/verify-preset.mjs
  */
-import { buildVariantPlugins, buildWorldGroup, renderPresetMetadata, sweepDecision, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
+import { buildVariantPlugins, buildWorldGroup, isHostWorldModule, renderPresetMetadata, sweepDecision, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
 
 let passed = 0
 let failed = 0
@@ -22,6 +22,27 @@ const MODULES = {
   shellPath: 'file:///live/lib/wsl/shell.js',
   fsPath: 'file:///live/lib/wsl/fs.js',
 }
+console.log('\nwsl-minimal persistent-shell group (shipped-prevalence regression)')
+// The shipped minimal preset nests ENABLED host PowerShell persistent rows
+// with non-canonical ids inside a `persistent-shell` group — the exact shape
+// the id-keyed top-level removal leaked into wsl-minimal.
+const minimalBase = [
+  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} },
+  { id: 'persistent-shell', name: 'cordis:group', group: true, isolate: { terminals: true }, config: [
+    { id: 'persistent-bash', name: '@deepseek-ai/dsh-tool-bash-persistent', disabled: '!!js process.platform !== "linux"' },
+    { id: 'persistent-pwsh', name: '@deepseek-ai/dsh-tool-pwsh-persistent' },
+    { id: 'terminal-bash', name: '@deepseek-ai/dsh-terminal-bash' },
+    { id: 'pty', name: '@deepseek-ai/dsh-terminal' },
+  ] },
+  { id: 'tool-web', name: '@deepseek-ai/dsh-tool-web' },
+]
+const minOut = buildVariantPlugins(minimalBase, MODULES)
+const hostModuleLeak = (rows) => rows.some((row) => (typeof row?.name === 'string' && isHostWorldModule(row.name)) || (Array.isArray(row?.config) && hostModuleLeak(row.config)))
+check('the persistent-shell group is pruned empty and dropped', !minOut.plugins.some((row) => row.id === 'persistent-shell'), minOut.plugins.map((row) => row.id))
+check('no host-world module survives anywhere in the variant', !hostModuleLeak(minOut.plugins), minOut.plugins)
+check('non-world rows survive the group prune', minOut.plugins.some((row) => row.id === 'tool-web'), minOut.plugins.map((row) => row.id))
+check('the removal log names the pruned rows', minOut.removed.includes('persistent-pwsh') && minOut.removed.includes('pty') && minOut.removed.includes('persistent-shell'), minOut.removed)
+
 const basePlugins = [
   { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { suffix: 'You are a coding agent.' } },
   { id: 'tool-pwsh', name: '@deepseek-ai/dsh-tool-pwsh' },

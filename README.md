@@ -98,6 +98,8 @@ read-only:        tmpfs /tmp        →  remount,ro,bind /
 两个实测得出的前提：
 
 - **必须 root。** WSL 内核拒绝在 user namespace 里做 bind mount：`unshare -Ur --mount` 能起，但 `mount --bind` 报 "wrong fs type"。所以用 `sudo -n unshare …`；没有免密 sudo 时受限模式**明确失败**（`SandboxUnavailableError`），而不是裸跑。
+- **降权后保留的 sudo 授权是围栏的已知边界。** 会话用户保留着 runner 自己依赖的免密 sudo 授权——被约束的命令可以重新调用它（新开一个不带围栏脚本的 `sudo -n unshare --mount`，或在围栏内 `sudo -n mount -o remount,rw /`），从而绕过文件围栏。0.1.7 兼容批次起，降权时**设置 NO_NEW_PRIVS**（运行时探测 `setpriv --no-new-privs` 支持，支持则启用）：围栏内的 setuid 提权会响亮失败（受限会话内禁止 sudo 是预期行为；"完全权限"模式不经过围栏，不受影响）。不支持该标志的老 setpriv 上，此边界仍存在——如实记录于 `enforcement: 'partial'` 的 caveats。长期方案（专用 root helper：sudoers 只授权给"总是先施加围栏再执行"的 wrapper）已记录待实现。
+- **findmnt 的 `\xNN` 转义已解码。** `findmnt -r` 会把 TARGET 里的空格/制表/换行/反斜杠编码为 `\x20` 等——修复前清扫按字面转义名 remount（ENOENT 被 `|| true` 吞掉）且后置条件测的是假名，含空格的挂载点在只读模式下保持可写而退出码 97 不触发。现在两处管道都先解码再匹配，并有真实含空格 bind 目标的只读断言回归（verify-confinement）。
 - **进 namespace 后必须降回原用户。** 经 `sudo` 进入后 euid 是 root，直接用会让工作区里出现 root 属主文件；用 `setpriv --reuid --regid --init-groups` 降回会话用户（有断言覆盖属主）。
 - **所有输出被解析的探针一律非登录。** `resolveIdentity` / `detectRunner` / `listLinuxDir` / `checkLinuxPath` / `resolveDistroHome` / `resolveExecutable` / pty 的 python3 探测全部 `loginShell: false`——登录 shell 的 rc 会先于探针命令输出，位置性解析就会把 profile 打印的内容当作 uid/gid/home（模型可写 dotfiles 时等于把 setpriv 的 uid 交给攻击者）。`resolveIdentity` 额外用 `__DSH_IDENTITY__` 哨兵行界定 + 恰好四行校验，解析失败抛**携带探针实际输出**的错误（不再静默 null）。探针超时 60s + 超时后一次透明重试：桌面重启后的首个 wsl.exe 冷启动可以超过短上限。
 - **wsl.exe 的选项值在 spawn 前过语法校验。** `runWslShell` / `buildWslExecArgv` 顶部对 distro（`DISTRO_NAME`）与 username（`LINUX_USER`）拒绝分隔符字符——exec 路径的安全性不依赖 wsl.exe 外部未文档化的分词规则；checkPath 也在任何 wsl.exe 副作用之前先做 UNC 校验（回归钉在 verify-world）。

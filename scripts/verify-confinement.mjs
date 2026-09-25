@@ -102,6 +102,26 @@ check('a write outside a space-named workspace is still denied',
   !outSpaced.result.stdout.includes('OUT-SPACED-OK') && DENIAL_SIGNATURES.some((signature) => outSpaced.result.stderr.includes(signature)),
   `${outSpaced.result.exitCode} ${outSpaced.result.stderr}`)
 
+console.log('\nspaced mount target outside the workspace (findmnt \\x20 decoding)')
+// findmnt -r hex-escapes unsafe characters in TARGET (\x20 for space): before
+// the decode-before-match fix, the sweep remounted the escaped literal name
+// (ENOENT swallowed by `|| true`) and the postcondition tested the bogus name
+// — so a spaced mount target outside the workspace stayed WRITABLE and the
+// fail-closed exit 97 never fired. The bind below creates a REAL spaced mount
+// target (unconfined setup, like the suites above), and the confined
+// read-only run must deny a write under its REAL path.
+const spacedMount = `${home}/mnt probe`
+await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
+const mountedCheck = await runWslShell({ distro, linuxCwd: '/', command: `findmnt -rno TARGET "${spacedMount}"` })
+check('the spaced bind target is mounted', mountedCheck.stdout.trim() === spacedMount || mountedCheck.stdout.trim().includes('probe'), `${JSON.stringify(mountedCheck.stdout)}`)
+const spacedMountWrite = await confined(`echo written > "${spacedMount}/dsh-wsl-escape.txt" && echo SPACED-MOUNT-OK`, { mode: 'read-only' })
+check('a write into a spaced mount target is denied under its REAL path',
+  !spacedMountWrite.result.stdout.includes('SPACED-MOUNT-OK') && DENIAL_SIGNATURES.some((signature) => spacedMountWrite.result.stderr.includes(signature)),
+  `${spacedMountWrite.result.exitCode} ${spacedMountWrite.result.stderr}`)
+const spacedMountState = await runWslShell({ distro, linuxCwd: '/', command: `findmnt -rno OPTIONS "${spacedMount}" | head -1` })
+check('the spaced mount target was remounted read-only', spacedMountState.stdout.includes('ro'), spacedMountState.stdout)
+await runWslShell({ distro, linuxCwd: '/', command: `sudo -n umount "${spacedMount}" && rm -rf "${spacedMount}"` })
+
 console.log('\nread-only')
 const readOnlyWrite = await confined(`echo written > ${probeRoot}/readonly.txt && echo RO-OK`, { mode: 'read-only' })
 check('a write inside the workspace is denied', !readOnlyWrite.result.stdout.includes('RO-OK'), `${readOnlyWrite.result.exitCode} ${readOnlyWrite.result.stdout}`)
