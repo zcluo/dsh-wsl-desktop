@@ -79,6 +79,7 @@ try {
   process.exit(1)
 }
 check('the preset generation succeeded', status.status === 'ready', JSON.stringify(status))
+check('the host exposes the 0.1.7 registry surface', status.hostCompat?.registry07 === true, status.hostCompat)
 if (status.status === 'ready') {
   check('at least one WSL preset was written', Array.isArray(status.written) && status.written.length > 0, status.written)
   console.log(`        ${status.written.map((entry) => `${entry.id} (from ${entry.from}; removed ${entry.removed.join(',') || 'none'})`).join('\n        ')}`)

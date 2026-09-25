@@ -1,8 +1,15 @@
 # dsh-wsl-desktop
 
-> ⚠️ **开发快照，暂勿用于生产。** 需要 **DSH Desktop 0.1.7+**（预设通过运行时注册而非目录加载，旧版宿主不支持）。核心能力已活体验收（`verify-post-restart.mjs` 全绿 + 离线 10 套件 + 操作者确认）；安全审计 run-1 完成——**5 条候选全部闭环**（2 条被探针关闭、2 条修复经动态确认关闭、1 条确认为预期行为），报告见 `security-audit-skill/dsh-wsl-desktop/run-1/`。逐项证据强度见下方能力表。
+> **生产状态：受控单机生产可用**（见下方边界定义）。需要 **DSH Desktop 0.1.7+**（预设通过运行时注册而非目录加载，旧版宿主会在激活时明确拒绝）。核心能力已活体验收；安全审计 run-1（5 候选闭环）与 run-2（4 confirmed 已修复 + 1 rejected 转加固）均完成，报告见 `security-audit-skill/dsh-wsl-desktop/run-{1,2}/`。逐项证据强度见下方能力表。
+>
+> **边界定义**：
+> - ✅ **适合**：插件作者本人或同信任级别操作者，在明确支持的发行版（见「发行版支持矩阵」）与 0.1.7+ 桌面上长期使用。
+> - ⚠️ **条件**：confined 模式的信任边界依赖 NO_NEW_PRIVS（debian 系现代 setpriv 满足；不支持的老 setpriv 上围栏可被模型自身的 sudo 授权穿透，见 caveats）。
+> - ❌ **尚不适合**：分发给第三方用户（缺桌面版本门控与发行版矩阵——见生产化路线图）、无人值守高价值环境（subprocess 面不设防为已披露设计）。
 
-DSH Desktop 的 WSL 执行世界插件：在 GUI 里添加 WSL 发行版中的 Linux 工作区，并让该工作区内的工具真正在发行版里执行。
+## 桌面更新纪律（强制）
+
+每次 DSH Desktop 更新后，插件可能因 harness 内部 API 变化而失效（0.1.6→0.1.7 即断裂四处）。**纪律：更新桌面 → 跑 `node scripts/verify-post-restart.mjs` → 全绿才继续使用；任何一次红都先修再干。** 该套件覆盖预设注册、执行世界、会话绑定、Windows 隔离与对话框契约；新宿主的破坏会在这些断言上现形，而不是静默降级成宿主世界。
 
 ## 目标能力
 
@@ -98,7 +105,15 @@ read-only:        tmpfs /tmp        →  remount,ro,bind /
 两个实测得出的前提：
 
 - **必须 root。** WSL 内核拒绝在 user namespace 里做 bind mount：`unshare -Ur --mount` 能起，但 `mount --bind` 报 "wrong fs type"。所以用 `sudo -n unshare …`；没有免密 sudo 时受限模式**明确失败**（`SandboxUnavailableError`），而不是裸跑。
-- **降权后保留的 sudo 授权是围栏的已知边界。** 会话用户保留着 runner 自己依赖的免密 sudo 授权——被约束的命令可以重新调用它（新开一个不带围栏脚本的 `sudo -n unshare --mount`，或在围栏内 `sudo -n mount -o remount,rw /`），从而绕过文件围栏。0.1.7 兼容批次起，降权时**设置 NO_NEW_PRIVS**（运行时探测 `setpriv --no-new-privs` 支持，支持则启用）：围栏内的 setuid 提权会响亮失败（受限会话内禁止 sudo 是预期行为；"完全权限"模式不经过围栏，不受影响）。不支持该标志的老 setpriv 上，此边界仍存在——如实记录于 `enforcement: 'partial'` 的 caveats。长期方案（专用 root helper：sudoers 只授权给"总是先施加围栏再执行"的 wrapper）已记录待实现。
+- **降权后保留的 sudo 授权是围栏的已知边界——两条闭合路径。** 会话用户保留着 runner 自己依赖的免密 sudo 授权——被约束的命令可以重新调用它（新开一个不带围栏脚本的 `sudo -n unshare --mount`，或在围栏内 `sudo -n mount -o remount,rw /`），从而绕过文件围栏。闭合路径（按优先级）：
+  1. **专用 helper（推荐，一次性安装）**：
+     ```bash
+     # 在发行版内以 root 执行（路径按实际安装位置调整）
+     install -m 0755 -o root -g root /mnt/c/Users/<you>/.dsh/profiles/desktop/plugins/dsh-wsl-desktop-*/lib/wsl/dsh-wsl-confine.sh /usr/local/sbin/dsh-wsl-confine
+     echo "$USER ALL=(root) NOPASSWD: /usr/local/sbin/dsh-wsl-confine *" > /etc/sudoers.d/dsh-wsl-confine && chmod 0440 /etc/sudoers.d/dsh-wsl-confine
+     ```
+     helper 以 root 身份**总是先施加完整围栏**再降权执行命令——重新调用只会从已围栏的上下文再围栏一次，参数游戏（workspace='/'）被 `/ is not read-only` 后置条件击败。插件自动探测并优先使用 helper（sudoers 只授权这一个文件）。
+  2. **NO_NEW_PRIVS（自动，无 helper 时的缓解）**：降权时运行时探测 `setpriv --no-new-privs` 支持（debian 系现代 setpriv 满足，实测 `noNewPrivs: true` 已激活）——围栏内 setuid 提权响亮失败。不支持该标志的老 setpriv 上，此边界仍存在——如实记录于 `enforcement: 'partial'` 的 caveats。
 - **findmnt 的 `\xNN` 转义已解码。** `findmnt -r` 会把 TARGET 里的空格/制表/换行/反斜杠编码为 `\x20` 等——修复前清扫按字面转义名 remount（ENOENT 被 `|| true` 吞掉）且后置条件测的是假名，含空格的挂载点在只读模式下保持可写而退出码 97 不触发。现在两处管道都先解码再匹配，并有真实含空格 bind 目标的只读断言回归（verify-confinement）。
 - **进 namespace 后必须降回原用户。** 经 `sudo` 进入后 euid 是 root，直接用会让工作区里出现 root 属主文件；用 `setpriv --reuid --regid --init-groups` 降回会话用户（有断言覆盖属主）。
 - **所有输出被解析的探针一律非登录。** `resolveIdentity` / `detectRunner` / `listLinuxDir` / `checkLinuxPath` / `resolveDistroHome` / `resolveExecutable` / pty 的 python3 探测全部 `loginShell: false`——登录 shell 的 rc 会先于探针命令输出，位置性解析就会把 profile 打印的内容当作 uid/gid/home（模型可写 dotfiles 时等于把 setpriv 的 uid 交给攻击者）。`resolveIdentity` 额外用 `__DSH_IDENTITY__` 哨兵行界定 + 恰好四行校验，解析失败抛**携带探针实际输出**的错误（不再静默 null）。探针超时 60s + 超时后一次透明重试：桌面重启后的首个 wsl.exe 冷启动可以超过短上限。
