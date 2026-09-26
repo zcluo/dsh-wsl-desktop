@@ -23,7 +23,9 @@ const flag = (name, fallback) => {
   return hit === undefined ? fallback : hit.slice(name.length + 3)
 }
 const clientPath = flag('client', join(pluginRoot, 'lib', 'client.js'))
-const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? 'E:/projects/deepseek-harness')
+// The harness checkout is this repo's sibling in a normal development layout;
+// DSH_CHECKOUT / --checkout override it anywhere else.
+const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? join(pluginRoot, '..', 'deepseek-harness'))
 const iconSourcePath = join(
   checkout, 'packages', 'client', 'ui-primitives', 'src', 'icons', 'index.tsx',
 )

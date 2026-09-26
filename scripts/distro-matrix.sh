@@ -4,10 +4,10 @@
 # run the shipped fence fixture (the real confinement script), and run the
 # tool probe. Emits one matrix row per image.
 #
-# Usage: bash /mnt/e/projects/dsh-wsl-desktop/scripts/distro-matrix.sh
+# Usage: bash scripts/distro-matrix.sh (repo root derived from this file's location)
 set -uo pipefail
 
-REPO=/mnt/e/projects/dsh-wsl-desktop
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_DIR="$REPO/tmp-probe/distro-matrix"
 
 IMAGES=(

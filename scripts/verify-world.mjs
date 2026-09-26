@@ -46,11 +46,11 @@ check(
   parseWslUnc('\\\\wsl.localhost\\example\\home\\user'),
 )
 check('parseWslUnc accepts the wsl$ alias', parseWslUnc('\\\\wsl$\\Ubuntu\\srv')?.distro === 'Ubuntu')
-check('parseWslUnc rejects a drive path', parseWslUnc('E:\\projects') === null)
+check('parseWslUnc rejects a drive path', parseWslUnc('Q:\\work') === null)
 check('joinWslUnc round-trips', parseWslUnc(joinWslUnc('example', '/home/user'))?.linuxPath === '/home/user')
 check('joinWslUnc maps the root', joinWslUnc('example', '/') === '\\\\wsl.localhost\\example')
-check('windowsToMntPath maps a drive', windowsToMntPath('E:\\projects\\x') === '/mnt/e/projects/x')
-check('mntToWindowsPath round-trips', mntToWindowsPath('/mnt/e/projects/x') === 'E:\\projects\\x')
+check('windowsToMntPath maps a drive', windowsToMntPath('Q:\\work\\x') === '/mnt/q/work/x')
+check('mntToWindowsPath round-trips', mntToWindowsPath('/mnt/q/work/x') === 'Q:\\work\\x')
 check('isWindowsPathShaped sees drive and UNC', isWindowsPathShaped('C:\\x') && isWindowsPathShaped('\\\\wsl.localhost\\d'))
 check('shellQuote escapes an apostrophe', shellQuote("a'b") === `'a'\\''b'`)
 

@@ -63,7 +63,7 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 两个实测前提：
 
 - **控制进程必须在桥报告会话之后才启动**，因为在桥创建 FIFO 之前 `open` 会直接失败。桥在 `_spawn()` 前先建 FIFO，靠 `started` 应答把这一点变成可观测的时序。
-- **rc 里向终端发查询的程序会挂住整个会话。** 这台机器的 `~/.bashrc` 末尾是 `oh-my-posh init` + `clear` + `fastfetch`；其中 `fastfetch` 会向终端发查询并等应答，而无头校验里没有终端模拟器应答，于是永远不出提示符。真实 Web 终端里 xterm.js 会应答，所以这是校验环境的问题而不是桥的缺陷 —— 但据此把校验用的 shell 固定为 `bash --noprofile --norc -i`，让校验测的是桥而不是用户的 rc。
+- **rc 里向终端发查询的程序会挂住整个会话。** 有的发行版用户的 `~/.bashrc` 末尾会启动向终端发查询的程序（如 `fastfetch`），它们要等只有终端模拟器才会给的应答，而无头校验里没有应答方，于是永远不出提示符。真实 Web 终端里 xterm.js 会应答，所以这是校验环境的问题而不是桥的缺陷 —— 但据此把校验用的 shell 固定为 `bash --noprofile --norc -i`，让校验测的是桥而不是用户的 rc。
 
 PTC 的 `stdio.control`（fd 通道）仍然明确拒绝：`wsl.exe` 无法转发任意描述符。
 

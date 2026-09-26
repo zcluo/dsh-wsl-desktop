@@ -25,7 +25,9 @@ const flag = (name, fallback) => {
   const hit = process.argv.find((argument) => argument.startsWith(`--${name}=`))
   return hit === undefined ? fallback : hit.slice(name.length + 3)
 }
-const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? 'E:/projects/deepseek-harness')
+// The harness checkout is this repo's sibling in a normal development layout;
+// DSH_CHECKOUT / --checkout override it anywhere else.
+const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? join(pluginRoot, '..', 'deepseek-harness'))
 const clientPath = flag('client', join(pluginRoot, 'lib', 'client.js'))
 
 let failures = 0
