@@ -41,14 +41,17 @@ function check(label, ok, detail) {
   if (!ok) failures += 1
 }
 
-/** Run one command through the confinement wrapper. */
+/** Run one command through the confinement wrapper (the detected runner). */
 async function confined(command, { mode, workspaceLinuxRoot, linuxCwd = '/' }) {
   const identity = await resolveIdentity({ distro, run }).catch((error) => {
     console.log(`        identity probe error: ${error.message}`)
     return null
   })
   if (identity === null) throw new Error('无法解析发行版内的用户身份')
-  const wrapped = buildConfinedCommand({ command, linuxCwd, mode, workspaceLinuxRoot, identity })
+  // Pass the DETECTED runner: once the operator installs the dsh-wsl-confine
+  // helper, every check below must exercise the hardened path, not silently
+  // keep testing the direct sudo-unshare runner.
+  const wrapped = buildConfinedCommand({ command, linuxCwd, mode, workspaceLinuxRoot, identity, runner })
   const result = await runWslShell({ distro, linuxCwd, command: wrapped, timeoutMs: 60_000 })
   return { result, identity }
 }
@@ -112,8 +115,9 @@ if (detectionRetried) {
   await new Promise((resolve) => { setTimeout(resolve, 1000) })
   runner = await detectOnce()
 }
-check('a confinement runner is available', runner === 'sudo-unshare',
+check('a confinement runner is available', runner === 'sudo-unshare' || runner === 'helper',
   `${String(runner)}${detectionRetried ? ' (first attempt failed; retried once)' : ''}`)
+console.log(`        runner=${runner}`)
 const identity = await resolveIdentity({ distro, run })
 check('the session identity resolves', identity !== null && /^\d+$/.test(identity?.uid ?? ''), identity)
 console.log(`        uid=${identity?.uid} gid=${identity?.gid}`)
