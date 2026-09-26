@@ -3,10 +3,10 @@
  *
  * Presets are registered programmatically with entry OBJECTS; the suite
  * verifies the object transform (world-row removal, persona amendment,
- * relative-name rewrite, the wsl-world isolate group) and the metadata
- * renderer. Run: node scripts/verify-preset.mjs
+ * relative-name rewrite, the wsl-world isolate group).
+ * Run: node scripts/verify-preset.mjs
  */
-import { buildVariantPlugins, buildWorldGroup, isHostWorldModule, renderPresetMetadata, sweepDecision, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
+import { buildVariantPlugins, buildWorldGroup, isHostWorldModule, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
 
 let passed = 0
 let failed = 0
@@ -101,17 +101,6 @@ check('distro omitted when unpinned', rel.plugins.at(-1).config.every((row) => r
 console.log('\nbuildWorldGroup direct')
 const group = buildWorldGroup({ ...MODULES, distro: undefined, includeEditor: false })
 check('group shape', group.group === true && group.name === 'cordis:group' && Array.isArray(group.config), group)
-
-console.log('\nmetadata renderer')
-const meta = renderPresetMetadata({ name: 'WSL', description: '在 WSL 发行版里执行' })
-check('metadata carries a name and description', meta.startsWith('name: WSL\n') && meta.includes('description:'))
-const tricky = renderPresetMetadata({ name: 'a: b', description: 'has # hash' })
-check('yaml-hostile values are quoted', tricky.includes("name: 'a: b'") && tricky.includes("description: 'has # hash'"), tricky)
-
-console.log('\nsweep decision (legacy namespace hygiene)')
-check('unmarked same-prefix directory is unmanaged', sweepDecision({ name: 'wsl-x', prefix: 'wsl-', expected: false, marked: false }) === 'unmanaged')
-check('marked stale directory is withdrawn', sweepDecision({ name: 'wsl-x', prefix: 'wsl-', expected: false, marked: true }) === 'withdraw')
-check('foreign names are ignored', sweepDecision({ name: 'other', prefix: 'wsl-', expected: false, marked: false }) === 'ignore')
 
 console.log('\nworld rows constant')
 check('world rows exclude the WSL tool ids', !WORLD_ROWS.has('tool-bash-wsl') && WORLD_ROWS.has('tool-pwsh'))

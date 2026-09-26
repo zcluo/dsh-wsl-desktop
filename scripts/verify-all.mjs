@@ -41,7 +41,10 @@ const results = []
 
 for (const suite of suites) {
   console.log(`\n=== ${suite} ===`)
-  const run = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit' })
+  // A hard ceiling per suite: every suite bounds its own external calls, but
+  // a hung fs-on-UNC or jsdom run must fail the aggregator, not hang it.
+  // A killed run settles as a null status, which `?? 1` reports as FAIL.
+  const run = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit', timeout: 300_000, killSignal: 'SIGKILL' })
   results.push({ suite, code: run.status ?? 1 })
 }
 

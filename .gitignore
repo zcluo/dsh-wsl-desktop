@@ -15,3 +15,6 @@ pnpm-debug.log*
 # Verification residue (a suite that throws mid-run can leave these behind).
 /tmp-probe/
 _debug-*.mjs
+
+# Bytecode cache from py_compile on the shipped bridge source.
+lib/wsl/__pycache__/

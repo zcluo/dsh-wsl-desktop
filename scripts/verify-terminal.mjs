@@ -62,7 +62,8 @@ let out = ''
 let err = ''
 const replies = []
 let replyBuffer = ''
-const waiters = []
+/** Pending control requests by id — replies are matched by the id the request sent, never positionally. */
+const waiters = new Map()
 
 data.stdout.on('data', (chunk) => { out += chunk })
 data.stderr.on('data', (chunk) => {
@@ -74,9 +75,19 @@ data.stderr.on('data', (chunk) => {
     replyBuffer = replyBuffer.slice(index + 1)
     if (line.startsWith('#dsh-pty ')) {
       const parsed = JSON.parse(line.slice('#dsh-pty '.length))
-      const waiter = waiters.shift()
-      if (waiter) waiter(parsed)
-      else replies.push(parsed)
+      // The bridge echoes the request id back (`ans()`), so a late reply can
+      // never be consumed by the NEXT request — the same pairing rule the
+      // production control channel uses. Positional shift() desynced every
+      // op after one slow reply and made this suite flaky.
+      if (typeof parsed.id === 'string') {
+        const waiter = waiters.get(parsed.id)
+        if (waiter !== undefined) {
+          waiters.delete(parsed.id)
+          waiter(parsed)
+        }
+      } else {
+        replies.push(parsed)
+      }
     }
   }
 })
@@ -102,14 +113,23 @@ const settled = new Promise((resolve) => {
   control.on('close', done)
 })
 
-/** Send one control request and await its reply. */
+/** Send one control request and await its id-matched reply. */
+let requestSeq = 0
 function controlRequest(payload) {
-  const answer = new Promise((resolve) => waiters.push(resolve))
-  control.stdin.write(`${JSON.stringify(payload)}\n`)
-  return Promise.race([
-    answer,
-    new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: `control timeout; stderr=${err.slice(-300)}` }), 15_000)),
-  ])
+  const id = `ctl-${requestSeq += 1}`
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      // Removed before resolving: a late reply must find no waiter, or it
+      // would be mispaired with a later request.
+      waiters.delete(id)
+      resolve({ ok: false, error: `control timeout; stderr=${err.slice(-300)}` })
+    }, 15_000)
+    waiters.set(id, (reply) => {
+      clearTimeout(timer)
+      resolve(reply)
+    })
+    control.stdin.write(`${JSON.stringify({ ...payload, id })}\n`)
+  })
 }
 
 data.stdin.write('echo MARK-42\r')

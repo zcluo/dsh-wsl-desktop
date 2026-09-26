@@ -25,7 +25,7 @@ const flag = (name, fallback) => {
   const hit = process.argv.find((argument) => argument.startsWith(`--${name}=`))
   return hit === undefined ? fallback : hit.slice(name.length + 3)
 }
-const checkout = flag('checkout', 'E:/projects/deepseek-harness')
+const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? 'E:/projects/deepseek-harness')
 const clientPath = flag('client', join(pluginRoot, 'lib', 'client.js'))
 
 let failures = 0
@@ -44,7 +44,16 @@ function check(label, ok, detail) {
   if (!ok) failures += 1
 }
 
-const { JSDOM } = createRequire(join(checkout, 'package.json'))('jsdom')
+// jsdom comes from the harness checkout's dev dependencies. A missing
+// checkout is a SKIP (exit 2 — the contract verify-all documents), not a
+// failure: an unguarded load crashes with exit 1 and reads as a false FAIL.
+let JSDOM
+try {
+  JSDOM = createRequire(join(checkout, 'package.json'))('jsdom').JSDOM
+} catch {
+  console.log('SKIP  jsdom unavailable (no harness checkout) — pass --checkout=… or set DSH_CHECKOUT')
+  process.exit(2)
+}
 const source = await readFile(clientPath, 'utf8')
 
 /** The shipped trigger icon's first path command, mirrored from the plugin. */

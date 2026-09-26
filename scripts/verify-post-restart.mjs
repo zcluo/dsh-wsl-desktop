@@ -9,7 +9,6 @@
  * Run: node scripts/verify-post-restart.mjs [baseUrl]
  */
 
-import { existsSync, readFileSync } from 'node:fs'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
 
@@ -184,7 +183,11 @@ check('the dialog can resolve the default user and home',
   && typeof resolvedHome?.home === 'string' && resolvedHome.home.startsWith('/'), resolvedHome)
 
 console.log('\nsession binding')
-const bindings = await call('bindingLog')
+// The one call without a sibling-proven fallback: an older host without the
+// bindingLog method must degrade to an empty log (visible below), not crash
+// the run and skip the entire browser-half section.
+const bindings = await call('bindingLog').catch((error) => ({ entries: [], error: error.message }))
+check('the binding log is reachable', bindings.error === undefined, bindings.error)
 // Since the browser half names the WSL preset in its create request, a session
 // bound at creation produces NO fallback entry: the `api-session/added`
 // listener exists only to catch a WSL-workspace session that was created

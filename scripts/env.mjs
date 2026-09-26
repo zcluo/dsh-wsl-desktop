@@ -29,7 +29,9 @@ export function resolveDistro(argument) {
  */
 export function resolveLinuxUser() {
   if (process.env.DSH_WSL_USER !== undefined) return process.env.DSH_WSL_USER
-  return execFileSync('wsl.exe', ['-e', 'id', '-un'], { encoding: 'utf8' }).trim()
+  // A ceiling is mandatory: this probe sits on the critical path of nearly
+  // every suite, and wsl.exe is exactly the call a cold VM start can hang.
+  return execFileSync('wsl.exe', ['-e', 'id', '-un'], { encoding: 'utf8', timeout: 15_000 }).trim()
 }
 
 /**

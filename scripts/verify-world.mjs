@@ -10,6 +10,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, hostExecutable, planWsl, buildWslExecArgv } from '../lib/wsl/world.js'
 import {
@@ -77,7 +78,10 @@ check('WSL_DISTRO_NAME matches', insideDistro === distro, insideDistro)
 console.log(`        user: ${user}`)
 console.log(`        argv: ${identity.argv.slice(0, 8).join(' ')} …`)
 
-const viaMount = await runWslShell({ distro, linuxCwd: '/mnt/e/projects', command: 'pwd; ls -d /mnt/*' })
+// The repo's own drive mount, derived from this file's location — never a
+// machine-specific literal drive letter.
+const repoMount = windowsToMntPath(fileURLToPath(new URL('..', import.meta.url)))
+const viaMount = await runWslShell({ distro, linuxCwd: repoMount ?? '/', command: 'pwd; ls -d /mnt/*' })
 check('a Windows drive is addressable from the distribution', viaMount.exitCode === 0 && viaMount.stdout.includes('/mnt/'), viaMount.stderr)
 
 console.log('\nhost commands reachable from inside the distribution')

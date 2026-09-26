@@ -9,7 +9,7 @@
  * Run: node scripts/inspect-live-client.mjs [marker ...]
  */
 
-const baseUrl = 'http://127.0.0.1:19387'
+const baseUrl = process.env.DSH_BASE_URL ?? 'http://127.0.0.1:19387'
 const markers = process.argv.slice(2)
 
 /**
@@ -49,7 +49,17 @@ if (entry === null) {
   process.exitCode = 1
 } else {
   console.log(`entry rev ${entry.rev}  ${entry.url}`)
-  const response = await fetch(`${baseUrl}${entry.url}`)
+  // 0.1.7 graph entries may lack the leading slash — verify-post-restart
+  // documents and normalizes the same shape. Concatenating it raw would
+  // fetch `127.0.0.1:19387plugins/…` and crash instead of reporting.
+  const moduleUrl = `${baseUrl}${entry.url.startsWith('/') ? entry.url : `/${entry.url}`}`
+  let response
+  try {
+    response = await fetch(moduleUrl)
+  } catch (error) {
+    console.log(`fetch failed: ${error?.message ?? error}`)
+    process.exit(1)
+  }
   const bundle = await response.text()
   console.log(`served ${response.status}, ${bundle.length} bytes`)
   for (const marker of markers) {

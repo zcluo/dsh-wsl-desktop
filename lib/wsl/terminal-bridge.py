@@ -159,8 +159,14 @@ class Bridge:
 
         op = request.get("op")
         if op == "resize":
-            self.resize(request.get("cols", 80), request.get("rows", 24))
-            ans({"ok": True})
+            try:
+                self.resize(request.get("cols", 80), request.get("rows", 24))
+                ans({"ok": True})
+            except (TypeError, ValueError, OSError) as error:
+                # A malformed payload must not kill the session: the bridge IS
+                # the terminal, so an unhandled exception in this dispatch
+                # would take down every later control op and the PTY itself.
+                ans({"ok": False, "error": str(error)})
         elif op == "foreground":
             pgrp = self.foreground_pgrp()
             ans({"ok": True, "pgrp": pgrp, "shellPgrp": self.shell_pgrp})
@@ -196,7 +202,11 @@ class Bridge:
                 break
             deadline = time.monotonic() + wait
             while time.monotonic() < deadline:
-                done, _ = os.waitpid(self.pid, os.WNOHANG)
+                try:
+                    done, _ = os.waitpid(self.pid, os.WNOHANG)
+                except ChildProcessError:
+                    # The pump loop already reaped the child: session gone.
+                    return True
                 if done == self.pid:
                     return True
                 time.sleep(0.05)

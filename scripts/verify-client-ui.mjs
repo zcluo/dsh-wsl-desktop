@@ -23,7 +23,7 @@ const flag = (name, fallback) => {
   return hit === undefined ? fallback : hit.slice(name.length + 3)
 }
 const clientPath = flag('client', join(pluginRoot, 'lib', 'client.js'))
-const checkout = flag('checkout', 'E:/projects/deepseek-harness')
+const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? 'E:/projects/deepseek-harness')
 const iconSourcePath = join(
   checkout, 'packages', 'client', 'ui-primitives', 'src', 'icons', 'index.tsx',
 )

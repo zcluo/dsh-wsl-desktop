@@ -10,14 +10,18 @@
  */
 
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { runWslShell } from '../lib/wsl/world.js'
 import {
   DENIAL_SIGNATURES,
+  HELPER_PATH,
+  RUNNER_HELPER,
   buildConfinedCommand,
   detectRunner,
   resetConfinementCache,
   resolveIdentity,
 } from '../lib/wsl/confinement.js'
+import { shellQuote, windowsToMntPath } from '../lib/wsl/paths.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 
 const distro = resolveDistro(process.argv[2])
@@ -48,6 +52,47 @@ async function confined(command, { mode, workspaceLinuxRoot, linuxCwd = '/' }) {
   const result = await runWslShell({ distro, linuxCwd, command: wrapped, timeoutMs: 60_000 })
   return { result, identity }
 }
+
+console.log('helper structural gates (offline)')
+// The hardened dsh-wsl-confine helper ships as a bash script the JS side can
+// only probe with `--version` — which bash parses incrementally, so a script
+// that dies one line later still probes "available". v0.2.0 shipped three
+// critical defects that no suite exercised: a missing semicolon made the whole
+// script unparseable, the fence received its parameters as bare positional
+// words (`bash -c script name KEY=VALUE`) that no variable reference can read
+// — with `$UID` silently resolving to bash's built-in, i.e. root's uid under
+// sudo — and the exemption-grep regex was inlined into a double-quoted string
+// with a fatal `$"` sequence. These gates pin the fixed shapes so the helper
+// can never again ship unrunnable.
+const helperPathFile = fileURLToPath(new URL('../lib/wsl/dsh-wsl-confine.sh', import.meta.url))
+const helperSource = await readFile(helperPathFile, 'utf8')
+check('the helper has no missing-semicolon brace groups', !/exit 2 \}/.test(helperSource), 'found `exit 2 }` — the brace group stays open and bash aborts at EOF')
+check('the fence receives its parameters as environment variables',
+  helperSource.includes('DROP_UID="$uid"') && helperSource.includes('--reuid="$DROP_UID"'),
+  'params must cross into `bash -c` via env(1); bare KEY=VALUE words are positional parameters, and $UID is a bash built-in')
+check('the exec tail passes env before the fence script',
+  /env \\\n\s+DROP_UID=/.test(helperSource) && !/bash -c "\$FENCE" \\\n\s+dsh-wsl-confine \\\n\s+UID=/.test(helperSource), null)
+check('the exemption grep anchors only at the group end',
+  helperSource.includes('|/dev|/proc|/sys)\\$') && !/\|\/sys\$"/.test(helperSource),
+  'the shipped `/sys$")$"` tail is a bash parse error: closing paren outside the string plus a `$"` locale-quote')
+check('the drop identity is checked against the invoking user',
+  helperSource.includes('getent passwd') && helperSource.includes('identity mismatch'),
+  'the sudoers grant is argument-wildcarded; an unchecked --uid lets the session user run the helper as uid 0 (a root-read primitive)')
+{
+  const mnt = windowsToMntPath(helperPathFile)
+  if (mnt === null) {
+    console.log('  SKIP  bash -n parse gate (helper not on a drive path)')
+  } else {
+    const parse = await runWslShell({ distro, linuxCwd: '/', command: `bash -n ${shellQuote(mnt)} && echo PARSE-OK`, loginShell: false, timeoutMs: 60_000 })
+    check('the helper parses under bash -n', parse.stdout.includes('PARSE-OK'), parse.stderr)
+  }
+}
+const helperIdentity = { uid: '1000', gid: '1000', home: '/home/tester', name: 'tester' }
+const helperReadOnly = buildConfinedCommand({ command: 'true', linuxCwd: '/ws', mode: 'read-only', runner: RUNNER_HELPER, workspaceLinuxRoot: '/ws', identity: helperIdentity })
+check('read-only never grants the helper a writable workspace', !helperReadOnly.includes('--workspace'), helperReadOnly)
+const helperWrite = buildConfinedCommand({ command: 'true', linuxCwd: '/ws', mode: 'workspace-write', runner: RUNNER_HELPER, workspaceLinuxRoot: '/ws', identity: helperIdentity })
+check('workspace-write routes through the helper with the workspace bound',
+  helperWrite.includes('--workspace') && helperWrite.includes(HELPER_PATH), helperWrite)
 
 resetConfinementCache()
 const probeRoot = `${home}/dsh-wsl-sandbox-probe`
