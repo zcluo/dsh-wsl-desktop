@@ -1,15 +1,15 @@
 {
   "name": "dsh-wsl-desktop",
-  "version": "0.1.0",
-  "private": true,
-  "description": "DSH Desktop WSL execution world: add a WSL workspace and run every tool inside the distribution.",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
-  "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js",
-    "./package.json": "./package.json"
-  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": null,
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -22,26 +22,14 @@
       ]
     }
   },
-  "scripts": {
-    "verify": "node scripts/verify-all.mjs",
-    "verify:live": "node scripts/verify-all.mjs --live",
-    "verify:client": "node scripts/verify-client-ui.mjs && node scripts/verify-client-dom.mjs"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zcluo/dsh-wsl-desktop.git"
   },
-  "engines": {
-    "node": ">=22.19"
+  "publishConfig": {
+    "access": "public"
   },
-  "files": [
-    "lib",
-    "cordis.patch.yml",
-    "README.md",
-    "LICENSE"
-  ],
-  "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "wsl",
-    "agent-preset",
-    "execution-world"
-  ],
-  "license": "MIT"
+  "manifestVersion": 1,
+  "license": "MIT",
+  "description": "DSH Desktop WSL execution world: add a WSL workspace and run every tool inside the distribution."
 }

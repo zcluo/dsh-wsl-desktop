@@ -176,6 +176,28 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 发行版与用户不再硬编码：`DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DSH_WSL_HOME` 可覆盖，默认从 `wsl.exe` 现读。
 
+## 安装 / 更新 / 发版
+
+**用户安装（生产通道）**：本插件以 npm 包形式发布，形态对齐 dsh-better-sidebar 等成熟插件（`files` 精确清单 + `cordis.patch.yml` bundle patch + `dsh.client.inject` 客户端接线 + `manifestVersion`）。
+
+- 插件市场 / 插件管理器：安装 `dsh-wsl-desktop@<version>`——桌面自动完成 pnpm 接线与 bundle patch 挂载，重启即用。
+- 命令行等价：`plugin_manager install_bundle dsh-wsl-desktop@<version>`。
+- **安装前提**：WSL2 + 目标发行版满足支持矩阵（`docs/DISTRO-SUPPORT.md`）——会话用户 NOPASSWD sudo、bash、python3；推荐按「约束」一节安装 dsh-wsl-confine helper（闭合 retained-grant 边界）。
+- **更新**：安装新版本号即可；桌面大版本更新后按「桌面更新纪律」先跑 `verify-post-restart.mjs`。
+- **卸载**：插件管理器卸载即同时撤回本插件注册的 wsl-* 预设（disposer 生命周期保证）。
+
+**维护者发版**：语义化版本——patch = 缺陷修复；minor = 兼容的桌面大版本适配（每次 harness 断裂适配后升 minor，如 0.1.x 的 0.1.7 适配）；major = 边界语义或支持矩阵变化。流程：改 `package.json` version → 全量套件 + `verify-post-restart.mjs` 全绿 → `npm publish --access public` → 打 git tag。`files` 清单已含 `lib/wsl/dsh-wsl-confine.sh`（helper 随包分发）。
+
+**代码安装（开发模式）**：
+
+```bash
+git clone https://github.com/zcluo/dsh-wsl-desktop.git
+cd dsh-wsl-desktop
+node scripts/verify-all.mjs        # 离线全量
+.\scripts\sync.ps1                 # stage 进 profile（开发者模式：developerTools 开启）
+# 重启 DSH Desktop → verify-post-restart.mjs
+```
+
 **已知不稳定 → 已修，多轮验证稳定**：`verify-terminal.mjs` 曾偶发失败（实测 6 次里 1 次）。根因在宿主侧 `lib/wsl/pty.js`，不是桥：分配失败路径不终止已 spawn 的数据进程，泄漏的桥会干扰后续运行；且控制应答不携带请求 id，一次超时之后迟到的应答会被下一条请求消费，整个控制通道从此错位。修复：失败路径终止并等待两个进程退出；每个请求带 id、桥回显同一 id，超时先摘除条目、迟到应答直接丢弃。修复后历经今日十余轮全量套件（含多次背靠背）无一复现，结论稳定。
 
 宿主代码改动需要**重启 DSH Desktop** 才会加载；重启后先跑 `verify-post-restart.mjs`，它会在旧模块仍生效时直接报「请重启」而不是给假绿。**浏览器半边改动不需要重启**：就地改写当前那一代的 `lib/client.js` 会改变投放 rev 并由 `/plugins/events` 推给已打开的页面（`patchReload: live`）。`verify-post-restart.mjs` 会从 `/plugins/events` 读实时模块图并取回真正投放的那份 bundle 来断言这一点。
