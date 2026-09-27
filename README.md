@@ -1,5 +1,7 @@
 # dsh-wsl-desktop
 
+简体中文 | [English](README.en.md)
+
 > **生产状态：受控单机生产可用**（见下方边界定义）。需要 **DSH Desktop 0.1.7+**（预设通过运行时注册而非目录加载，旧版宿主会在激活时明确拒绝）。核心能力已活体验收；安全审计 run-1（5 候选闭环）与 run-2（4 confirmed 已修复 + 1 rejected 转加固）均完成，报告见 `security-audit-skill/dsh-wsl-desktop/run-{1,2}/`。逐项证据强度见下方能力表。
 >
 > **边界定义**：
@@ -220,3 +222,7 @@ node scripts/verify-all.mjs        # 离线全量
 **因此 selftest 也改了**：它现在像真实调用方一样显式传策略 `{ mode: 'workspace-write', workspaceRoot: <会话 cwd> }`。之前它不传，是"用一个真实调用方永远不会用的方式调 fs"，那才是上次被拒的原因——不是围栏太严。
 
 **两层钉子 + 活体验收**：`scripts/verify-modules.mjs` 钉住围栏的存在（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、拒绝用 `FS_SANDBOX_DENIED`、包含性比较有分隔符边界）；`scripts/verify-fs-fence.mjs` 离线验证纯逻辑（分隔符边界、大小写、**跨发行版同拼写路径被拒**、可写根推导、未知模式 fail-closed）；`verify-9p.mjs` 增补了身份映射探针（不同文件 (dev,ino) 互异、wsl.localhost/wsl$ 拼写稳定——围栏的身份回退以此为负载假设）。类的接线已由 `verify-post-restart.mjs` 活体验收（越界写拒绝 PASS）。
+
+## 许可证
+
+本项目基于 [MIT 协议](LICENSE) 发布。
