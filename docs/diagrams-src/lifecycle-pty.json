@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "PTY 分配生命周期：从 spawn 到回收",
+    "locale": "zh-CN",
+    "output": "docs/lifecycle-pty.html",
+    "viewBox": [
+      980,
+      566
+    ],
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "main-rail",
+        "label": "分配主链",
+        "focus": [
+          "req",
+          "spawned",
+          "announce",
+          "attached",
+          "live"
+        ],
+        "note": "数据进程先起、桥建 FIFO、started 应答之后才启动控制进程。"
+      },
+      {
+        "id": "outcomes",
+        "label": "失败与终点",
+        "focus": [
+          "announce",
+          "live",
+          "recycled",
+          "bridge_down",
+          "residual"
+        ],
+        "note": "失败与正常 teardown 汇入同一条清理路径；SIGKILL 残留 FIFO。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "分配主链"
+    },
+    {
+      "id": "outcomes",
+      "label": "失败 · 清理 · 终点"
+    }
+  ],
+  "states": [
+    {
+      "id": "req",
+      "type": "start",
+      "label": "分配请求",
+      "sublabel": "spawnTerminal()",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "width": 112
+    },
+    {
+      "id": "spawned",
+      "type": "active",
+      "label": "数据进程已 spawn",
+      "sublabel": "桥先建 FIFO 再起 shell",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "width": 112
+    },
+    {
+      "id": "announce",
+      "type": "decision",
+      "label": "等待 started 应答",
+      "sublabel": "可观测的时序前提",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "width": 112
+    },
+    {
+      "id": "attached",
+      "type": "active",
+      "label": "控制进程已启动",
+      "sublabel": "只在桥报告会话之后",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "width": 112
+    },
+    {
+      "id": "live",
+      "type": "success",
+      "label": "终端就绪",
+      "sublabel": "resize · signal",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "width": 112
+    },
+    {
+      "id": "recycled",
+      "type": "failure",
+      "label": "超时 → 终止并回收",
+      "sublabel": "announce 超时 / 启动失败",
+      "lane": "outcomes",
+      "col": 0,
+      "tag": "等待两进程退出"
+    },
+    {
+      "id": "bridge_down",
+      "type": "failure",
+      "label": "桥提前退出",
+      "sublabel": "未决请求立即失败",
+      "lane": "outcomes",
+      "col": 1,
+      "tag": "终点"
+    },
+    {
+      "id": "residual",
+      "type": "failure",
+      "label": "SIGKILL：FIFO 残留",
+      "sublabel": "至发行版重启 · 先 unlink",
+      "lane": "outcomes",
+      "col": 2,
+      "tag": "终点"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t1",
+      "from": "req",
+      "to": "spawned"
+    },
+    {
+      "id": "t2",
+      "from": "spawned",
+      "to": "announce",
+      "label": "桥报告会话",
+      "labelAt": [
+        325,
+        120
+      ]
+    },
+    {
+      "id": "t3",
+      "from": "announce",
+      "to": "attached",
+      "label": "started 到达",
+      "variant": "emphasis",
+      "labelAt": [
+        479,
+        116
+      ]
+    },
+    {
+      "id": "t4",
+      "from": "attached",
+      "to": "live",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "t5",
+      "from": "announce",
+      "to": "recycled",
+      "label": "超时",
+      "variant": "security",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        402,
+        233
+      ]
+    },
+    {
+      "id": "t7",
+      "from": "live",
+      "to": "recycled",
+      "label": "terminate / 正常退出",
+      "variant": "dashed",
+      "route": "bottom-channel",
+      "channelY": 368,
+      "labelAt": [
+        550,
+        368
+      ],
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          800,
+          157
+        ],
+        [
+          800,
+          368
+        ],
+        [
+          300,
+          368
+        ],
+        [
+          300,
+          307
+        ]
+      ]
+    },
+    {
+      "id": "t9",
+      "from": "live",
+      "to": "residual",
+      "label": "SIGKILL",
+      "variant": "security",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        738,
+        233
+      ]
+    },
+    {
+      "id": "t11",
+      "from": "announce",
+      "to": "bridge_down",
+      "label": "桥退出",
+      "variant": "security",
+      "labelAt": [
+        470,
+        233
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "清理契约",
+      "items": [
+        "失败路径终止并等待两个进程退出，不再泄漏数据进程与 PTY 会话",
+        "桥退出后未决与后续控制请求立即失败"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "已知残留",
+      "items": [
+        "硬杀后 /tmp/dsh-pty-*.fifo 残留到发行版重启，属临时垃圾",
+        "不影响行为：下次分配先 unlink 同名 FIFO"
+      ]
+    }
+  ]
+}

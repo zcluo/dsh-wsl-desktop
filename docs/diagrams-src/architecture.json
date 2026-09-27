@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "dsh-wsl-desktop 架构总览",
+    "locale": "zh-CN",
+    "output": "docs/architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "create-path",
+        "label": "创建接缝",
+        "focus": [
+          "client",
+          "host",
+          "registry",
+          "realm"
+        ],
+        "note": "会话创建请求命名 WSL 预设，是唯一无竞态的绑定缝。"
+      },
+      {
+        "id": "exec-path",
+        "label": "执行世界",
+        "focus": [
+          "realm",
+          "shell",
+          "sub",
+          "wsl",
+          "distro"
+        ],
+        "note": "isolate realm 只隔离 shell 与 fs；执行统一经 wsl.exe 进入发行版。"
+      },
+      {
+        "id": "two-transports",
+        "label": "两种传输",
+        "focus": [
+          "fs",
+          "distro"
+        ],
+        "note": "fs 走 9P UNC 且过围栏；命令执行走 wsl.exe。"
+      }
+    ],
+    "repository": {
+      "url": "https://github.com/zcluo/dsh-wsl-desktop",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "6deff93845029594a2a056d0fa3183e85ab1043b"
+    }
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "frontend",
+      "label": "浏览器半边",
+      "sublabel": "lib/client.js · W 按钮 + 对话框",
+      "pos": [
+        30,
+        330
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "lib/client.js"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "type": "backend",
+      "label": "宿主半边",
+      "sublabel": "lib/index.js · 路由 · 绑定兜底",
+      "pos": [
+        220,
+        330
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "lib/index.js"
+        }
+      ]
+    },
+    {
+      "id": "admission",
+      "type": "security",
+      "label": "路由准入",
+      "sublabel": "lib/http-admission.js",
+      "tag": "POST + JSON + dev token",
+      "pos": [
+        220,
+        150
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "lib/http-admission.js"
+        }
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "database",
+      "label": "agentPresets 注册表",
+      "sublabel": "wsl-* 变体预设",
+      "pos": [
+        430,
+        150
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "realm",
+      "type": "backend",
+      "label": "isolate realm",
+      "sublabel": "lib/wsl/preset.js · shell/fs 隔离",
+      "tag": "wsl-standard",
+      "pos": [
+        430,
+        330
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "lib/wsl/preset.js"
+        }
+      ]
+    },
+    {
+      "id": "shell",
+      "type": "backend",
+      "label": "shell.js",
+      "sublabel": "WSL bash 执行器 + 约束接入",
+      "pos": [
+        330,
+        520
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "sources": [
+        {
+          "path": "lib/wsl/shell.js"
+        }
+      ]
+    },
+    {
+      "id": "fs",
+      "type": "security",
+      "label": "fs.js + fence.js",
+      "sublabel": "9P 文件系统 + 围栏",
+      "tag": "FS_SANDBOX_DENIED",
+      "pos": [
+        500,
+        520
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "sources": [
+        {
+          "path": "lib/wsl/fs.js"
+        },
+        {
+          "path": "lib/wsl/fence.js"
+        }
+      ]
+    },
+    {
+      "id": "sub",
+      "type": "backend",
+      "label": "subprocess.js",
+      "sublabel": "subprocess.js · pty.js",
+      "pos": [
+        660,
+        520
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "lib/wsl/subprocess.js"
+        }
+      ],
+      "tag": "含双进程 PTY"
+    },
+    {
+      "id": "wsl",
+      "type": "external",
+      "label": "wsl.exe",
+      "sublabel": "Windows ↔ Linux 执行桥",
+      "pos": [
+        720,
+        330
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "distro",
+      "type": "external",
+      "label": "WSL 发行版",
+      "sublabel": "bash · python3 · 9P /mnt/c",
+      "pos": [
+        890,
+        328
+      ],
+      "size": [
+        150,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "浏览器 · 可热更新",
+      "wraps": [
+        "client"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "DSH Desktop 宿主进程 · 改动需重启",
+      "wraps": [
+        "host",
+        "admission",
+        "registry",
+        "realm",
+        "shell",
+        "fs",
+        "sub"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "WSL 发行版 · mount namespace 围栏",
+      "wraps": [
+        "distro"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-host",
+      "from": "client",
+      "to": "host",
+      "label": "POST /wsl-desktop/api",
+      "variant": "emphasis",
+      "labelAt": [
+        195,
+        302
+      ]
+    },
+    {
+      "id": "admission-host",
+      "from": "admission",
+      "to": "host",
+      "label": "路由准入",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        262,
+        256
+      ]
+    },
+    {
+      "id": "host-registry",
+      "from": "host",
+      "to": "registry",
+      "label": "物化 / 解析 wsl-*",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        400,
+        270
+      ]
+    },
+    {
+      "id": "host-realm",
+      "from": "host",
+      "to": "realm",
+      "label": "创建时 presets.mount",
+      "variant": "emphasis",
+      "labelAt": [
+        400,
+        300
+      ]
+    },
+    {
+      "id": "realm-shell",
+      "from": "realm",
+      "to": "shell",
+      "label": "ctx.shell",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        455,
+        455
+      ]
+    },
+    {
+      "id": "realm-fs",
+      "from": "realm",
+      "to": "fs",
+      "label": "ctx.fs",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        540,
+        444
+      ]
+    },
+    {
+      "id": "realm-sub",
+      "from": "realm",
+      "to": "sub",
+      "label": "ctx.subprocess 继承宿主",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          648,
+          362
+        ],
+        [
+          648,
+          550
+        ]
+      ],
+      "labelAt": [
+        648,
+        500
+      ]
+    },
+    {
+      "id": "sub-wsl",
+      "from": "sub",
+      "to": "wsl",
+      "label": "spawn · shell / pty 同经此路",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        735,
+        476
+      ]
+    },
+    {
+      "id": "wsl-distro",
+      "from": "wsl",
+      "to": "distro",
+      "label": "进入发行版",
+      "labelAt": [
+        870,
+        300
+      ]
+    },
+    {
+      "id": "fs-distro",
+      "from": "fs",
+      "to": "distro",
+      "label": "9P UNC（过围栏）",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          570,
+          650
+        ],
+        [
+          965,
+          650
+        ]
+      ],
+      "labelAt": [
+        760,
+        650
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "执行世界",
+      "items": [
+        "preset 在会话创建请求里命名，创建时组合",
+        "isolate realm 只隔离 shell 与 fs，subprocess 继承宿主"
+      ]
+    }
+  ]
+}

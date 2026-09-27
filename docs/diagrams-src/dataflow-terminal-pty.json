@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "终端双通道：字节流与 PTY 控制协议",
+    "locale": "zh-CN",
+    "output": "docs/dataflow-terminal-pty.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "bytes",
+        "label": "字节路径",
+        "focus": [
+          "xterm",
+          "handle",
+          "dataproc",
+          "pty"
+        ],
+        "note": "终端字节从面板经句柄、数据进程、PTY 主从泵到会话 shell。"
+      },
+      {
+        "id": "control",
+        "label": "控制通道",
+        "focus": [
+          "handle",
+          "ctrlproc",
+          "fifo",
+          "dataproc"
+        ],
+        "note": "控制请求带 id 写入 FIFO，应答回显同一 id，超时先摘除条目。"
+      }
+    ],
+    "viewBox": [
+      940,
+      520
+    ]
+  },
+  "stages": [
+    {
+      "label": "浏览器"
+    },
+    {
+      "label": "JS 终端句柄"
+    },
+    {
+      "label": "wsl.exe 双进程"
+    },
+    {
+      "label": "发行版内"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "xterm",
+      "type": "frontend",
+      "label": "xterm.js 面板",
+      "stage": 0,
+      "row": 1,
+      "tag": "侧栏"
+    },
+    {
+      "id": "handle",
+      "type": "backend",
+      "label": "pty.js 句柄",
+      "sublabel": "resize / signal",
+      "stage": 1,
+      "row": 1,
+      "tag": "id 配对",
+      "width": 120
+    },
+    {
+      "id": "dataproc",
+      "type": "backend",
+      "label": "数据进程",
+      "sublabel": "python3 桥 · pty.fork",
+      "stage": 2,
+      "row": 0,
+      "tag": "字节",
+      "width": 120
+    },
+    {
+      "id": "ctrlproc",
+      "type": "backend",
+      "label": "控制进程",
+      "sublabel": "wsl.exe bash",
+      "stage": 2,
+      "row": 2,
+      "tag": "JSON 应答"
+    },
+    {
+      "id": "fifo",
+      "type": "messagebus",
+      "label": "命名 FIFO",
+      "sublabel": "dsh-pty-*.fifo",
+      "stage": 3,
+      "row": 2,
+      "tag": "JSON 行"
+    },
+    {
+      "id": "pty",
+      "type": "external",
+      "label": "PTY + shell",
+      "sublabel": "发行版内 · 零安装",
+      "stage": 3,
+      "row": 0
+    }
+  ],
+  "flows": [
+    {
+      "id": "bytes-out",
+      "from": "xterm",
+      "to": "handle",
+      "label": "终端字节",
+      "classification": "stdin/stdout",
+      "variant": "emphasis"
+    },
+    {
+      "id": "bytes-dl",
+      "from": "handle",
+      "to": "dataproc",
+      "label": "字节流",
+      "classification": "三管道",
+      "variant": "emphasis",
+      "labelAt": [
+        386,
+        180
+      ]
+    },
+    {
+      "id": "pty-fork",
+      "from": "dataproc",
+      "to": "pty",
+      "label": "pty.fork",
+      "classification": "master 泵",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "ctl-req",
+      "from": "handle",
+      "to": "ctrlproc",
+      "label": "控制请求",
+      "classification": "JSON · 带 id",
+      "variant": "security",
+      "labelAt": [
+        452,
+        300
+      ]
+    },
+    {
+      "id": "fifo-write",
+      "from": "ctrlproc",
+      "to": "fifo",
+      "label": "printf >&3",
+      "classification": "fd 3",
+      "variant": "default",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "fifo-read",
+      "from": "fifo",
+      "to": "dataproc",
+      "label": "桥读取控制行",
+      "classification": "FIFO",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          745,
+          340
+        ],
+        [
+          530,
+          340
+        ]
+      ],
+      "labelAt": [
+        682,
+        340
+      ]
+    },
+    {
+      "id": "ctl-reply",
+      "from": "dataproc",
+      "to": "handle",
+      "label": "回显应答",
+      "classification": "数据进程 stderr",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right",
+      "via": [
+        [
+          440,
+          157
+        ],
+        [
+          440,
+          271
+        ]
+      ],
+      "labelAt": [
+        585,
+        318
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "id 配对与超时",
+      "items": [
+        "每个控制请求携带 id，桥在应答里回显同一 id",
+        "超时先摘除条目，迟到或无主的应答直接丢弃"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "残余限制",
+      "items": [
+        "宿主被 SIGKILL 时 finally 不执行，FIFO 残留到发行版重启",
+        "下次分配先 unlink 同名 FIFO，临时垃圾不影响行为"
+      ]
+    }
+  ]
+}

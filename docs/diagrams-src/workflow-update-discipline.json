@@ -1,0 +1,180 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "桌面更新纪律（强制）",
+    "locale": "zh-CN",
+    "output": "docs/workflow-update-discipline.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "全绿直通",
+        "focus": [
+          "update",
+          "postrestart",
+          "continue"
+        ],
+        "note": "更新桌面后跑活体套件，全绿才继续使用。"
+      },
+      {
+        "id": "red-loop",
+        "label": "红即修",
+        "focus": [
+          "postrestart",
+          "diagnose",
+          "repair"
+        ],
+        "note": "任何一次红都先修再干，修复后回到同一道门。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "operator",
+      "label": "操作者"
+    },
+    {
+      "id": "suite",
+      "label": "活体校验"
+    },
+    {
+      "id": "fix",
+      "label": "修复回路",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "update",
+      "label": "更新",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "gate",
+      "label": "全绿门",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "resume",
+      "label": "恢复使用",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "update",
+    "postrestart",
+    "continue"
+  ],
+  "nodes": [
+    {
+      "id": "update",
+      "lane": "operator",
+      "col": 0,
+      "type": "external",
+      "label": "更新 DSH Desktop",
+      "sublabel": "新版可能断裂内部 API",
+      "width": 132
+    },
+    {
+      "id": "postrestart",
+      "lane": "suite",
+      "col": 2,
+      "type": "security",
+      "label": "verify-post-restart.mjs",
+      "sublabel": "预设 · 世界 · 绑定 · 隔离 · 对话框",
+      "tag": "必须全绿",
+      "width": 170
+    },
+    {
+      "id": "continue",
+      "lane": "operator",
+      "col": 5,
+      "type": "external",
+      "label": "继续使用",
+      "sublabel": "仅在全绿后",
+      "width": 132
+    },
+    {
+      "id": "diagnose",
+      "lane": "fix",
+      "col": 3,
+      "type": "backend",
+      "label": "定位断裂",
+      "sublabel": "对照五类契约断言",
+      "width": 132
+    },
+    {
+      "id": "repair",
+      "lane": "fix",
+      "col": 4,
+      "type": "security",
+      "label": "修复适配",
+      "sublabel": "任何一次红都先修再干",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "update-run",
+      "from": "update",
+      "to": "postrestart",
+      "label": "重启后必跑",
+      "variant": "emphasis",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "green-continue",
+      "from": "postrestart",
+      "to": "continue",
+      "label": "全绿",
+      "variant": "emphasis"
+    },
+    {
+      "id": "red-diagnose",
+      "from": "postrestart",
+      "to": "diagnose",
+      "label": "任何一红",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "diagnose-repair",
+      "from": "diagnose",
+      "to": "repair",
+      "variant": "default"
+    },
+    {
+      "id": "repair-rerun",
+      "from": "repair",
+      "to": "postrestart",
+      "label": "修复后重跑",
+      "variant": "dashed",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "纪律来源",
+      "items": [
+        "每次 DSH Desktop 更新后，插件可能因 harness 内部 API 变化失效",
+        "0.1.6→0.1.7 即断裂四处"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "红的含义",
+      "items": [
+        "非 selftest 的 bindingLog 条目 = 有人绕过创建接缝",
+        "静默降级成宿主世界是最大风险"
+      ]
+    }
+  ]
+}

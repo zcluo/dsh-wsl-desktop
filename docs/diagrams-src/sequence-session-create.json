@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "WSL 会话创建：在创建请求里命名执行世界",
+    "locale": "zh-CN",
+    "output": "docs/sequence-session-create.html",
+    "viewBox": [
+      1040,
+      560
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "race-free-seam",
+        "label": "无竞态接缝",
+        "focus": [
+          "user",
+          "dialog",
+          "host",
+          "registry",
+          "agent"
+        ],
+        "note": "preset 随创建请求组合，不存在先跑 Windows 世界再切换的窗口。"
+      },
+      {
+        "id": "fallback",
+        "label": "兜底与锁定",
+        "focus": [
+          "host",
+          "registry",
+          "agent"
+        ],
+        "note": "api-session/added 兜底是异常信号；有 turn 后 select 被 agent-preset/locked 拒绝。"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "操作者",
+      "sublabel": "W 对话框入口"
+    },
+    {
+      "id": "dialog",
+      "type": "frontend",
+      "label": "浏览器半边",
+      "sublabel": "client.js commit()"
+    },
+    {
+      "id": "host",
+      "type": "backend",
+      "label": "宿主半边",
+      "sublabel": "index.js · bindWslSession"
+    },
+    {
+      "id": "registry",
+      "type": "database",
+      "label": "agentPresets",
+      "sublabel": "wsl-* 变体注册表"
+    },
+    {
+      "id": "agent",
+      "type": "cloud",
+      "label": "WSL 会话",
+      "sublabel": "preset 创建时组合"
+    },
+    {
+      "id": "distro",
+      "type": "external",
+      "label": "WSL 发行版",
+      "sublabel": "confined realm"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 300,
+      "label": "创建请求缝"
+    },
+    {
+      "from": 300,
+      "to": 460,
+      "label": "组合与兜底"
+    }
+  ],
+  "messages": [
+    {
+      "id": "pick",
+      "from": "user",
+      "to": "dialog",
+      "y": 160,
+      "label": "选发行版 · 用户 · Linux 目录",
+      "variant": "default"
+    },
+    {
+      "id": "resolve",
+      "from": "dialog",
+      "to": "host",
+      "y": 190,
+      "label": "wslPresetFor(distro)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "lookup",
+      "from": "host",
+      "to": "registry",
+      "y": 212,
+      "label": "resolve + roster 校验",
+      "variant": "default"
+    },
+    {
+      "id": "variant",
+      "from": "registry",
+      "to": "host",
+      "y": 244,
+      "label": "wsl-standard 变体 id",
+      "variant": "return"
+    },
+    {
+      "id": "preset-back",
+      "from": "host",
+      "to": "dialog",
+      "y": 268,
+      "label": "agentPreset",
+      "variant": "return"
+    },
+    {
+      "id": "create",
+      "from": "dialog",
+      "to": "host",
+      "y": 298,
+      "label": "SessionCreateRequest{agentPreset}",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mount",
+      "from": "host",
+      "to": "registry",
+      "y": 320,
+      "label": "presets.mount",
+      "variant": "security"
+    },
+    {
+      "id": "publish",
+      "from": "host",
+      "to": "agent",
+      "y": 354,
+      "label": "会话发布（preset 已挂载）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "exec",
+      "from": "agent",
+      "to": "distro",
+      "y": 384,
+      "label": "工具在发行版内执行",
+      "variant": "default"
+    },
+    {
+      "id": "fallback",
+      "from": "host",
+      "to": "agent",
+      "y": 414,
+      "label": "api-session/added 兜底 select",
+      "variant": "dashed",
+      "note": "仅当创建未带 preset；失败写 bindingLog 并告警——异常信号，不是正常路径"
+    },
+    {
+      "id": "locked",
+      "from": "registry",
+      "to": "host",
+      "y": 442,
+      "label": "已跑过 turn → agent-preset/locked",
+      "variant": "security",
+      "note": "拒绝只写内存日志，不报给用户"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "dialog",
+      "from": 152,
+      "to": 306,
+      "type": "frontend"
+    },
+    {
+      "participant": "host",
+      "from": 186,
+      "to": 452,
+      "type": "backend"
+    },
+    {
+      "participant": "registry",
+      "from": 208,
+      "to": 450,
+      "type": "database"
+    },
+    {
+      "participant": "agent",
+      "from": 350,
+      "to": 424,
+      "type": "cloud"
+    },
+    {
+      "participant": "distro",
+      "from": 380,
+      "to": 392,
+      "type": "external"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "无竞态接缝",
+      "items": [
+        "preset 随会话一起组合，没有先跑 Windows 世界再切换的窗口",
+        "wslPresetFor 对着活 roster 解析，不硬编码猜测"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "兜底是异常信号",
+      "items": [
+        "api-session/added 只处理创建时没带 preset 的 WSL 路径会话",
+        "非 selftest 的 bindingLog 条目 = 有人绕过创建接缝"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "锁定语义",
+      "items": [
+        "会话一旦跑过 turn，事后 select 被 agent-preset/locked 拒绝",
+        "拒绝只写内存日志——这正是要把绑定放进创建请求的原因"
+      ]
+    }
+  ]
+}
