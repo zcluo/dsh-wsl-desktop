@@ -18,6 +18,7 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
@@ -42,7 +43,7 @@ let checks = 0
 function check(label, ok, detail) {
   checks += 1
   console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}`)
-  if (!ok && detail !== undefined) console.log(`        ${String(detail)}`)
+  if (!ok && detail !== undefined) console.log(`        ${detailText(detail)}`)
   if (!ok) failures += 1
 }
 
@@ -64,9 +65,11 @@ const TRIGGER_PATH = 'M3.55246 0L3.55246 2.44252L6 2.44252'
 /**
  * Build the sidebar header fixture: the shipped action cluster holding the
  * view-options button and the add-workspace trigger, inside the section row.
+ * @param {string} [extra] - extra markup appended inside the sidebar, for a case
+ * that needs rows the header fixture does not carry.
  * @returns {{ dom: object, row: object, cluster: object, trigger: object }} the fixture.
  */
-function fixture() {
+function fixture(extra = '') {
   const dom = new JSDOM(`<!doctype html><html><body>
     <div id="sidebar">
       <div class="sectionHeader" id="row">
@@ -82,6 +85,7 @@ function fixture() {
           </button>
         </div>
       </div>
+      ${extra}
       <style>
         .hidden { visibility: hidden; }
       </style>
@@ -130,9 +134,12 @@ function layout({ dom, row, cluster }, rowWidth, clusterWidth) {
 /**
  * Load the browser half and apply it against a stub client context.
  * @param {object} dom - the jsdom window owner.
+ * @param {{ items: object[] } | undefined} [workspaceState] - the mutable snapshot
+ * the `workspaces.list` stub serves; omitted by every case written before
+ * workspace rows existed, so those keep exercising the context they always did.
  * @returns {{ button: object|null, dispose: () => void, mutations: () => number }} the live plugin.
  */
-function apply(dom) {
+function apply(dom, workspaceState) {
   let registration = null
   dom.window.__ModuleLoader__ = { load: (entry) => { registration = entry } }
   dom.window.eval(source)
@@ -140,7 +147,18 @@ function apply(dom) {
   const disposers = []
   module.apply({
     effect: (callback) => { disposers.push(callback()) },
-    workspaces: { create: async () => ({ workspaceId: 'w' }) },
+    workspaces: {
+      create: async () => ({ workspaceId: 'w' }),
+      // Mirrors IWorkspaces: the snapshot source hangs off `list`, NOT off the
+      // service object. An earlier stub that put `getSnapshot` here directly is
+      // exactly why a wrong accessor passed this suite while the running app
+      // kept rendering folders — the fixture has to encode the real contract.
+      // Absent by default, so cases written before workspace rows existed keep
+      // exercising the context they always did.
+      ...(workspaceState === undefined
+        ? {}
+        : { list: { getSnapshot: () => workspaceState, subscribe: () => () => {} } }),
+    },
     uiWorkspace: { startSession: () => {} },
   })
   let mutations = 0
@@ -261,6 +279,130 @@ console.log('\na duplicate with no recognisable cluster')
   check('the companion stands down rather than guessing the anchor',
     live.button?.isConnected !== true, `button=${live.button === null ? 'absent' : 'present'}`)
   live.dispose()
+}
+
+/**
+ * One shipped workspace row: the leading folder slot React renders, the
+ * chevron that shares its size, and the row key that carries the workspace id.
+ * The leading icon mirrors the shipped artwork per state: collapsed renders the
+ * STROKED outline (`IconFolderCloseRegular`), expanded the FILL-only one
+ * (`IconFolderOpenRegular`). The cloud is expected to follow that weight.
+ * @param {string} id - workspace id, as it appears in data-row-key.
+ * @param {string} label - the workspace name.
+ * @param {boolean} [expanded] - whether the row renders its open icon.
+ * @returns {string} the row markup.
+ */
+function workspaceRow(id, label, expanded = false) {
+  const folder = expanded
+    ? '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1 3h5l1 1h8v9H1z" fill="currentColor"></path></svg>'
+    : '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke-width="1"><path d="M1 3h5l1 1h8v9H1z" stroke="currentColor"></path></svg>'
+  return `<div class="projectRow" data-row-key="workspace:${id}" role="treeitem">
+        <span class="slot folder">${folder}</span>
+        <span class="slot chevron"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4z" fill="currentColor"></path></svg></span>
+        <span class="projectText"><span class="title">${label}</span></span>
+      </div>`
+}
+
+console.log('\nWSL workspace rows')
+{
+  /** Windows-spelled UNC paths, assembled so the backslashes stay readable. */
+  const WSL_UNC = ['', '', 'wsl.localhost', 'debian', 'home', 'me', 'proj'].join('\\')
+  const LEGACY_UNC = ['', '', 'wsl$', 'ubuntu', 'srv'].join('\\')
+  const WIN_PATH = ['E:', 'projects', 'win'].join('\\')
+  const state = {
+    items: [
+      { workspaceId: 'wsl', path: WSL_UNC },
+      { workspaceId: 'legacy', path: LEGACY_UNC },
+      { workspaceId: 'win', path: WIN_PATH },
+    ],
+  }
+  const parts = fixture(workspaceRow('wsl', 'proj') + workspaceRow('legacy', 'srv') + workspaceRow('win', 'win'))
+  layout(parts, 344, 60)
+  const live = apply(parts.dom, state)
+  await settle()
+  const doc = parts.dom.window.document
+  const row = (id) => doc.querySelector(`[data-row-key="workspace:${id}"]`)
+  const cloud = (id) => row(id).querySelector('svg[data-wsl-cloud]')
+  const shipped = (id) => row(id).querySelector('span.folder > svg:not([data-wsl-cloud])')
+  // The precondition the whole section reads through: without the shipped
+  // folder icon there is nothing to swap, and a broken fixture must say so in
+  // one FAIL rather than throw and take the remaining checks down with it.
+  check('the fixture renders a folder slot on every row',
+    shipped('wsl') !== null && shipped('legacy') !== null && shipped('win') !== null,
+    `wsl=${shipped('wsl') !== null} legacy=${shipped('legacy') !== null} win=${shipped('win') !== null}`)
+  check('a WSL workspace row shows the cloud', cloud('wsl') !== null)
+  check('the cloud names its distribution', cloud('wsl')?.getAttribute('data-wsl-cloud') === 'debian',
+    cloud('wsl')?.getAttribute('data-wsl-cloud'))
+  check('the wsl$ spelling is covered too', cloud('legacy')?.getAttribute('data-wsl-cloud') === 'ubuntu',
+    cloud('legacy')?.getAttribute('data-wsl-cloud'))
+  check('a Windows workspace row is left alone',
+    cloud('win') === null && shipped('win')?.style.display === '')
+  // Optional chaining throughout: an assertion that throws on a missing node
+  // hides every check after it, which is the opposite of reporting a failure.
+  check('the cloud matches the folder icon metrics',
+    cloud('wsl')?.getAttribute('width') === '16'
+    && cloud('wsl')?.getAttribute('height') === '16'
+    && cloud('wsl')?.getAttribute('viewBox') === '0 0 16 16'
+    && cloud('wsl')?.getAttribute('aria-hidden') === 'true',
+    `${cloud('wsl')?.getAttribute('width')}x${cloud('wsl')?.getAttribute('height')} ${cloud('wsl')?.getAttribute('viewBox')}`)
+  check('the collapsed row gets the STROKED cloud, matching its folder outline',
+    cloud('wsl')?.getAttribute('data-wsl-cloud-weight') === 'outline'
+    && cloud('wsl')?.getAttribute('stroke-width') === '1'
+    && cloud('wsl')?.querySelector('path[stroke="currentColor"]') !== null,
+    `weight=${cloud('wsl')?.getAttribute('data-wsl-cloud-weight')}`)
+  check('the shipped folder icon is hidden rather than removed',
+    shipped('wsl')?.isConnected === true && shipped('wsl')?.style.display === 'none',
+    `connected=${shipped('wsl')?.isConnected} display=${JSON.stringify(shipped('wsl')?.style.display)}`)
+
+  // A workspace can be re-pointed at another directory, so the swap has to
+  // come back off — the icon follows the path it is given, not a first sighting.
+  state.items = [
+    { workspaceId: 'wsl', path: WIN_PATH },
+    { workspaceId: 'legacy', path: LEGACY_UNC },
+    { workspaceId: 'win', path: WIN_PATH },
+  ]
+  // A mutation elsewhere in the tree is what re-runs the plugin's sync.
+  parts.row.append(doc.createElement('i'))
+  await settle()
+  check('re-pointing the workspace restores the folder icon',
+    cloud('wsl') === null && shipped('wsl')?.style.display === '',
+    `cloud=${cloud('wsl') === null ? 'gone' : 'present'} display=${JSON.stringify(shipped('wsl')?.style.display)}`)
+
+  // Expanding a workspace re-renders its OWN icon in the other weight; the cloud
+  // has to follow rather than keep whichever one it was first built with.
+  const expandedFolder = (() => {
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('width', '16')
+    svg.setAttribute('height', '16')
+    svg.setAttribute('viewBox', '0 0 16 16')
+    svg.setAttribute('fill', 'none')
+    const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', 'M1 3h5l1 1h8v9H1z')
+    path.setAttribute('fill', 'currentColor')
+    svg.append(path)
+    return svg
+  })()
+  row('legacy').querySelector('span.folder').replaceChildren(expandedFolder)
+  parts.row.append(doc.createElement('i'))
+  await settle()
+  check('expanding the row rebuilds the cloud in the solid weight',
+    cloud('legacy')?.getAttribute('data-wsl-cloud-weight') === 'solid'
+    && cloud('legacy')?.querySelector('path[stroke]') === null
+    && [...(cloud('legacy')?.children ?? [])].every((node) => node.getAttribute('fill') === 'currentColor'),
+    `weight=${cloud('legacy')?.getAttribute('data-wsl-cloud-weight')}`)
+  check('and the newly rendered folder icon is hidden in its turn',
+    shipped('legacy')?.style.display === 'none')
+
+  const before = live.mutations()
+  await new Promise((resolve) => { setTimeout(resolve, 2600) })
+  console.log(`        ${live.mutations() - before} childList record(s) in 2.6s`)
+  check('the icon swap settles instead of feeding the observer',
+    live.mutations() - before <= 2, `${live.mutations() - before} childList records in 2.6s`)
+
+  live.dispose()
+  check('dispose restores every swapped row',
+    doc.querySelector('svg[data-wsl-cloud]') === null && shipped('legacy').style.display === '',
+    `clouds=${doc.querySelectorAll('svg[data-wsl-cloud]').length}`)
 }
 
 console.log(`\n${failures === 0 ? `${checks} check(s) passed` : `${failures} check(s) failed`}`)
