@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { resolveDistro } from './env.mjs'
+import { detailText } from './detail.mjs'
 
 const distro = resolveDistro(process.argv[2])
 const here = dirname(fileURLToPath(import.meta.url))
@@ -30,7 +31,7 @@ let failures = 0
  * @param {unknown} [detail] - evidence shown on failure.
  */
 function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${String(detail)}`}`)
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
 

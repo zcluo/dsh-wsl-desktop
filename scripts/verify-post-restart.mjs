@@ -9,9 +9,15 @@
  * Run: node scripts/verify-post-restart.mjs [baseUrl]
  */
 
+import { readFile, readdir } from 'node:fs/promises'
+import { dirname, join, relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
+import { detailText } from './detail.mjs'
 
+const here = dirname(fileURLToPath(import.meta.url))
+const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
 const baseUrl = process.argv[2] ?? 'http://127.0.0.1:19387'
 const distro = resolveDistro(process.argv[3])
 const home = resolveLinuxHome()
@@ -30,7 +36,7 @@ let pending = 0
  * @param {unknown} [detail] - evidence shown on failure.
  */
 function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${String(detail)}`}`)
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
 
@@ -94,6 +100,63 @@ if (status.status === 'ready') {
   for (const name of status.unmanaged ?? []) {
     console.log(`        left alone (not written by this plugin): ${name}`)
   }
+}
+
+// Which CODE is running, not merely which code is on disk. The profile links
+// one staged generation directory and Node caches a module by URL, so a host
+// that was never restarted after a re-stage keeps serving the older copy — and
+// every marker this suite can look for is present in both. The route reports
+// the paths it actually loaded, so the two copies are compared directly.
+console.log('\ndeployed generation')
+const deployed = status.deployed
+check('the route reports the module it loaded', typeof deployed?.modulePath === 'string' && deployed.modulePath.length > 0,
+  'the running host predates this check — restart DSH Desktop')
+if (typeof deployed?.modulePath === 'string') {
+  // The WHOLE tree, not just the entry module: a reload that refreshed
+  // `index.js` while `wsl/shell.js` stayed cached would pass a two-file check
+  // and still run stale code where it matters. Extras in the deployed
+  // directory (a `__pycache__` the source tree does not carry) are not
+  // failures — only a source file that is missing or different is.
+  const deployedLib = dirname(deployed.modulePath)
+  const sourceLib = join(pluginRoot, 'lib')
+  const entries = await readdir(sourceLib, { recursive: true, withFileTypes: true })
+  const wanted = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(sourceLib, join(entry.parentPath ?? sourceLib, entry.name)).split(sep).join('/'))
+    .sort()
+  const missing = []
+  const differing = []
+  for (const file of wanted) {
+    try {
+      const [loaded, source] = await Promise.all([
+        readFile(join(deployedLib, file), 'utf8'),
+        readFile(join(sourceLib, file), 'utf8'),
+      ])
+      if (loaded !== source) differing.push(file)
+    } catch {
+      missing.push(file)
+    }
+  }
+  check('the running plugin is this checkout, file for file',
+    wanted.length > 0 && missing.length === 0 && differing.length === 0,
+    `loaded=${deployedLib}\n        missing=[${missing.join(', ')}]\n        differing=[${differing.join(', ')}] — re-stage and restart DSH Desktop`)
+  // The MANIFEST is part of the bundle too: `dsh.client` is composed from it,
+  // and a deployed copy that lost `exports["./client"]` takes the whole desktop
+  // down at startup rather than failing in this plugin alone. `cordis.patch.yml`
+  // is deliberately NOT compared — the staging script stamps its row id and
+  // enables `developerTools` there.
+  let manifestSame = false
+  try {
+    const [loaded, source] = await Promise.all([
+      readFile(join(dirname(deployedLib), 'package.json'), 'utf8'),
+      readFile(join(pluginRoot, 'package.json'), 'utf8'),
+    ])
+    manifestSame = loaded === source
+  } catch {
+    manifestSame = false
+  }
+  check('the running manifest is this checkout', manifestSame,
+    `${join(dirname(deployedLib), 'package.json')} differs from ${join(pluginRoot, 'package.json')} — re-stage and restart DSH Desktop`)
 }
 
 console.log('\ncross-check against the older route generation')
@@ -258,6 +321,21 @@ if (clientEntry !== null) {
   check('it attaches a companion button beside the shipped trigger', bundle.includes('.after(button)'))
   check('it leaves the shipped directory-flow hole to the deployment',
     !bundle.includes('slots.register') && !bundle.includes('priority: -10'))
+  // The create-seam fix has to reach the PAGE, not merely sit in the file on
+  // disk: the host serves this bundle from its own cache, and a stale copy is
+  // exactly how the dropped `agentPreset` would come back unnoticed. This is
+  // the one assertion that proves the browser half the operator's page actually
+  // runs creates sessions through the remote contract.
+  check('the served browser half carries the create-seam fix',
+    bundle.includes('createBoundSession') && bundle.includes('ctx.remote?.session?.create'),
+    `bytes=${bundle.length}`)
+  // The cloud that marks WSL workspace rows is served the same way, so it is
+  // asserted the same way: the file on disk is not what the page runs. The pin
+  // is a fragment of the artwork itself rather than the constant's name, so a
+  // rename cannot fail this while a stale bundle still does.
+  check('the served browser half carries the workspace cloud icon',
+    bundle.includes('data-wsl-cloud') && bundle.includes('M11 13C12.8 13'),
+    `bytes=${bundle.length}`)
 }
 
 console.log('\nmanual steps this script cannot drive (browser-only)')

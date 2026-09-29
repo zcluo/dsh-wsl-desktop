@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
+import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
@@ -43,19 +44,63 @@ let checks = 0
 function check(label, ok, detail) {
   checks += 1
   console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}`)
-  if (!ok && detail !== undefined) console.log(`        ${String(detail)}`)
+  if (!ok && detail !== undefined) console.log(`        ${detailText(detail)}`)
   if (!ok) failures += 1
 }
 
 const source = await readFile(clientPath, 'utf8')
 const pkg = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8'))
 
+/**
+ * Source with comment bodies and string bodies blanked, for structural checks.
+ *
+ * ONE pass, because the obvious pass-per-syntax spelling is wrong in either
+ * order. Stripping `//` first reads the `//` inside a URL literal as a line
+ * comment — it swallowed the rest of that line together with the closing quote,
+ * left an unmatched quote behind, and the following quote pass then ate the
+ * code after it, turning seven assertions into false failures. Stripping quotes
+ * first instead reads an apostrophe in a comment as an opening quote. A scanner
+ * that walks the source once cannot do either. Regex literals are not parsed:
+ * a quote inside one would still be read as a string.
+ * @param {string} text - the source text.
+ * @returns {string} the same text with comment and string bodies removed.
+ */
+function blankLiterals(text) {
+  let out = ''
+  let index = 0
+  while (index < text.length) {
+    const char = text[index]
+    const next = text[index + 1]
+    if (char === '/' && next === '*') {
+      const end = text.indexOf('*/', index + 2)
+      index = end === -1 ? text.length : end + 2
+      out += ' '
+      continue
+    }
+    if (char === '/' && next === '/') {
+      const end = text.indexOf('\n', index)
+      index = end === -1 ? text.length : end
+      out += ' '
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      index += 1
+      while (index < text.length) {
+        if (text[index] === '\\') { index += 2; continue }
+        if (text[index] === char) { index += 1; break }
+        index += 1
+      }
+      out += char === '`' ? '``' : "''"
+      continue
+    }
+    out += char
+    index += 1
+  }
+  return out
+}
+
 /** Source with comments and string bodies blanked, for structural assertions. */
-const code = source
-  .replace(/\/\*[\s\S]*?\*\//g, ' ')
-  .replace(/\/\/[^\n]*/g, ' ')
-  .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-  .replace(/`(?:[^`\\]|\\.)*`/g, '``')
+const code = blankLiterals(source)
 
 /** Cordis Context members that are not injectable services. */
 const NON_SERVICE_MEMBERS = ['effect', 'get', 'on', 'set', 'plugin', 'inject', 'provide']
@@ -85,8 +130,11 @@ check('never replaces a shipped DOM node', !code.includes('replaceWith('))
 
 const injectMatch = /inject:\s*\[([^\]]*)\]/.exec(source)
 const injected = (injectMatch?.[1] ?? '').split(',').map((part) => part.trim().replace(/^'|'$/g, '')).filter(Boolean)
+// A namespaced key (`remote.session`) is a cordis idiom — it gates one remote
+// namespace rather than a top-level service — so it is satisfied by the parent
+// spelling, which is how the code reads it.
 check('injects the services the picker reads',
-  injected.length > 0 && injected.every((name) => code.includes(`ctx.${name}`)),
+  injected.length > 0 && injected.every((name) => code.includes(`ctx.${name}`) || code.includes(`ctx.${name.split('.')[0]}`)),
   `inject=[${injected.join(', ')}]`)
 const reads = [...new Set([...code.matchAll(/ctx\.([A-Za-z][A-Za-z0-9]*)/g)].map((match) => match[1]))]
   .filter((name) => !NON_SERVICE_MEMBERS.includes(name))
@@ -158,8 +206,43 @@ check('registers the workspace and opens the created session',
 // refused for any session that has taken a turn; the request must carry it.
 check('names the WSL preset in the create request',
   picker.includes("call('wslPresetFor'")
-  && picker.includes('agentPreset: preset.agentPreset')
+  && picker.includes('createBoundSession(ctx, workspace.workspaceId, preset.agentPreset)')
   && !picker.includes('ctx.uiWorkspace.startSession('))
+// ...and it has to survive the trip. `ctx.sessions.create` (the client service
+// wrapper) rebuilds its payload from `workspaceId | cwd | sessionId` alone and
+// silently DROPS `agentPreset`, so the create goes through the generated remote
+// contract that forwards it. The negative keeps the lossy spelling from coming
+// back: it looks correct at the call site and only fails at runtime.
+check('the create carries the preset through the remote contract',
+  /ctx\.remote\?\.session\?\.create/.test(source)
+  && /create\(\{ workspaceId, agentPreset \}\)/.test(source)
+  && !/ctx\.sessions\.create\(\{[^}]*agentPreset/.test(source))
+// The workspace snapshot source hangs off `ctx.workspaces.list`, and the hop a
+// reader is most likely to omit is the one that fails SILENTLY: written as
+// `ctx.workspaces.path` the lookup yields undefined and the whole feature does
+// nothing while every check still passes — which is exactly how it first
+// shipped. The README is this repo's contract record, so it is pinned to the
+// spelling the code reads rather than left to drift.
+//
+// The code pin reads the BLANKED source, and matches the optional-chaining
+// spelling. The raw text also carries this path inside the `console.warn`
+// message below the read, so matching it there passed for a reason that had
+// nothing to do with what the code reads: with the accessor renamed to a member
+// that does not exist — the original silent no-op — every check still went
+// green. Prose keeps the plain `ctx.workspaces.list` spelling; the code needs
+// the `?.`.
+const WORKSPACE_ACCESSOR = 'ctx.workspaces.list'
+// The member-name boundary is load-bearing, not decoration: a plain
+// `includes('ctx.workspaces?.list')` also matches `ctx.workspaces?.listing`, a
+// member that does not exist, so the pin went green on exactly the silent no-op
+// it was written to catch.
+check('the client half reads the workspace source off `list`',
+  /ctx\.workspaces\?\.list(?![A-Za-z0-9_$])/.test(code))
+for (const name of ['README.md', 'README.en.md']) {
+  const text = await readFile(join(pluginRoot, name), 'utf8')
+  check(`${name} documents the accessor the code reads`, text.includes(WORKSPACE_ACCESSOR),
+    `${name} never names ${WORKSPACE_ACCESSOR}`)
+}
 check('discards responses of a superseded directory listing', picker.includes('token !== state.token'))
 check('gates browsing on the entered user, then lands in their home',
   picker.includes("state.phase = 'browse'")

@@ -18,3 +18,8 @@ _debug-*.mjs
 
 # Bytecode cache from py_compile on the shipped bridge source.
 lib/wsl/__pycache__/
+
+# Release artifacts. `npm pack` output is reproducible from this tree and is
+# never part of it — and a stale one is worse than noise: an older tarball can be
+# a build that cannot load at all, sitting there installable.
+*.tgz

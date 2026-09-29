@@ -17,6 +17,7 @@ import {
 } from '../lib/http-admission.js'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
 import { resolveDistro } from './env.mjs'
+import { detailText } from './detail.mjs'
 
 const baseUrl = process.argv[2] ?? 'http://127.0.0.1:19387'
 const endpoint = `${baseUrl}/wsl-desktop/api`
@@ -35,7 +36,7 @@ let failures = 0
  * @param {unknown} [detail] - evidence shown on failure.
  */
 function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${String(detail)}`}`)
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
 

@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { joinWslUnc } from '../lib/wsl/paths.js'
 import { canonicalHostPath, isLexicallyUnderHost, isUnderHost, writableHostRootsFor } from '../lib/wsl/fence.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
+import { detailText } from './detail.mjs'
 
 const distro = resolveDistro()
 // Fixture paths derive from the environment, never from a hardcoded identity
@@ -32,7 +33,7 @@ let failures = 0
  * @param {unknown} [detail] - evidence shown on failure.
  */
 function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${String(detail)}`}`)
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
 

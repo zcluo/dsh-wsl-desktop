@@ -31,6 +31,7 @@ const STANDALONE = [
   'verify-pty-handle.mjs',
   'verify-client-ui.mjs',
   'verify-client-dom.mjs',
+  'verify-sync.mjs',
 ]
 
 /** Suites that require the installed plugin behind a running Desktop host. */

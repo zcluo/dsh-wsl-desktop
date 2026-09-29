@@ -23,6 +23,7 @@ import {
 } from '../lib/wsl/confinement.js'
 import { shellQuote, windowsToMntPath } from '../lib/wsl/paths.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
+import { detailText } from './detail.mjs'
 
 const distro = resolveDistro(process.argv[2])
 const home = resolveLinuxHome()
@@ -37,7 +38,7 @@ let failures = 0
  * @param {unknown} [detail] - evidence shown on failure.
  */
 function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${String(detail)}`}`)
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
 

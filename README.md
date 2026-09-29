@@ -15,7 +15,7 @@
 
 ## 目标能力
 
-**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 全绿 + 离线 10 套件；下面每条都注明证据强度）：
+**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 全绿 + 离线 11 套件；下面每条都注明证据强度）：
 
 | # | 能力 | 状态 |
 |---|---|---|
@@ -30,13 +30,18 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 
 **当前实现就是围绕这个事实做的**：
 
-- 浏览器半边在 W 对话框里创建会话时，先调宿主的 `wslPresetFor` 解析变体 id，然后把 `agentPreset` 放进**创建请求**（`lib/client.js` 的 `commit()`）。这是唯一无竞态的接缝：preset 随会话一起组合，不存在"先跑在 Windows 世界再切"的窗口。
+- 浏览器半边在 W 对话框里创建会话时，先调宿主的 `wslPresetFor` 解析变体 id，然后把 `agentPreset` 放进**创建请求**（`lib/client.js` 的 `createBoundSession()`）。这是唯一无竞态的接缝：preset 随会话一起组合，不存在"先跑在 Windows 世界再切"的窗口。
+  - **这个字段会经过两层 API，其中一层会把它丢掉。** 宿主侧的 `SessionCreateRequest.agentPreset` 是真实契约，但客户端服务包装 `ctx.sessions.create` 只用 `workspaceId | cwd | sessionId` 重建请求体——`agentPreset` 被静默丢弃，会话落到默认 preset 上，只剩上面那条兜底去救。所以创建走的是**生成出来的 remote 契约** `ctx.remote.session.create({ workspaceId, agentPreset })`（`inject` 里相应地注入 `remote` / `remote.session`），`ctx.sessions.create` 仅作为 remote 面不可用时的退路。`scripts/verify-client-ui.mjs` 同时钉住这两点。
 - 宿主半边保留一个 `api-session/added` 监听（`lib/index.js` 的 `bindWslSession`）作为**兜底**：只处理"cwd 是 WSL 路径、但创建时没带 preset"的会话（比如从别的入口创建的）。它尝试事后 `select`，成功就补绑，失败就写 `bindingLog` 并在宿主日志里告警——这类条目现在是**异常信号**，不再是正常路径的一部分。
 - 因此 `verify-post-restart.mjs` 的 binding 段语义是：非 selftest 的 `bindingLog` 条目 = 有人绕过创建接缝建了 WSL 会话；零条目 = 一切经创建请求绑定的会话都正常。GUI 侧的最终确认已由操作者完成（会话预设显示 WSL · PTC 模式，工具在发行版内执行）。
 
 ## 界面入口
 
 侧栏工作区标题栏里，自带的"+"（添加工作区）右边多一个 **W** 按钮；点开是本插件的工作区对话框：选发行版 → 输入用户 → 浏览或输入 Linux 目录 → 创建并打开会话。
+
+侧栏工作区列表里，**路径落在 WSL UNC 下的工作区，行首图标是 ☁️ 而不是文件夹**。判定走工作区列表（`ctx.workspaces.list.getSnapshot().items` 里的 `path`——**`list` 这一跳不能省，写成 `ctx.workspaces.path` 会拿到 undefined 并静默不生效**），因为行 DOM 里只有工作区名字、没有路径；而行 key `workspace:<id>` 里的就是 workspaceId，映射因此可靠。图标是自带的矢量云而非 emoji：harness 图标集里没有云，也**没有逐行图标槽位**（只有整段 `sidebar.workspaces`，占位会遮蔽自带列表），所以替换在 DOM 层完成，并入 W 按钮那条 sync 通道。
+
+两个实测细节：**云跟随行的字重**——收起态部署渲染 `IconFolderCloseRegular`（1px 描边），展开态是 `IconFolderOpenRegular`（纯填充），所以同一份闭合路径按两种方式渲染（描边 = 轮廓，填充 = 实心），随展开状态重建，行内不会出现"描边配填充"。**部署自带的 `<svg>` 只隐藏、不删除**：节点属于 React，抽掉它的子节点正是 `removeChild` 异常的来源；`display` 也不是 childList 变更，因此不喂回观察器（实测 2.6s 内 0 条 childList 记录）。`scripts/verify-client-dom.mjs` 覆盖以上全部行为。
 
 选中某个发行版后，对话框**先要求输入要进入该发行版的用户**（留空 = 发行版默认用户），确认后才进入浏览：路径直接落在该用户的主目录（宿主在发行版内用 `getent passwd` 解析用户数据库，方法为 `resolveHome`）。输入的用户不存在时，错误就地显示在弹层里，不会进入浏览。切换发行版——包括重新点击当前已选中的那个——都会重新弹出用户输入框，并带上一次确认过的用户名作为起点。创建会话进行中时发行版按钮暂时不可点（提交的结果归属提交本身）。进入浏览后，主目录就是普通路径——输入框、前往、面包屑、目录点击照常可用。边界要说清楚：这一步只决定"浏览谁的 home"，**不决定会话身份**——会话在发行版里始终以发行版默认用户执行（`username` 是插件配置，不随会话创建传递）。
 
@@ -171,7 +176,10 @@ node scripts/verify-confinement.mjs  # 约束围栏：工作区可写、外部�
 node scripts/verify-terminal.mjs     # PTY 桥：resize / 前台进程组 / 信号 / 终止
 node scripts/verify-pty-handle.mjs   # JS 终端句柄（对着真实桥跑）
 node scripts/verify-client-ui.mjs    # 浏览器半边的静态检查（不注册槽位、定位几何、宿主调用）
-node scripts/verify-client-dom.mjs   # 浏览器半边的行为检查：在 jsdom 里跑真实 factory（挂载位置 / 放不下时的收敛 / 隐藏跟随）
+node scripts/verify-client-dom.mjs   # 浏览器半边的行为检查：在 jsdom 里跑真实 factory（挂载位置 / 放不下时的收敛 / 隐藏跟随 / 工作区行图标）
+node scripts/verify-modules.mjs      # 宿主半边的结构性钉子：发行版接缝 + `exports` 清单（`./client` 是硬契约）
+node scripts/verify-sync.mjs         # 对一次性 profile 跑真 sync.ps1：代次保留规则三场景
+node scripts/verify-route.mjs        # 活体：验收路由（需要运行中的宿主）
 node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（可带若干标记串）
 .\scripts\sync.ps1                   # stage 进 profile（随后由 plugin_manager 安装）
 ```
@@ -190,6 +198,13 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 **维护者发版**：语义化版本——patch = 缺陷修复；minor = 兼容的桌面大版本适配（每次 harness 断裂适配后升 minor，如 0.1.x 的 0.1.7 适配）；major = 边界语义或支持矩阵变化。流程：改 `package.json` version → 全量套件 + `verify-post-restart.mjs` 全绿 → `npm publish --access public` → 打 git tag。`files` 清单已含 `lib/wsl/dsh-wsl-confine.sh`（helper 随包分发）。
 
+> ⚠️ **`exports["./client"]` 是硬性契约，改元数据时最容易误删。** 宿主的 client-modules 是**必装**插件：只要有一个包声明了 `dsh.client` 却没有 `exports["./client"]`，它就直接拒绝组合，整张桌面**启动失败**（不是本插件单独失效）：
+> ```
+> DesktopHostFatalError: dsh: startup failed: 1 required plugin did not activate
+>   client-modules: dsh-wsl-desktop declares dsh.client but exports no "./client" bundle
+> ```
+> v0.2.0 的「release readiness」元数据改造（`38e6356`）删掉了整个 `exports` 块，0.2.0 与 0.2.1 因此**装上去就起不来**；`main` 顶不了这个位置——Node 解析 `./client` 子路径时不看它。`scripts/verify-modules.mjs` 现在钉住这条（`./client` 与 `.` 都在、client 入口不是 host 入口、文件真实存在、platform 为 web），发版前跑它即可拦住。**`cordis.patch.yml` 与 `lib/` 之外，`package.json` 也是投放面的一部分**：`verify-post-restart.mjs` 会把运行中的 manifest 与 checkout 逐字节比对。
+
 **代码安装（开发模式）**：
 
 ```bash
@@ -202,9 +217,9 @@ node scripts/verify-all.mjs        # 离线全量
 
 **已知不稳定 → 已修，多轮验证稳定**：`verify-terminal.mjs` 曾偶发失败（实测 6 次里 1 次）。根因在宿主侧 `lib/wsl/pty.js`，不是桥：分配失败路径不终止已 spawn 的数据进程，泄漏的桥会干扰后续运行；且控制应答不携带请求 id，一次超时之后迟到的应答会被下一条请求消费，整个控制通道从此错位。修复：失败路径终止并等待两个进程退出；每个请求带 id、桥回显同一 id，超时先摘除条目、迟到应答直接丢弃。修复后历经今日十余轮全量套件（含多次背靠背）无一复现，结论稳定。
 
-宿主代码改动需要**重启 DSH Desktop** 才会加载；重启后先跑 `verify-post-restart.mjs`，它会在旧模块仍生效时直接报「请重启」而不是给假绿。**浏览器半边改动不需要重启**：就地改写当前那一代的 `lib/client.js` 会改变投放 rev 并由 `/plugins/events` 推给已打开的页面（`patchReload: live`）。`verify-post-restart.mjs` 会从 `/plugins/events` 读实时模块图并取回真正投放的那份 bundle 来断言这一点。
+宿主代码改动需要**重启 DSH Desktop** 才会加载；重启后先跑 `verify-post-restart.mjs`，它会在旧模块仍生效时直接报「请重启」而不是给假绿。**浏览器半边改动不需要重启**：就地改写当前那一代的 `lib/client.js` 会改变投放 rev 并由 `/plugins/events` 推给已打开的页面（`patchReload: live`）。`verify-post-restart.mjs` 会从 `/plugins/events` 读实时模块图并取回真正投放的那份 bundle 来断言这一点。 **注意 rev 不是即时更新的**：宿主惰性重建客户端 bundle，就地改写后立刻回读 `/plugins/events` 仍会拿到旧 rev（实测数秒后才变）。"文件已改"因此不等于"投放已变"，验证要读到新 rev 为止，否则会得出错误的"已部署"结论。
 
-`sync.ps1` 每次 stage 到新的时间戳目录（Node 按 URL 缓存模块，同目录重装仍服务旧代码），但**保留当前 profile 链接着的那一代**：运行中的宿主生成的预设里写的是它自己目录内的绝对模块路径，把那个目录删掉会让所有 WSL 会话在下一次重启前失效。
+`sync.ps1` 每次 stage 到新的时间戳目录（Node 按 URL 缓存模块，同目录重装仍服务旧代码），但**保留当前 profile 链接着的那一代**：运行中的宿主生成的预设里写的是它自己目录内的绝对模块路径，把那个目录删掉会让所有 WSL 会话在下一次重启前失效。 链接**无法定位那一代**时（profile 根本没有链接，或链接指向的目录已消失），`sync.ps1` 改为**保留全部代次并告警**——这两种情形下过滤器都拿不到可比对的路径，继续删就是拿同样的爆炸半径去猜。这条护栏由 `scripts/verify-sync.mjs` 在一次性 profile 上跑真脚本验证（三个场景：链接可用 / 链接悬空 / 无链接）。
 
 ## fs 工具的围栏
 

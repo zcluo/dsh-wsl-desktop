@@ -41,12 +41,44 @@ if (Test-Path $plugins) {
     # running host resolves, dangling the absolute module paths in generated
     # presets until the next restart.
     if ($item.LinkType -and $item.Target) {
-      $linked = (Resolve-Path (Join-Path (Split-Path -Parent $link) $item.Target)).Path
+      # Windows PowerShell 5.1 reports a reparse point's Target as a STRING
+      # ARRAY while PowerShell 7 reports a scalar, and Join-Path refuses the
+      # array outright ("Cannot convert 'System.String[]'"). Take the single
+      # entry in both hosts so this script runs under the default
+      # `powershell.exe` as well as `pwsh`.
+      $target = @($item.Target)[0]
+      # The target is ABSOLUTE for a link made with an absolute path, and
+      # relative to the link's own directory otherwise. Joining an absolute
+      # child onto the parent yields a path that resolves nowhere, so the
+      # comparison below matched NO generation and this script deleted the very
+      # directory the running host served — the failure its own comment above
+      # warns about. Resolve each spelling on its own terms.
+      $candidate = if ($target -match '^([A-Za-z]:[\\/]|\\\\)') {
+        $target
+      } else {
+        Join-Path (Split-Path -Parent $link) $target
+      }
+      # Resolve-Path THROWS when the target no longer exists (a dangling link
+      # left behind by a manual cleanup), and an abort here would leave the
+      # staging half-done. The joined path is still this profile's generation
+      # identity, so keep it: the deletion filter below compares against it and
+      # therefore cannot take out the directory the running host resolves.
+      try { $linked = (Resolve-Path $candidate).Path } catch { $linked = $candidate }
     }
   }
-  Get-ChildItem $plugins -Directory -Filter 'dsh-wsl-desktop*' |
-    Where-Object { $_.FullName -ne $linked } |
-    Remove-Item -Recurse -Force
+  # Neither spelling identifies the generation the running host serves: the
+  # profile may have NO link at all, or its target may already be gone. The
+  # filter below compares against $linked, and a $null there matches EVERY
+  # generation — so an unguarded run deletes the directory the running host
+  # resolves, which is the failure this block exists to prevent. Deleting the
+  # rest would be a guess with the same blast radius either way.
+  if ($null -eq $linked -or -not (Test-Path $linked)) {
+    Write-Warning "cannot identify the generation the profile serves (link=$link resolved=$linked); keeping every staged generation"
+  } else {
+    Get-ChildItem $plugins -Directory -Filter 'dsh-wsl-desktop*' |
+      Where-Object { $_.FullName -ne $linked } |
+      Remove-Item -Recurse -Force
+  }
 }
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item (Join-Path $src 'package.json') $dest

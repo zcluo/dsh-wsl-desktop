@@ -12,6 +12,7 @@
 import { mkdir, writeFile, link, rename, realpath, stat, rm, readFile, copyFile, chmod, constants } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveDistro } from './env.mjs'
+import { detailText } from './detail.mjs'
 
 const distro = resolveDistro(process.argv[2])
 const root = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe`
@@ -28,7 +29,7 @@ let failures = 0
 function probe(label, available, expected, detail) {
   const matches = expected === 'available' ? available : !available
   console.log(`  ${matches ? 'OK  ' : 'FAIL'}  ${label} — ${available ? 'available' : 'unavailable'}${matches ? '' : ` (expected ${expected})`}`)
-  if (!matches && detail !== undefined) console.log(`        ${String(detail)}`)
+  if (!matches && detail !== undefined) console.log(`        ${detailText(detail)}`)
   if (!matches) failures += 1
 }
 
@@ -40,7 +41,7 @@ function probe(label, available, expected, detail) {
  * @param {unknown} [detail] - context shown on failure.
  */
 function identityCheck(label, ok, detail) {
-  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : ` — ${String(detail)}`}`)
+  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : ` — ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
 

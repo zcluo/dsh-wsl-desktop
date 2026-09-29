@@ -15,7 +15,7 @@ After every DSH Desktop update, the plugin may break because of harness internal
 
 ## Target capabilities
 
-**Honest state after live acceptance** (`verify-post-restart.mjs` all green + 10 offline suites; each item below notes its evidence strength):
+**Honest state after live acceptance** (`verify-post-restart.mjs` all green + 11 offline suites; each item below notes its evidence strength):
 
 | # | Capability | Status |
 |---|---|---|
@@ -30,13 +30,18 @@ The harness fixes the preset at session **creation** (`SessionCreateRequest.agen
 
 **The current implementation is built around exactly this fact**:
 
-- When creating a session in the W dialog, the browser half first calls the host's `wslPresetFor` to resolve the variant id, then puts `agentPreset` into the **create request** (`commit()` in `lib/client.js`). This is the only race-free seam: the preset is composed together with the session, so there is no window of "first run in the Windows world, then switch".
+- When creating a session in the W dialog, the browser half first calls the host's `wslPresetFor` to resolve the variant id, then puts `agentPreset` into the **create request** (`createBoundSession()` in `lib/client.js`). This is the only race-free seam: the preset is composed together with the session, so there is no window of "first run in the Windows world, then switch".
+  - **That field crosses two API layers, and one of them drops it.** The host's `SessionCreateRequest.agentPreset` is a real contract, but the client service wrapper `ctx.sessions.create` rebuilds its payload from `workspaceId | cwd | sessionId` alone — `agentPreset` is silently discarded, the session lands on the default preset, and only the fallback below rescues it. Creation therefore goes through the **generated remote contract** `ctx.remote.session.create({ workspaceId, agentPreset })` (with `remote` / `remote.session` injected to match), and `ctx.sessions.create` is kept only as the retreat for a host whose remote surface is unavailable. `scripts/verify-client-ui.mjs` pins both halves.
 - The host half keeps an `api-session/added` listener (`bindWslSession` in `lib/index.js`) as a **fallback**: it only handles sessions whose "cwd is a WSL path but the creation carried no preset" (for example, sessions created from another entry point). It attempts a post-hoc `select`; on success it binds retroactively, on failure it writes `bindingLog` and warns in the host log — such entries are now **anomaly signals**, no longer part of the normal path.
 - The binding section of `verify-post-restart.mjs` therefore reads: a non-selftest `bindingLog` entry = someone created a WSL session while bypassing the creation seam; zero entries = every session bound through the create request is fine. Final GUI-side confirmation has been done by the operator (session preset shows WSL · PTC mode; tools execute inside the distro).
 
 ## UI entry point
 
 In the sidebar workspace title bar, to the right of the built-in "+" (add workspace), there is an extra **W** button; clicking it opens this plugin's workspace dialog: pick a distro → enter the user → browse or type a Linux directory → create and open a session.
+
+In the sidebar workspace list, **a workspace whose path is under a WSL UNC root shows a ☁️ icon instead of the folder**. Detection goes through the workspace list (`ctx.workspaces.list.getSnapshot().items` and their `path` — **the `list` hop is not optional: written as `ctx.workspaces.path` the lookup yields undefined and silently does nothing**), because the row's DOM carries only the workspace NAME, never its path; the row key `workspace:<id>` holds the workspace id itself, so the mapping is reliable. The icon is this plugin's own vector cloud, not an emoji: the harness icon set ships no cloud, and there is **no per-row icon slot** (only the whole `sidebar.workspaces` section, which would shadow the shipped list), so the swap happens at the DOM level and rides the same sync pass as the W button.
+
+Two details measured while building it: **the cloud follows the row's weight** — collapsed renders `IconFolderCloseRegular` (a 1px stroke) while expanded renders `IconFolderOpenRegular` (fill-only), so one closed path is rendered both ways (stroked = outline, filled = solid) and the cloud is rebuilt when the row expands, so a stroke is never shown beside a fill. And **the shipped `<svg>` is hidden, never removed**: React owns that node, and pulling its child out is how a `removeChild` exception starts; `display` is also not a childList mutation, so the swap does not feed the observer it runs from (0 childList records in 2.6 s, measured). `scripts/verify-client-dom.mjs` covers all of it.
 
 After a distro is selected, the dialog **first asks for the user to enter that distro with** (leave empty = the distro's default user); only after confirmation does browsing begin: the path lands directly in that user's home directory (the host resolves the user database inside the distro with `getent passwd`, method `resolveHome`). If the entered user does not exist, the error is shown in place in the popup, without entering browse mode. Switching distros — including re-clicking the currently selected one — re-prompts for the user, prefilled with the previously confirmed name. While a session creation is in flight, distro buttons are temporarily unclickable (the outcome of a submit belongs to that submit). Once inside browse mode, the home directory is an ordinary path — the input box, go-to, breadcrumbs, and directory clicks all work as usual. To be precise about the boundary: this step only decides "whose home gets browsed", **not the session identity** — the session always executes inside the distro as the distro's default user (`username` is plugin configuration and is not passed along with session creation).
 
@@ -172,6 +177,9 @@ node scripts/verify-terminal.mjs     # PTY bridge: resize / foreground process g
 node scripts/verify-pty-handle.mjs   # the JS terminal handle (run against the real bridge)
 node scripts/verify-client-ui.mjs    # browser-half static checks (no slot registration, locator geometry, host calls)
 node scripts/verify-client-dom.mjs   # browser-half behavior checks: the real factory run in jsdom (mount location / convergence when out of room / hiding follows)
+node scripts/verify-modules.mjs      # host-half structural pins: the distro seam + the `exports` map (`./client` is a hard contract)
+node scripts/verify-sync.mjs         # runs the real sync.ps1 against a disposable profile: three generation-retention scenarios
+node scripts/verify-route.mjs        # live: the acceptance route (needs a running host)
 node scripts/inspect-live-client.mjs # reads the client bundle the host actually delivers (accepts marker strings)
 .\scripts\sync.ps1                   # stage into the profile (then installed by plugin_manager)
 ```
@@ -190,6 +198,13 @@ Distro and user are no longer hardcoded: `DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DS
 
 **Maintainer release**: semantic versioning — patch = defect fixes; minor = compatible desktop-major adaptation (each harness break adaptation bumps minor, e.g. the 0.1.7 adaptation in 0.1.x); major = boundary semantics or support-matrix changes. Flow: bump the `package.json` version → full suites + `verify-post-restart.mjs` all green → `npm publish --access public` → git tag. The `files` manifest already includes `lib/wsl/dsh-wsl-confine.sh` (the helper ships with the package).
 
+> ⚠️ **`exports["./client"]` is a hard contract and the easiest thing to delete while editing metadata.** The host's client-modules plugin is REQUIRED: one package that declares `dsh.client` without `exports["./client"]` refuses to compose, and the **whole desktop fails to start** (not just this plugin):
+> ```
+> DesktopHostFatalError: dsh: startup failed: 1 required plugin did not activate
+>   client-modules: dsh-wsl-desktop declares dsh.client but exports no "./client" bundle
+> ```
+> The v0.2.0 "release readiness" metadata rewrite (`38e6356`) deleted the whole `exports` block, which is why 0.2.0 and 0.2.1 **cannot start at all once installed**; `main` is not a substitute — Node ignores it when resolving the `./client` subpath. `scripts/verify-modules.mjs` now pins this (`./client` and `.` both present, client entry distinct from the host entry, file present on disk, platform web), so running it before a release catches the regression. **`package.json` is part of the deployed surface** alongside `cordis.patch.yml` and `lib/`: `verify-post-restart.mjs` compares the running manifest against the checkout byte for byte.
+
 **Code install (development mode)**:
 
 ```bash
@@ -202,9 +217,9 @@ node scripts/verify-all.mjs        # full offline run
 
 **Previously flaky → fixed, stable across many rounds**: `verify-terminal.mjs` used to fail intermittently (measured 1 in 6). The root cause was host-side `lib/wsl/pty.js`, not the bridge: the allocation-failure path did not terminate the already-spawned data process, and the leaked bridge interfered with later runs; control replies carried no request id, so after one timeout a late reply was consumed by the next request and the whole control channel misaligned from then on. Fix: the failure path terminates and waits for both processes to exit; every request carries an id, the bridge echoes the same id, timeout removes the entry first, and late replies are dropped outright. After the fix, a dozen-plus full-suite rounds today (including several back-to-back) reproduced nothing; the conclusion is stable.
 
-Host-code changes require **restarting DSH Desktop** to load; after a restart, run `verify-post-restart.mjs` first — when old modules are still in effect it reports "please restart" directly instead of giving a false green. **Browser-half changes need no restart**: rewriting the current generation's `lib/client.js` in place changes the delivery rev, and the change is pushed to open pages via `/plugins/events` (`patchReload: live`). `verify-post-restart.mjs` reads the live module graph from `/plugins/events` and fetches back the bundle actually delivered, to assert exactly this.
+Host-code changes require **restarting DSH Desktop** to load; after a restart, run `verify-post-restart.mjs` first — when old modules are still in effect it reports "please restart" directly instead of giving a false green. **Browser-half changes need no restart**: rewriting the current generation's `lib/client.js` in place changes the delivery rev, and the change is pushed to open pages via `/plugins/events` (`patchReload: live`). `verify-post-restart.mjs` reads the live module graph from `/plugins/events` and fetches back the bundle actually delivered, to assert exactly this. **The rev is not updated instantly, though**: the host rebuilds a client bundle lazily, so reading `/plugins/events` immediately after an in-place rewrite still returns the OLD rev (measured: it changes a few seconds later). "The file changed" is therefore not "the served bytes changed" — a verification has to wait for the new rev, or it reaches the wrong "already deployed" conclusion.
 
-`sync.ps1` stages into a fresh timestamped directory each time (Node caches modules by URL; reinstalling into the same directory still serves old code), but **keeps the generation the current profile links to**: the presets generated by the running host carry absolute module paths inside its own directory; deleting that directory breaks all WSL sessions until the next restart.
+`sync.ps1` stages into a fresh timestamped directory each time (Node caches modules by URL; reinstalling into the same directory still serves old code), but **keeps the generation the current profile links to**: the presets generated by the running host carry absolute module paths inside its own directory; deleting that directory breaks all WSL sessions until the next restart. When the link **cannot identify that generation** — the profile has no link at all, or the link's target is already gone — `sync.ps1` now **keeps every generation and warns**, because in both cases the filter has no path to compare against and deleting would be a guess with the same blast radius. `scripts/verify-sync.mjs` exercises that guard by running the real script against a throwaway profile (three scenarios: a link that resolves, a dangling link, and no link).
 
 ## The fs tool fence
 
