@@ -12,7 +12,7 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
-import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, hostExecutable, planWsl, buildWslExecArgv } from '../lib/wsl/world.js'
+import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, probeEvidence, hostExecutable, planWsl, buildWslExecArgv } from '../lib/wsl/world.js'
 import {
   parseWslUnc,
   joinWslUnc,
@@ -21,6 +21,7 @@ import {
   isWindowsPathShaped,
   shellQuote,
 } from '../lib/wsl/paths.js'
+import { detailText } from './detail.mjs'
 
 let failures = 0
 
@@ -36,7 +37,41 @@ function check(label, ok, detail) {
     return
   }
   failures += 1
-  console.log(`  FAIL  ${label}${detail === undefined ? '' : `\n        ${String(detail)}`}`)
+  console.log(`  FAIL  ${label}${detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
+}
+
+/**
+ * Resolve a home without letting a probe failure abort the suite.
+ *
+ * `resolveDistroHome` throws when the probe produces nothing, and that includes
+ * a TRANSIENT `wsl.exe` failure — measured once in six full runs. An uncaught
+ * throw there stops every check after it, so the outcome is reported instead: a
+ * red check naming the reason beats a suite that silently truncates. An
+ * INCONCLUSIVE probe — one that did not complete and answer — gets one retry
+ * first, so the same transient does not turn into a red gate that says nothing
+ * about the code under test.
+ * @param {string} distro - distribution to resolve in.
+ * @param {string} [user] - user to resolve, or the default user when omitted.
+ * @returns {Promise<{ ok: boolean, attempts: number, value?: { user: string, home: string }, detail?: string }>} the outcome and how many probes it took.
+ */
+async function homeOf(distro, user) {
+  const attempt = async () => {
+    try {
+      return { ok: true, value: await resolveDistroHome(distro, user) }
+    } catch (error) {
+      return { ok: false, detail: error instanceof Error ? error.message : String(error) }
+    }
+  }
+  const first = await attempt()
+  // `退出码 0` in the evidence is the probe saying "I ran and found nothing",
+  // which is a conclusive answer about the user. Anything else — a non-zero code,
+  // a timeout, no code at all — is the probe failing, and that is the transient.
+  // `attempts` is reported so the retry can be asserted as a fact rather than
+  // inferred from the message wording.
+  if (first.ok || first.detail.includes('退出码 0')) return { ...first, attempts: 1 }
+  const second = await attempt()
+  if (second.ok) return { ...second, attempts: 2 }
+  return { ok: false, attempts: 2, detail: `${second.detail}（重试一次后仍失败）` }
 }
 
 console.log('path translation')
@@ -120,12 +155,51 @@ const bareName = spawnSync(execArgv[0], buildWslExecArgv(execPlan, ['echo', 'bar
 check('a bare name resolves against the distribution PATH', bareName.status === 0 && bareName.stdout.includes('bare-name'), `status=${bareName.status} err=${bareName.stderr}`)
 
 console.log('\nhome resolution')
-const resolved = await resolveDistroHome(distro)
+const resolved = await homeOf(distro)
 check("the default user's home resolves to an absolute Linux path",
-  resolved.user.length > 0 && resolved.home.startsWith('/'), resolved)
-const byName = await resolveDistroHome(distro, resolved.user)
+  resolved.ok && resolved.value.user.length > 0 && resolved.value.home.startsWith('/'),
+  resolved.detail ?? resolved.value)
+const byName = resolved.ok ? await homeOf(distro, resolved.value.user) : { ok: false, detail: 'the default user did not resolve' }
 check('resolving an explicit user matches the default-user resolution',
-  byName.user === resolved.user && byName.home === resolved.home, byName)
+  byName.ok && resolved.ok && byName.value.user === resolved.value.user && byName.value.home === resolved.value.home,
+  byName.detail ?? byName.value)
+
+// The failure path, deterministically: a distribution that does not exist makes
+// the probe itself fail, so the message must carry the probe's own evidence.
+// Without it "wsl.exe blipped" and "the user really is absent" read exactly the
+// same — which is how one transient failure in a full run looked like a code
+// defect until the probe was repeated by hand.
+// The evidence is built by a pure function, so the cases a distribution cannot
+// be made to produce on demand are tested directly.
+check('a timed-out probe names the timeout rather than a missing code',
+  probeEvidence({ exitCode: null, stderr: '', timedOut: true }).includes('探针超时'),
+  probeEvidence({ exitCode: null, stderr: '', timedOut: true }))
+check('a probe that reported no code at all says so',
+  probeEvidence({ exitCode: null, stderr: '', timedOut: false }).includes('探针未正常退出'),
+  probeEvidence({ exitCode: null, stderr: '', timedOut: false }))
+check('a successful probe carries its stderr when there is one',
+  probeEvidence({ exitCode: 0, stderr: 'some warning', timedOut: false }).includes('stderr: some warning'),
+  probeEvidence({ exitCode: 0, stderr: 'some warning', timedOut: false }))
+
+const absent = await homeOf('dsh-wsl-no-such-distro', 'root')
+check('an unresolvable home is reported, not thrown',
+  absent.ok === false && typeof absent.detail === 'string' && absent.detail.length > 0, absent)
+// Distinguishability is the property the evidence exists for, so that is what is
+// pinned — not the presence of two words. A message that printed a fixed code
+// would satisfy the wording while making the two causes identical again.
+const absentUser = await homeOf(distro, 'definitely-no-such-user-xyz')
+check('an unresolvable home reports the probe evidence, not just a guess',
+  absent.ok === false && absent.detail.includes('探针') && absent.detail.includes('退出码'), absent.detail)
+// The attempt COUNT is the property; the wording is only how it is reported. A
+// message that printed the retry phrase without retrying would satisfy a word
+// match, which is the same weakness this suite already had to fix twice.
+check('an inconclusive probe is retried before it is reported',
+  absent.ok === false && absent.attempts === 2, `attempts=${String(absent.attempts)} ${String(absent.detail)}`)
+check('a failed probe and an absent user do not read the same',
+  absent.ok === false && absentUser.ok === false
+  && absentUser.detail.includes('退出码 0')
+  && !absent.detail.includes('退出码 0'),
+  `failed probe: ${absent.detail}\n        absent user: ${absentUser.detail}`)
 
 console.log('\nexec-boundary validation')
 let threw = false
