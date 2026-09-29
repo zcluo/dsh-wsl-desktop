@@ -3,6 +3,11 @@
   "version": "0.2.1",
   "type": "module",
   "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
   "prepack": "node -e \"require('node:fs').rmSync('lib/wsl/__pycache__', { recursive: true, force: true })\"",
   "engines": {
     "node": ">=22.19"
@@ -22,7 +27,9 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-api-workspace-controller",
-        "@deepseek-ai/dsh-client-ui-workspace"
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-api-remotes"
       ]
     }
   },

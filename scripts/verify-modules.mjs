@@ -18,6 +18,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
@@ -31,7 +32,7 @@ let failures = 0
  * @param {unknown} [detail] - evidence shown on failure.
  */
 function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${String(detail)}`}`)
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
 
@@ -95,6 +96,63 @@ for (const relative of ALL) {
     (source.match(/FS_SANDBOX_DENIED/g) ?? []).length >= 2)
   check('containment compares with a separator boundary',
     /isLexicallyUnderHost/.test(fence) && /startsWith\(bounded\)/.test(fence))
+}
+
+// The distribution a session runs in must survive the shell→subprocess seam.
+// The shell executor hands the subprocess provider a LINUX `cwd`, and a Linux
+// path carries no distribution: the provider re-derived it from `config.distro`
+// or the Windows default, so a workspace in another distribution ran its
+// commands — and its confinement probes — in the wrong one. The live suite saw
+// it as `sudo: /usr/local/sbin/dsh-wsl-confine: command not found` whenever the
+// default distribution had no helper installed. Pin both halves of the seam.
+{
+  const shell = await readFile(join(pluginRoot, 'lib/wsl/shell.js'), 'utf8')
+  const subprocess = await readFile(join(pluginRoot, 'lib/wsl/subprocess.js'), 'utf8')
+  check('the shell executor names the distribution on its spawn spec',
+    /wslDistro:\s*plan\.distro/.test(shell))
+  check('the provider strips the private field before delegating',
+    /const\s*\{\s*wslDistro,\s*\.\.\.request\s*\}\s*=\s*spec/.test(subprocess))
+  check('spawn resolves the plan from the named distribution',
+    /this\.planFor\(request\.cwd,\s*wslDistro\)/.test(subprocess))
+  check('spawnTerminal resolves the plan from the named distribution',
+    /this\.planFor\(spec\.cwd,\s*spec\.wslDistro\)/.test(subprocess))
+  check('the context-free executable lookup prefers the session distribution',
+    /this\.activeDistro\s*\?\?\s*this\.config\.distro/.test(subprocess))
+}
+
+// The browser half is reachable ONLY through `exports["./client"]`. The host's
+// client-modules registry refuses to compose a package that declares
+// `dsh.client` without that subpath — and because the registry is a REQUIRED
+// host plugin, one such package takes the whole desktop down at startup:
+//   DesktopHostFatalError: dsh: startup failed: 1 required plugin did not activate
+//     client-modules: dsh-wsl-desktop declares dsh.client but exports no "./client" bundle
+// The v0.2.0 release-packaging rewrite of package.json dropped the exports map
+// and shipped exactly that, so 0.2.0/0.2.1 could not load at all. `main` is not
+// a substitute: Node ignores it for the `./client` subpath.
+{
+  const pkg = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8'))
+  /** The path form of one exports entry: a bare string, or its `default`. */
+  const exportPath = (entry) => {
+    if (typeof entry === 'string') return entry
+    if (entry === null || typeof entry !== 'object') return undefined
+    return typeof entry.default === 'string' ? entry.default : undefined
+  }
+  const rel = exportPath(pkg.exports?.['./client'])
+  const rootRel = exportPath(pkg.exports?.['.'])
+  check('package.json exports "./client" for the declared client bundle', typeof rel === 'string', pkg.exports)
+  check('package.json exports "." so the row resolves the package root', typeof rootRel === 'string', pkg.exports)
+  check('the client entry point is not the host entry point', typeof rel !== 'string' || rel !== pkg.main, `client=${String(rel)} main=${String(pkg.main)}`)
+  let present = false
+  if (typeof rel === 'string') {
+    try {
+      await readFile(join(pluginRoot, rel), 'utf8')
+      present = true
+    } catch {
+      present = false
+    }
+  }
+  check('the declared client entry point exists on disk', present, rel)
+  check('the declared client platform is web', pkg.dsh?.client?.platform === 'web', pkg.dsh?.client)
 }
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
