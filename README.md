@@ -178,10 +178,10 @@ node scripts/verify-pty-handle.mjs   # JS 终端句柄（对着真实桥跑）
 node scripts/verify-client-ui.mjs    # 浏览器半边的静态检查（不注册槽位、定位几何、宿主调用）
 node scripts/verify-client-dom.mjs   # 浏览器半边的行为检查：在 jsdom 里跑真实 factory（挂载位置 / 放不下时的收敛 / 隐藏跟随 / 工作区行图标）
 node scripts/verify-modules.mjs      # 宿主半边的结构性钉子：发行版接缝 + `exports` 清单（`./client` 是硬契约）
-node scripts/verify-sync.mjs         # 对一次性 profile 跑真 sync.ps1：代次保留规则三场景
+node scripts/verify-sync.mjs         # 对一次性 profile 跑真 sync.ps1：代次保留四场景（链接可用 / 悬空 / 无链接 / 从未 stage 过）
 node scripts/verify-route.mjs        # 活体：验收路由（需要运行中的宿主）
 node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（可带若干标记串）
-.\scripts\sync.ps1                   # stage 进 profile（随后由 plugin_manager 安装）
+.\scripts\sync.ps1                   # stage 进 profile；已装过时同时把链接重指向新一代（首次安装仍由 plugin_manager 接线）
 ```
 
 发行版与用户不再硬编码：`DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DSH_WSL_HOME` 可覆盖，默认从 `wsl.exe` 现读。
@@ -211,7 +211,7 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 git clone https://github.com/zcluo/dsh-wsl-desktop.git
 cd dsh-wsl-desktop
 node scripts/verify-all.mjs        # 离线全量
-.\scripts\sync.ps1                 # stage 进 profile（开发者模式：developerTools 开启）
+.\scripts\sync.ps1                 # stage 进 profile 并重指向（开发者模式：developerTools 开启；首次安装需先接线）
 # 重启 DSH Desktop → verify-post-restart.mjs
 ```
 
@@ -219,7 +219,7 @@ node scripts/verify-all.mjs        # 离线全量
 
 宿主代码改动需要**重启 DSH Desktop** 才会加载；重启后先跑 `verify-post-restart.mjs`，它会在旧模块仍生效时直接报「请重启」而不是给假绿。**浏览器半边改动不需要重启**：就地改写当前那一代的 `lib/client.js` 会改变投放 rev 并由 `/plugins/events` 推给已打开的页面（`patchReload: live`）。`verify-post-restart.mjs` 会从 `/plugins/events` 读实时模块图并取回真正投放的那份 bundle 来断言这一点。 **注意 rev 不是即时更新的**：宿主惰性重建客户端 bundle，就地改写后立刻回读 `/plugins/events` 仍会拿到旧 rev（实测数秒后才变）。"文件已改"因此不等于"投放已变"，验证要读到新 rev 为止，否则会得出错误的"已部署"结论。
 
-`sync.ps1` 每次 stage 到新的时间戳目录（Node 按 URL 缓存模块，同目录重装仍服务旧代码），但**保留当前 profile 链接着的那一代**：运行中的宿主生成的预设里写的是它自己目录内的绝对模块路径，把那个目录删掉会让所有 WSL 会话在下一次重启前失效。 链接**无法定位那一代**时（profile 根本没有链接，或链接指向的目录已消失），`sync.ps1` 改为**保留全部代次并告警**——这两种情形下过滤器都拿不到可比对的路径，继续删就是拿同样的爆炸半径去猜。这条护栏由 `scripts/verify-sync.mjs` 在一次性 profile 上跑真脚本验证（三个场景：链接可用 / 链接悬空 / 无链接）。
+`sync.ps1` 每次 stage 到新的时间戳目录（Node 按 URL 缓存模块，同目录重装仍服务旧代码；时间戳只到秒，同一秒内的第二次运行会顺延到不冲突的名字，否则 loader 会静默忽略它已经挂载过的 row id），并**把 profile 链接重指向刚 stage 的这一代**，同时改写 profile 的 `package.json` 与 `pnpm-lock.yaml`——否则下一次 `pnpm install` 会按 manifest 把链接 reconcile 回旧代，"已经 stage 了"就成了假象。**保留规则是"保留最新的两代"**：链接一旦移动，"链接着的那一代"正是没人在跑的那一代，而运行中的宿主解析的是它前一代；只保留链接会在下一次 stage 时删掉正在使用的那一代，让所有 WSL 会话在下一次重启前失效。链接**无法定位那一代**时（profile 根本没有链接，或链接指向的目录已消失）`sync.ps1` **保留全部代次并告警**；profile **从未 stage 过**（连 `plugins/` 都没有）同样告警并点明那个链接路径——这时它只是把文件放好，**真正生效要等 profile 装过这个插件（首次安装由 plugin_manager 接线）**。删链接走 .NET 而不是 `Remove-Item`：Windows PowerShell 5.1 对 junction 抛 NullReferenceException，会让重指向中途失败而旧代仍被链接。以上全部由 `scripts/verify-sync.mjs` 在一次性 profile 上跑真脚本验证（四个场景：链接可用 / 悬空 / 无链接 / 从未 stage 过，最后一个钉住"告警必须写出链接路径"）。
 
 ## fs 工具的围栏
 
