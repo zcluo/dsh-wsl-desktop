@@ -23,6 +23,17 @@ $src = Split-Path -Parent $PSScriptRoot
 $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
 $plugins = Join-Path $dshHome "profiles\$Profile\plugins"
 $stamp = Get-Date -Format 'MMddHHmmss'
+# The stamp is second-resolution, so two runs inside one second would otherwise
+# share a directory AND a row id. The loader refuses a row id it has already
+# mounted, so the second stage would be ignored in silence rather than fail —
+# and the copy into an existing directory fails loudly first. Bump until both
+# are free.
+$baseStamp = $stamp
+$bump = 1
+while (Test-Path (Join-Path $plugins "dsh-wsl-desktop-$stamp")) {
+  $bump += 1
+  $stamp = "$baseStamp-$bump"
+}
 $dest = Join-Path $plugins "dsh-wsl-desktop-$stamp"
 
 # Drop every earlier staging directory EXCEPT the one the profile currently
@@ -75,8 +86,18 @@ if (Test-Path $plugins) {
   if ($null -eq $linked -or -not (Test-Path $linked)) {
     Write-Warning "cannot identify the generation the profile serves (link=$link resolved=$linked); keeping every staged generation"
   } else {
+    # Keep the two newest, not merely the linked one. This run is about to point
+    # the link at a generation nothing has loaded yet, so from the next run on
+    # the linked generation is the one NOBODY is running — the generation the
+    # running host resolves is the one staged before it. Deleting that one breaks
+    # every WSL session until the next restart, which is the failure the comment
+    # above warns about.
+    $keep = @(Get-ChildItem $plugins -Directory -Filter 'dsh-wsl-desktop*' |
+      Sort-Object -Property Name -Descending |
+      Select-Object -First 2 -ExpandProperty FullName)
+    $keep = @($keep + $linked | Select-Object -Unique)
     Get-ChildItem $plugins -Directory -Filter 'dsh-wsl-desktop*' |
-      Where-Object { $_.FullName -ne $linked } |
+      Where-Object { $keep -notcontains $_.FullName } |
       Remove-Item -Recurse -Force
   }
 }
@@ -98,5 +119,42 @@ $patchPath = Join-Path $dest 'cordis.patch.yml'
 $patch = Get-Content $patchPath -Raw
 $patch = $patch -replace "(?m)^(\s*name: 'dsh-wsl-desktop')\s*$", "`${1}`n      config:`n        developerTools: true"
 Set-Content $patchPath $patch -NoNewline
+
+# Point the profile at the generation just staged.
+#
+# Staging alone deploys nothing: the host resolves whatever the profile link
+# points at, so a run that only copies a directory leaves the previous generation
+# loaded, and "stage then restart" silently loads old code while both the source
+# tree and the staged copy say otherwise. The profile's manifest and lockfile are
+# updated with it, because a later `pnpm install` reconciles the link to the
+# manifest and would otherwise undo this.
+if ($null -eq $linked -or -not (Test-Path $link)) {
+  Write-Warning "profile link $link does not exist; staged $dest but nothing will resolve it until the profile is installed"
+} else {
+  $oldName = Split-Path -Leaf $linked
+  $newName = Split-Path -Leaf $dest
+  # `Remove-Item` on a directory reparse point is not reliable: Windows
+  # PowerShell 5.1 throws NullReferenceException for a junction, which aborts the
+  # re-point so the run fails loudly with the OLD generation still linked — and
+  # the very next run under pwsh would then delete a generation that is still
+  # named nowhere. Deleting the reparse point through .NET takes the LINK only,
+  # never its target, for a junction and for a symbolic link alike.
+  [System.IO.Directory]::Delete($link, $false)
+  try {
+    New-Item -ItemType SymbolicLink -Path $link -Target $dest | Out-Null
+  } catch {
+    # Without the symlink privilege the profile falls back to a junction, which
+    # this script already reads on the next run.
+    New-Item -ItemType Junction -Path $link -Target $dest | Out-Null
+  }
+  $profileRoot = Split-Path -Parent (Split-Path -Parent $link)
+  foreach ($name in @('package.json', 'pnpm-lock.yaml')) {
+    $file = Join-Path $profileRoot $name
+    if (-not (Test-Path $file)) { continue }
+    $text = Get-Content $file -Raw
+    if ($text -notlike "*$oldName*") { continue }
+    Set-Content $file -NoNewline ($text.Replace($oldName, $newName))
+  }
+}
 
 Write-Output $dest
