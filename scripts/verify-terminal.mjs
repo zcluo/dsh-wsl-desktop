@@ -157,7 +157,16 @@ check('the shell survives the interrupt', await until(() => out.includes('ALIVE-
 
 const terminated = await controlRequest({ op: 'terminate' })
 check('terminate is acknowledged and the session was signalled', terminated.ok === true && terminated.terminated === true, terminated)
-check('the session settles after termination', await until(() => data.exitCode !== null, 8000), `exit=${String(data.exitCode)}`)
+const exited = await until(() => data.exitCode !== null, 8000)
+check('the session settles after termination', exited, `exit=${String(data.exitCode)}`)
+// The value, not merely that there is one: two paths wait on this child —
+// `terminate()` reaps it to learn the group died, the pump loop reaps it to
+// report a status — and whoever reaps second gets ChildProcessError. Measured
+// with the status dropped on the reaping path: this read 0 on every run, so a
+// session killed a moment earlier was indistinguishable from a clean exit, and
+// the assertion above passed on it. 129 is 128+SIGHUP, the first signal sent.
+check('a terminated session reports the signal, not a clean exit',
+  typeof data.exitCode === 'number' && data.exitCode > 128, `exit=${String(data.exitCode)}`)
 
 control.stdin.end()
 control.kill()

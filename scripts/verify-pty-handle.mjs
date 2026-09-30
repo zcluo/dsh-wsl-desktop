@@ -121,5 +121,19 @@ const settled = await Promise.race([
 ])
 check('the session process settles after termination', settled === true)
 
+// The bridge's own `terminate` reaps the child, so the pump loop's waitpid
+// raises ChildProcessError — and a session that was killed must not report the
+// clean-exit code. That carry-over is verified where the bridge's OWN status is
+// observable (`verify-terminal.mjs`, which never kills the bridge); this handle
+// races it, so what this asserts is the outcome of that race.
+const outcome = await terminal.done
+// Printed on every run, because either side can win it: the bridge answers the
+// terminate and then exits with its own status, while the handle kills the
+// bridge process right after that answer. Either the killed bridge (no code) or
+// the bridge's own 128+signal may land here — a clean 0 may not.
+console.log(`        terminated outcome: exitCode=${String(outcome.exitCode)} signal=${String(outcome.signal)}`)
+check('termination leaves the bridge signalled, not exited cleanly',
+  outcome.exitCode === null || outcome.exitCode > 128, `exitCode=${String(outcome.exitCode)}`)
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1

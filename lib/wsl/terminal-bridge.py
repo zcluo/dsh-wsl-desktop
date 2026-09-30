@@ -74,6 +74,10 @@ class Bridge:
         self.pid = None
         self.shell_pgrp = None
         self.stdin_open = True
+        # The wait status `terminate()` reaps, held for the pump loop: two paths
+        # wait on this child, and the status exists only in whichever of them
+        # reaped it.
+        self.exit_status = None
         self.control_buffer = b""
         self.revision = 0
         self.last_state = None
@@ -203,11 +207,17 @@ class Bridge:
             deadline = time.monotonic() + wait
             while time.monotonic() < deadline:
                 try:
-                    done, _ = os.waitpid(self.pid, os.WNOHANG)
+                    done, status = os.waitpid(self.pid, os.WNOHANG)
                 except ChildProcessError:
                     # The pump loop already reaped the child: session gone.
                     return True
                 if done == self.pid:
+                    # Keep it. This reap wins the race whenever the host asks for
+                    # a terminate, and discarding the status here left the pump
+                    # loop nothing to report but a substituted 0 — so a session
+                    # that had just been signalled exited "cleanly", and every
+                    # caller reading the exit code saw a successful run.
+                    self.exit_status = status
                     return True
                 time.sleep(0.05)
         return False
@@ -260,7 +270,10 @@ class Bridge:
             try:
                 done, status = os.waitpid(self.pid, os.WNOHANG)
             except ChildProcessError:
-                done, status = self.pid, 0
+                # `terminate()` reaped this child first and kept the status:
+                # taking that one — never a substituted 0 — is what makes a
+                # killed session report 128+n instead of a clean exit.
+                done, status = self.pid, self.exit_status
             if done == self.pid:
                 self.drain()
                 return exit_code_of(status)
