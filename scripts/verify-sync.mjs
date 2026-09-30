@@ -79,7 +79,7 @@ function said(output, pattern) {
 /**
  * Run the staging script once against a disposable profile.
  * @param {object} options - the scenario.
- * @param {'linked'|'dangling'|'unlinked'} options.link - what the profile link looks like.
+ * @param {'linked'|'dangling'|'unlinked'|'fresh'} options.link - what the profile link looks like.
  * @param {number} [options.runs] - how many times to run the script (two models a
  * second stage before the desktop was ever restarted).
  * @returns {Promise<object>} the fixture and everything the run left behind.
@@ -88,7 +88,7 @@ async function scenario({ link, runs = 1 }) {
   const home = await mkdtemp(join(tmpdir(), 'dsh-wsl-sync-'))
   const profile = join(home, 'profiles', 'verify')
   const plugins = join(profile, 'plugins')
-  await mkdir(plugins, { recursive: true })
+  const modules = join(profile, 'node_modules')
   // Three generations, so "keep the two newest" is a rule that can be observed
   // rather than a coincidence: 0002 is linked, 0001 was staged before it and is
   // what a desktop that has not restarted since would be running, 0000 is older
@@ -96,32 +96,40 @@ async function scenario({ link, runs = 1 }) {
   const linked = join(plugins, 'dsh-wsl-desktop-0002')
   const previous = join(plugins, 'dsh-wsl-desktop-0001')
   const stale = join(plugins, 'dsh-wsl-desktop-0000')
-  for (const dir of [linked, previous, stale]) {
-    await mkdir(dir, { recursive: true })
-  }
-  // The profile's own manifest and lockfile, in the shape the installer leaves
-  // them: both name the generation the link resolves.
-  const spelled = linked.split('\\').join('/')
-  await writeFile(join(profile, 'package.json'), JSON.stringify({
-    name: 'verify',
-    dependencies: { 'dsh-wsl-desktop': `link:${spelled}` },
-  }, null, 2), 'utf8')
-  await writeFile(join(profile, 'pnpm-lock.yaml'), [
-    'importers:',
-    '  .:',
-    '    dependencies:',
-    '      dsh-wsl-desktop:',
-    `        specifier: link:${spelled}`,
-    '        version: link:plugins/dsh-wsl-desktop-0001',
-    '',
-  ].join('\n'), 'utf8')
-  const modules = join(profile, 'node_modules')
-  if (link !== 'unlinked') {
-    await mkdir(modules, { recursive: true })
-    // A junction, because the profile falls back to one when the account has no
-    // symlink privilege — and the script has to read that spelling too.
-    await symlink(linked, join(modules, 'dsh-wsl-desktop'), 'junction')
-    if (link === 'dangling') await rm(linked, { recursive: true, force: true })
+  // `fresh` is a profile that has NEVER been staged into: no `plugins/`, no
+  // generations, no manifest entry naming the plugin. That is the shape the real
+  // desktop profile turned out to have, and it is the case whose warning has to
+  // name the link it cannot resolve.
+  if (link !== 'fresh') {
+    await mkdir(plugins, { recursive: true })
+    for (const dir of [linked, previous, stale]) {
+      await mkdir(dir, { recursive: true })
+    }
+    // The profile's own manifest and lockfile, in the shape the installer leaves
+    // them: both name the generation the link resolves.
+    const spelled = linked.split('\\').join('/')
+    await writeFile(join(profile, 'package.json'), JSON.stringify({
+      name: 'verify',
+      dependencies: { 'dsh-wsl-desktop': `link:${spelled}` },
+    }, null, 2), 'utf8')
+    await writeFile(join(profile, 'pnpm-lock.yaml'), [
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      dsh-wsl-desktop:',
+      `        specifier: link:${spelled}`,
+      '        version: link:plugins/dsh-wsl-desktop-0001',
+      '',
+    ].join('\n'), 'utf8')
+    if (link !== 'unlinked') {
+      await mkdir(modules, { recursive: true })
+      // A junction, because the profile falls back to one when the account has no
+      // symlink privilege — and the script has to read that spelling too.
+      await symlink(linked, join(modules, 'dsh-wsl-desktop'), 'junction')
+      if (link === 'dangling') await rm(linked, { recursive: true, force: true })
+    }
+  } else {
+    await mkdir(profile, { recursive: true })
   }
   let error = null
   let output = ''
@@ -147,8 +155,8 @@ async function scenario({ link, runs = 1 }) {
   } catch {
     linkTarget = null
   }
-  const manifest = await readFile(join(profile, 'package.json'), 'utf8')
-  const lock = await readFile(join(profile, 'pnpm-lock.yaml'), 'utf8')
+  const manifest = link === 'fresh' ? '' : await readFile(join(profile, 'package.json'), 'utf8')
+  const lock = link === 'fresh' ? '' : await readFile(join(profile, 'pnpm-lock.yaml'), 'utf8')
   return { home, profile, plugins, after, output, error, linkTarget, manifest, lock, linked, staged }
 }
 
@@ -238,6 +246,21 @@ console.log('\nno profile link at all')
   check('every generation is kept rather than guessed at',
     run.after.includes('dsh-wsl-desktop-0000') && run.after.includes('dsh-wsl-desktop-0001'), run.after)
   check('and the run says so', said(run.output, /keeping every staged generation/i), run.output)
+  await rm(run.home, { recursive: true, force: true })
+}
+
+console.log('\nnever staged into: no plugins directory at all')
+{
+  const run = await scenario({ link: 'fresh' })
+  check('the staging script ran', !run.error, run.error)
+  // The whole run has one thing to say: nothing resolves this generation until
+  // the profile is installed, and the reader needs the path it cannot resolve.
+  // Measured on the real desktop profile before this case existed — the warning
+  // read "profile link  does not exist", with the path missing, because `$link`
+  // was only assigned when `plugins/` already existed.
+  check('the warning names the link that does not exist',
+    said(run.output, /profile link .+node_modules.dsh-wsl-desktop does not exist/), run.output)
+  check('and the generation is still staged', run.after.length === 1, run.after)
   await rm(run.home, { recursive: true, force: true })
 }
 

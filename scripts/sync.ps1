@@ -41,9 +41,14 @@ $dest = Join-Path $plugins "dsh-wsl-desktop-$stamp"
 # paths inside its own directory, so deleting that directory breaks every WSL
 # session until the next restart. Keeping two generations bounds the cost of the
 # retained copy to one stale bundle.
+# Resolved BEFORE the plugins directory is tested. A profile that has never been
+# staged into has no `plugins/` at all, and the warning about an unresolvable
+# stage still has to name the link it is talking about — an empty path there is
+# the one fact the reader needs. (Measured on the real profile: the message read
+# "profile link  does not exist".)
+$link = Join-Path $dshHome "profiles\$Profile\node_modules\dsh-wsl-desktop"
+$linked = $null
 if (Test-Path $plugins) {
-  $link = Join-Path $dshHome "profiles\$Profile\node_modules\dsh-wsl-desktop"
-  $linked = $null
   if (Test-Path $link) {
     $item = Get-Item $link -Force
     # Any reparse point counts, not just a symbolic link: without Windows
