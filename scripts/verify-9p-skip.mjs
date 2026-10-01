@@ -19,7 +19,9 @@
  *
  * The two-distribution path is pinned as a CONTROL: a skip that fires
  * unconditionally, or one that also swallows the facts the share can still answer,
- * reddens it.
+ * reddens it. The control classifies the machine from `wsl.exe -l -q` — never from
+ * this process's `DSH_WSL_OTHER_DISTRO`, which every child strips — so an override
+ * exported in the developer's shell cannot make the pin disagree with its own children.
  *
  * Run: node scripts/verify-9p-skip.mjs
  */
@@ -27,7 +29,7 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveDistro, resolveOtherDistro } from './env.mjs'
+import { listDistros, resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -78,14 +80,49 @@ function runProbe(env) {
 }
 
 /**
- * The SKIP line of a run, and the precondition it names after the em dash.
+ * The whole SKIP block of a run: the `  SKIP  ` line and the 8-space-indented lines that
+ * belong to it, ending at the first line that does not.
+ *
+ * The block is what a reader actually reads, and the checks below must be satisfied by
+ * IT — the same words appearing on a FACT line elsewhere in the run are not the SKIP
+ * naming them — so nothing here greps the run's whole output.
  * @param {string} out - the child's combined output.
+ * @returns {string[]} the block's lines; empty when the run printed no SKIP.
+ */
+function skipBlockOf(out) {
+  const lines = out.split('\n')
+  const start = lines.findIndex((entry) => entry.startsWith('  SKIP  '))
+  if (start === -1) return []
+  const block = [lines[start]]
+  for (const next of lines.slice(start + 1)) {
+    if (!/^ {8}\S/.test(next)) break
+    block.push(next)
+  }
+  return block
+}
+
+/**
+ * The SKIP line of a block, and the precondition it names after the em dash.
+ * @param {string[]} block - the block from skipBlockOf.
  * @returns {{line: string, reason: string}} the SKIP line and its reason (both empty when absent).
  */
-function skipLineOf(out) {
-  const line = out.split('\n').find((entry) => entry.startsWith('  SKIP  ')) ?? ''
+function skipLineOf(block) {
+  const line = block[0] ?? ''
   const reason = line.includes('—') ? line.slice(line.indexOf('—') + 1).trim() : ''
   return { line, reason }
+}
+
+/**
+ * Whether one cross-share row was MEASURED rather than merely printed: a row whose stat
+ * failed is recorded as `UNMEASURED - <code>`, and a control that accepted that would
+ * pass while the fact was not established.
+ * @param {string} out - the child's combined output.
+ * @param {string} label - the row's FACT label.
+ * @returns {boolean} true when the row is present and not UNMEASURED.
+ */
+function measuredRow(out, label) {
+  const line = out.split('\n').find((entry) => entry.startsWith(`  FACT    ${label} —`)) ?? ''
+  return line !== '' && !line.includes('UNMEASURED')
 }
 
 /**
@@ -110,6 +147,30 @@ function failureLinesOf(out) {
 }
 
 /**
+ * Whether the MACHINE has a second distribution, and which — classified from `wsl.exe`'s
+ * own list, NEVER from this process's environment.
+ *
+ * `runProbe` strips `DSH_WSL_OTHER_DISTRO` from every child, so classifying from the
+ * inherited override makes the parent's view and the children's reality disagree: an empty
+ * (or self-pointed) override exported in the developer's shell classified the machine as
+ * having no second share while the children found one, and the control then reported a
+ * healthy machine red. `listDistros()` is the same answer the child's own
+ * `resolveOtherDistro` reaches once the override is gone.
+ * @returns {{hasSecond: boolean, other: string}} the classification, and the name when there is one.
+ */
+function machineSecondDistro() {
+  try {
+    const other = listDistros().find((name) => name.toLowerCase() !== distro.toLowerCase()) ?? ''
+    return { hasSecond: other !== '', other }
+  } catch {
+    // A list that cannot be read is also what makes the CHILD skip (its resolveOtherDistro
+    // throws and the probe reports the missing precondition), so this machine offers no
+    // second share for this run.
+    return { hasSecond: false, other: '' }
+  }
+}
+
+/**
  * The last few lines of a child's output, for a failure detail that stays readable.
  * @param {string} out - the child's combined output.
  * @param {number} [lines] - how many trailing lines to keep.
@@ -126,7 +187,9 @@ function tailOf(out, lines = 3) {
  * @param {string} reasonMustName - a token the named precondition must contain.
  */
 function assertSkipContent(where, run, reasonMustName) {
-  const { line, reason } = skipLineOf(run.out)
+  const block = skipBlockOf(run.out)
+  const blockText = block.join('\n')
+  const { line, reason } = skipLineOf(block)
   check(`${where}: exit 2, so verify-all reports the probe as SKIP instead of as a pass`,
     run.code === 2,
     `exit ${run.code}; the run's FAIL/SKIP lines and its end:\n${failureLinesOf(run.out)}\n${tailOf(run.out)}`)
@@ -136,12 +199,11 @@ function assertSkipContent(where, run, reasonMustName) {
     reason.length > 0 && reason.includes(reasonMustName),
     line || `(no "  SKIP  " line); the run ends:\n${tailOf(run.out)}`)
   check(`${where}: the SKIP names the three facts that went unmeasured`,
-    CROSS_SHARE_LABELS.every((label) => run.out.includes(label)),
-    CROSS_SHARE_LABELS.map((label) => `${label}: ${run.out.includes(label)}`).join('; '))
-  const remedy = run.out.split('\n').find((entry) => entry.includes('Remedy')) ?? ''
+    CROSS_SHARE_LABELS.every((label) => blockText.includes(label)),
+    `the SKIP block:\n${blockText || '(none)'}\n${CROSS_SHARE_LABELS.map((label) => `${label}: ${blockText.includes(label)}`).join('; ')}`)
   check(`${where}: the SKIP names the remedy`,
-    run.out.includes('DSH_WSL_OTHER_DISTRO') && run.out.includes('install a second WSL distribution'),
-    remedy || `(no remedy line naming DSH_WSL_OTHER_DISTRO and a second distribution); the run ends:\n${tailOf(run.out)}`)
+    blockText.includes('DSH_WSL_OTHER_DISTRO') && blockText.includes('install a second WSL distribution'),
+    blockText || `(the run printed no SKIP block); the run ends:\n${tailOf(run.out)}`)
   const tail = run.out.split('\n').find((entry) => entry.includes('WERE NOT MEASURED')) ?? ''
   check(`${where}: the tail counts the unmeasured facts instead of declaring a clean profile`,
     /\b3\b/.test(tail), tail || `(no line saying the facts were not measured); the run ends:\n${tailOf(run.out)}`)
@@ -178,27 +240,20 @@ assertSkipContent('empty override', emptyOverride, 'DSH_WSL_OTHER_DISTRO')
 // not unconditional. On a machine with one distribution the control is the same
 // branch as A, and says so rather than asserting a pass that cannot happen here.
 console.log('\nthe control: the machine\'s own answer')
-const machineOther = (() => {
-  try {
-    return resolveOtherDistro(distro) ?? ''
-  } catch {
-    return ''
-  }
-})()
-const machineHasSecond = machineOther !== '' && machineOther.toLowerCase() !== distro.toLowerCase()
+const machineSecond = machineSecondDistro()
 const control = runProbe({})
-if (machineHasSecond) {
+if (machineSecond.hasSecond) {
   check('control: with a second share present the probe exits 0 (the skip is conditional)',
-    control.code === 0, `exit ${control.code} with "${machineOther}" installed; the run ends:\n${tailOf(control.out)}`)
+    control.code === 0, `exit ${control.code} with "${machineSecond.other}" installed; the run ends:\n${tailOf(control.out)}`)
   check('control: no SKIP is printed when the second share answered',
-    !/^ {2}SKIP {2}/m.test(control.out),
+    skipBlockOf(control.out).length === 0,
     control.out.split('\n').filter((entry) => entry.includes('SKIP')).join('\n'))
-  check('control: all three cross-share identity rows are measured',
-    CROSS_SHARE_LABELS.every((label) => control.out.includes(`FACT    ${label} —`)),
+  check('control: all three cross-share identity rows are MEASURED, not merely printed',
+    CROSS_SHARE_LABELS.every((label) => measuredRow(control.out, label)),
     control.out.split('\n').filter((entry) => entry.includes('cross-share identity')).join('\n'))
 } else {
-  check(`control: this machine offers no second share ("${machineOther}"), so the unforced run skips too`,
-    control.code === 2 && skipLineOf(control.out).line !== '', `exit ${control.code}; the run ends:\n${tailOf(control.out)}`)
+  check(`control: this machine lists no second distribution beyond "${distro}", so the unforced run skips too`,
+    control.code === 2 && skipBlockOf(control.out).length > 0, `exit ${control.code}; the run ends:\n${tailOf(control.out)}`)
 }
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
