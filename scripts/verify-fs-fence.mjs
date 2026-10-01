@@ -225,15 +225,60 @@ if (otherReachable) {
   check('a same-spelled path of ANOTHER distribution is lexically outside',
     isLexicallyUnderHost(crossDistro, root) === false,
     `${crossDistro} vs ${root}`)
-  // The walk RUNS here, and this is what makes the denial mean something: the
-  // root exists (the precondition above), and this target's ancestors on the
-  // other share — /tmp and the share root — are real directories, so the
-  // comparison is against real foreign inodes rather than against nothing.
-  // Deleting the inode half of the walk (comparing `dev` alone, which is 0 on
-  // every 9P share) turns this check RED.
+  // This denial USED to be the identity walk's doing: the root exists (the
+  // precondition above), and the target's ancestors on the other share — /tmp and
+  // the share root — are real directories, so the comparison was against real
+  // foreign inodes rather than against nothing. It is now the DISTRIBUTION
+  // BINDING's, which refuses a foreign target before any stat. The fixture root
+  // still matters (it is what made the pre-binding behaviour a real comparison
+  // instead of a missing-root short-circuit), and the check below is the one that
+  // proves WHICH of the two answered.
   check('the cross-distribution target is denied by the full check too',
     await isUnderHost(crossDistro, root) === false,
     `${crossDistro} vs ${root}`)
+
+  // The assertion this task exists for, and the one the previous task measured and
+  // deliberately left unwritten: a root whose identity is SHARED with the other
+  // share. The distribution's /tmp is such a root — `workspace-write`
+  // ALWAYS grants it (writableHostRootsFor) — and F3 measured both shares
+  // reporting the SAME (dev,ino) for it (dev 0, ino 1). Reaching the walk with
+  // this pair therefore AUTHORIZES a foreign path: measured before the fix,
+  //   isUnderHost('\\wsl.localhost\<other>\tmp\x', '\\wsl.localhost\<distro>\tmp') === true.
+  // Task 4 wrote neither expectation — `true` pins a false containment as correct
+  // behaviour, and `false` was a check that could not pass until the fence bound
+  // the walk to the distribution. `false` is the honest expectation, and it is
+  // what makes this check the proof that the walk is NOT REACHED: a denial here
+  // cannot come from the identity comparison, because the identity comparison is
+  // exactly what authorizes it.
+  const sharedTmpIdentity = (() => {
+    try {
+      const here = statSync(canonicalHostPath(joinWslUnc(distro, '/tmp')), { bigint: true })
+      const there = statSync(canonicalHostPath(joinWslUnc(otherDistro, '/tmp')), { bigint: true })
+      return here.dev === there.dev && here.ino === there.ino
+    } catch {
+      return false
+    }
+  })()
+  const foreignProbe = joinWslUnc(otherDistro, '/tmp/dsh-fence-probe.txt')
+  check('a cross-distribution target is refused under a root whose identity it SHARES',
+    await isUnderHost(foreignProbe, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === false,
+    `${foreignProbe} vs ${distro} /tmp — the two shares collide on this host: ${sharedTmpIdentity}`
+      + (sharedTmpIdentity
+        ? ' (the walk alone AUTHORIZES this target, so the denial is the binding)'
+        : ' (no collision on this host, so the walk would deny it too)'))
+
+  // The control the binding cannot do without: a case-variant spelling of the SAME
+  // distribution must stay contained. Windows folds the UNC host and the
+  // distribution segment (isLexicallyUnderHost), so `wsl$` with an upper-cased
+  // distro is the same share — a binding that compared the segment case-SENSITIVELY
+  // would refuse a legitimate target, which is worse than the defect it closes.
+  // The `wsl$` host keeps the lexical fast path out of it, so the walk is what
+  // answers (measured true before the fix).
+  const sameDistroAlias = `\\\\wsl$\\${distro.toUpperCase()}\\tmp\\dsh-fence-probe.txt`
+  check('a case-variant spelling of the SAME distribution is still contained',
+    isLexicallyUnderHost(sameDistroAlias, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === false
+      && await isUnderHost(sameDistroAlias, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === true,
+    sameDistroAlias)
 } else {
   console.log('  SKIP  the two cross-distribution assertions (no second share to compare against; see the FAIL above)')
 }

@@ -23,7 +23,22 @@ import { isUnderHost } from '../lib/wsl/fence.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 
 const primary = resolveDistro()
-const other = process.argv[2] // a SECOND distribution, or the probe reports UNMEASURED
+// The second distribution must BE a second distribution. Without this guard one typo —
+// or a copy-pasted invocation — makes every F3 row compare a share with ITSELF, and the
+// identities are then trivially equal: the probe prints COLLIDES and the reader takes it
+// for the cross-share finding. The case-insensitive comparison is not cosmetic: a
+// distribution name is a Windows spelling, so `wsl.exe -d DEBIAN` names the same
+// distribution. Measured with the guard absent (`node scripts/probe-fence-facts.mjs
+// debian`): F3 reported COLLIDES for all three paths, and F5 reported `true` — which is
+// the LEXICAL fast path containing `<primary>/<home>/proj/src/main.py` under
+// `<primary>/<home>/proj`, not a walk verdict at all, while the parenthetical beside it
+// claimed the walk had short-circuited on the absent root.
+const requested = process.argv[2] // a SECOND distribution, or the probe reports UNMEASURED
+const otherIsPrimary = requested !== undefined && requested.toLowerCase() === primary.toLowerCase()
+const other = otherIsPrimary ? undefined : requested
+const unmeasured = requested === undefined
+  ? 'UNMEASURED - pass a second distribution as argv[2]'
+  : `UNMEASURED - "${requested}" IS the primary distribution; a share compared with itself reports a vacuous COLLIDES`
 const home = resolveLinuxHome()
 const rows = []
 
@@ -68,7 +83,7 @@ try {
 // dev-only comparison would print COLLIDES on every machine and answer nothing about
 // the inode half. Both halves are reported and both are compared.
 if (other === undefined) {
-  report('F3 cross-share identity', 'UNMEASURED - pass a second distribution as argv[2]')
+  report('F3 cross-share identity', unmeasured)
 } else {
   for (const rel of ['', '/tmp', '/home']) {
     try {
@@ -103,7 +118,7 @@ try {
 // false and never compares anything, so the row states that precondition instead of
 // letting "false" be read as "the walk ran and denied".
 if (other === undefined) {
-  report('F5 isUnderHost(foreign target, root)', 'UNMEASURED - pass a second distribution as argv[2]')
+  report('F5 isUnderHost(foreign target, root)', unmeasured)
 } else {
   try {
     const verdict = await isUnderHost(joinWslUnc(other, home + '/proj/src/main.py'), root)

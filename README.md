@@ -244,7 +244,7 @@ node scripts/verify-all.mjs        # 离线全量
 
 围栏的几条开放记录不是读源码能定的：9P 共享的大小写语义、realpath 会不会穿过 Linux 符号链接、两个发行版的共享是否报告相同的 (dev,ino)、fs-fence 夹具根是否存在——这些是**这台机器**的属性，不是仓库的属性。给猜测出来的答案写修复，等于给另一台机器写修复，所以先测再记。这张表是 D8 与四条待定记录（token / argv / FIFO / budget）的判定输入。
 
-`scripts/probe-fence-facts.mjs` 只读：每个探针都是 stat / realpath，不创建、不写任何东西；第二个发行版由 argv[2] 传入，缺省时 F3/F5 如实报 `UNMEASURED`——**UNMEASURED 是结果，不是失败**。
+`scripts/probe-fence-facts.mjs` 只读：每个探针都是 stat / realpath，不创建、不写任何东西；第二个发行版由 argv[2] 传入，缺省时 F3/F5 如实报 `UNMEASURED`——**UNMEASURED 是结果，不是失败**。argv[2] 与主发行版相同时（大小写不敏感）同样报 `UNMEASURED` 并说明原因：拿同一张共享跟自己比，每个 F3 行都会得到空洞的 `COLLIDES`，F5 甚至会报 `true`——那是词法快路包含了自己，不是行走的裁决，而旁边的注解会谎称行走已在缺失的根上短路。
 
 测量时间 **2026-10-01**；主发行版 `debian`，第二个发行版 `debian-dev`：
 
@@ -339,6 +339,8 @@ F5 isUnderHost(foreign target, root)                 UNMEASURED - pass a second 
 - **F5 身份行走没有跑**：根不存在时 `isUnderHost` 在 stat 根处短路返回 false（`lib/wsl/fence.js:82-83`），所以这一行的 `false` 是「根不存在」，不是「行走拒绝了跨发行版目标」。**F3 的相撞与 F5 的 false 不能合起来读成「跨发行版包含是安全的」。**
 
 **更正（Task 4，提交 `850e104`）**：F4/F5 记录的是 Task 4 **之前**的状态——当时那个夹具根就是 `<home>/proj`。`verify-fs-fence.mjs` 现在自己创建夹具根：发行版 `/tmp` 下一次性的 `dsh-fence-fixture-<pid>-<rand>`，用完即删（正常退出、断言失败、`process.exit`、未捕获异常、SIGINT/SIGTERM 都清理），并且**不再引用 `<home>/proj`**，所以跨发行版那条钉子在有发行版的机器上都会真的跑身份行走。上表的数字**不改**：它是当时的实测记录，探针输出至今逐字可复现——`<home>/proj` 仍然 ENOENT，套件仍然从不创建**那个**路径。
+
+**更正（Task 9）**：F3 的相撞不只是「记录在案」——它是**活的漏洞**，现已由围栏堵住。词法快路是唯一携带发行版的比较，它失败之后（正是跨发行版目标的情形）身份行走会按**目标自己的共享**重新 stat 每一级祖先，于是外来目标的祖先与本地根的 `(dev,ino)` 相比。发行版 `/tmp` 是 `workspace-write` **总是**授予的可写根（`writableHostRootsFor`），而两个共享为它报告同一元组——实测 `isUnderHost('\\wsl.localhost\debian-dev\tmp\x', '\\wsl.localhost\debian\tmp') === true`：一个被判定为「界内」的跨发行版写。修复把行走绑定到发行版（与 `contains()` 同一规则：**两侧都**解析成 WSL UNC 且发行版不同即拒绝，发行版段按 Windows 拼写大小写不敏感），修复后该调用为 `false`。规则刻意保持**窄**：盘符路径不带发行版，盘符目标与盘符根保持原有的身份裁决（套件对两个方向都有钉子），且实测盘符与共享两个命名空间不可能相撞（Windows 临时目录的 dev 是 NTFS 卷序列号 3764601112，每个 9P 共享报 0）。`verify-fs-fence.mjs` 新增两条钉子：共享身份的根下的跨发行版目标必须被拒（这条**只能**在行走没有跑到时通过——跑到就等于授权，所以它是「行走未被触达」的证明），以及同一发行版的大小写变体拼写（`wsl$` + 大写发行版）必须仍被包含（绑定不能反过来拒掉合法目标）。
 
 ## 许可证
 
