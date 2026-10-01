@@ -119,8 +119,10 @@ $patchPath = Join-Path $dest 'cordis.patch.yml'
 # This installer exists to exercise the plugin on a development machine, so it
 # turns the acceptance surface on. The shipped patch leaves it off: that surface
 # can run commands, and a real install does not need it. The transport fence
-# still applies to every caller; the token only decides which methods a
-# non-browser caller may reach.
+# still applies to every caller — a foreign Host/Origin is refused for token
+# holders too: a development token replaces only the browser-authentication arm
+# (401), never the rebinding arm (403). The token decides which methods a
+# non-browser caller may reach, not whether the fence runs.
 $patch = Get-Content $patchPath -Raw
 $patch = $patch -replace "(?m)^(\s*name: 'dsh-wsl-desktop')\s*$", "`${1}`n      config:`n        developerTools: true"
 Set-Content $patchPath $patch -NoNewline

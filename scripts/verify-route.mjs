@@ -7,11 +7,17 @@
  * commands inside a distribution, so the probe writes a file and the suite
  * asserts the file was never created.
  *
+ * The fence is probed again with a VALID token and a foreign Host — the case the
+ * security audit found missing. A development token replaces the
+ * browser-authentication arm only, never the Host/Origin arm, so the rebinding
+ * refusal must still stand for a token holder.
+ *
  * Requires the installed plugin behind a running host (`developerTools: true`,
  * which `scripts/sync.ps1` stages). Run: node scripts/verify-route.mjs [baseUrl]
  */
 
 import { existsSync, rmSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import {
   DEV_TOKEN_HEADER as HOST_TOKEN_HEADER, MAX_BODY_BYTES, bodyAdmission, dispatchAdmission, methodAdmission, preflight, tokenMatches,
 } from '../lib/http-admission.js'
@@ -43,29 +49,70 @@ function check(label, ok, detail) {
 /**
  * Post one envelope and return the raw response facts.
  * @param {object} envelope - the request body.
- * @param {{ contentType?: string, token?: string|null, body?: string }} [options] - wire overrides.
+ * @param {{ contentType?: string, token?: string|null, body?: string, host?: string }} [options] - wire overrides; `host` forges the Host header.
  * @returns {Promise<{ status: number, json: any|null, text: string }>} the response.
  */
 async function post(envelope, options = {}) {
   const contentType = options.contentType ?? 'application/json'
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'content-type': contentType,
-      ...(options.token === undefined || options.token === null
-        ? {}
-        : { [DEV_TOKEN_HEADER]: options.token }),
-    },
-    body: options.body ?? JSON.stringify(envelope),
-  })
-  const text = await response.text()
+  const body = options.body ?? JSON.stringify(envelope)
+  const headers = {
+    'content-type': contentType,
+    ...(options.token === undefined || options.token === null
+      ? {}
+      : { [DEV_TOKEN_HEADER]: options.token }),
+    ...(options.host === undefined ? {} : { host: options.host }),
+  }
+  const { status, text } = options.host === undefined
+    ? await fetchPost(headers, body)
+    : await rawPost(headers, body)
   let json = null
   try {
     json = JSON.parse(text)
   } catch {
     // A refusal may answer with an empty or non-JSON body; the status carries it.
   }
-  return { status: response.status, json, text }
+  return { status, json, text }
+}
+
+/**
+ * Post through the Fetch API.
+ * @param {Record<string, string>} headers - the wire headers.
+ * @param {string} body - the request body.
+ * @returns {Promise<{ status: number, text: string }>} the response facts.
+ */
+async function fetchPost(headers, body) {
+  const response = await fetch(endpoint, { method: 'POST', headers, body })
+  return { status: response.status, text: await response.text() }
+}
+
+/**
+ * Post through node:http, which — unlike the Fetch API — can forge the Host
+ * header. Fetch refuses to set it (a forbidden header name) and undici drops it
+ * in silence: measured, the server saw the URL's authority while an Origin
+ * header passed through untouched. A probe presenting a foreign authority needs
+ * this client, which is also the one a local script would use.
+ * @param {Record<string, string>} headers - the wire headers, `host` included.
+ * @param {string} body - the request body.
+ * @returns {Promise<{ status: number, text: string }>} the response facts.
+ */
+function rawPost(headers, body) {
+  const target = new URL(endpoint)
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: 'POST',
+      headers,
+    }, (response) => {
+      response.setEncoding('utf8')
+      let text = ''
+      response.on('data', (chunk) => { text += chunk })
+      response.on('end', () => resolve({ status: response.statusCode ?? 0, text }))
+    })
+    request.on('error', reject)
+    request.end(body)
+  })
 }
 
 console.log(`checking the route at ${endpoint}\n`)
@@ -114,6 +161,22 @@ const token = await ensureDevToken()
 const authorized = await post({ method: 'listDistros', params: {} }, { token })
 check('a caller holding the token reaches the acceptance surface',
   authorized.status === 200 && authorized.json?.ok === true, `${authorized.status} ${authorized.text.slice(0, 120)}`)
+// The token is a credential for the browser-authentication arm ONLY. No case
+// posted a VALID token with a foreign Host, which is how the route came to skip
+// both arms for a token holder. 403 AND a bodyless refusal: a JSON envelope
+// would be the method-level refusal (dispatchAdmission), a different decision.
+const foreignHost = await post({ method: 'listDistros', params: {} }, { token, host: 'attacker.example' })
+check('a token holder with a foreign Host is still refused (a token does not replace the fence)',
+  foreignHost.status === 403 && foreignHost.json === null,
+  `${foreignHost.status} ${foreignHost.text.slice(0, 120)}`)
+// The control for that probe: the same forged-Host transport and the same
+// token, but the authority the host actually serves — so the refusal above is
+// the Host VALUE, not the raw client.
+const servedAuthority = new URL(baseUrl).host
+const trustedHost = await post({ method: 'listDistros', params: {} }, { token, host: servedAuthority })
+check('the same token against the served authority is admitted',
+  trustedHost.status === 200 && trustedHost.json?.ok === true,
+  `${trustedHost.status} ${trustedHost.text.slice(0, 120)}`)
 const wrongToken = await post({ method: 'listDistros', params: {} }, { token: 'nope' })
 check('a wrong token is refused', wrongToken.status === 401, wrongToken.status)
 const badType = await post({ method: 'listDistros', params: {} }, { token, contentType: 'text/plain' })

@@ -128,6 +128,54 @@ for (const relative of ALL) {
     /isLexicallyUnderHost/.test(fence) && /startsWith\(bounded\)/.test(fence))
 }
 
+// The transport fence binds EVERY caller. `connection.requestRejection` returns
+// one of exactly two arms from a single call — 403 when the Host/Origin is not
+// trusted (the DNS-rebinding defence) and 401 when the browser session is not
+// authenticated — and the route applied it only when `!developer`, so a
+// development token skipped BOTH. A local script can always present a trusted
+// Host, so the token only ever needed to replace the 401 arm. The rule is pure,
+// so it is proved here; the call site is pinned as text because the handler
+// needs the running host, and verify-route.mjs carries the live probes (a token
+// with a foreign Host must still be 403, the same token against the served
+// authority must be 200).
+{
+  const admission = await import(pathToFileURL(join(pluginRoot, 'lib/http-admission.js')).href)
+  const entry = await readFile(join(pluginRoot, 'lib/index.js'), 'utf8')
+  // A missing export must FAIL the checks below with that reason instead of
+  // throwing out of the suite: a crash reports nothing about the rule, and the
+  // rule is the whole subject here.
+  const fenceRejection = typeof admission.fenceRejection === 'function'
+    ? admission.fenceRejection
+    : () => 'lib/http-admission.js exports no fenceRejection'
+  check('a development token replaces the browser-authentication arm (401)',
+    fenceRejection({ rejection: 401, developer: true }) === undefined,
+    fenceRejection({ rejection: 401, developer: true }))
+  check('and never the Host/Origin arm (403)',
+    fenceRejection({ rejection: 403, developer: true }) === 403,
+    fenceRejection({ rejection: 403, developer: true }))
+  check('a caller without the token still gets both arms',
+    fenceRejection({ rejection: 401, developer: false }) === 401
+      && fenceRejection({ rejection: 403, developer: false }) === 403)
+  check('a request the fence admitted is unchanged',
+    fenceRejection({ rejection: undefined, developer: false }) === undefined
+      && fenceRejection({ rejection: undefined, developer: true }) === undefined)
+  check('a rejection this build does not know is not replaceable by a token',
+    fenceRejection({ rejection: 429, developer: true }) === 429,
+    'the token may replace exactly one arm; anything else fails closed for every caller')
+  // Comments are blanked first, so the pins test CODE and never the rationale
+  // written beside it.
+  const code = entry.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*/gm, '')
+  check('the route imports the fence rule it applies',
+    /import \{[^}]*\bfenceRejection\b[^}]*\} from '\.\/http-admission\.js'/.test(code),
+    'a missing import is invisible to node --check and surfaces inside the host as a row that never started')
+  // Text, not behaviour: the handler needs the running host. The defect this
+  // pins is the SEND being gated on the developer flag, which no offline caller
+  // can observe.
+  check('the route sends every rejection the fence returns',
+    /fenceRejection\(\{/.test(code) && !/rejection\s*!==\s*undefined\s*&&\s*!developer/.test(code),
+    'the send must not be gated on the developer flag — that gate let a token holder skip both arms')
+}
+
 // The distribution a session runs in must survive the shell→subprocess seam.
 // The shell executor hands the subprocess provider a LINUX `cwd`, and a Linux
 // path carries no distribution: the provider re-derived it from `config.distro`
