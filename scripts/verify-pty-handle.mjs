@@ -17,6 +17,7 @@ import { spawnWslTerminal } from '../lib/wsl/pty.js'
 import { planWsl } from '../lib/wsl/world.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { blankLiterals } from './source-text.mjs'
 
 const distro = resolveDistro(process.argv[2])
 const here = dirname(fileURLToPath(import.meta.url))
@@ -75,6 +76,36 @@ async function until(predicate, timeoutMs = 20_000) {
   return false
 }
 
+/**
+ * Wait until the PTY reports the process group the interrupt job announced.
+ *
+ * The state the interrupt needs is not elapsed time but ownership: signalForeground
+ * signals whatever the PTY reports as its foreground group, and a group id is not proof
+ * of life — a previous job's group stays recorded until the shell takes the terminal
+ * back. The job's OWN announced group is the condition a stale group cannot satisfy.
+ * @param {object} terminal - the terminal handle.
+ * @param {number} jobPgrp - the group the job announced, 0 if it never did.
+ * @param {number} ceilingMs - how long to keep asking.
+ * @returns {Promise<{ owned: boolean, last: string|number }>} the outcome and last reading.
+ */
+async function ownsTerminal(terminal, jobPgrp, ceilingMs) {
+  const deadline = Date.now() + ceilingMs
+  let last = 'no reading'
+  while (jobPgrp > 0 && Date.now() < deadline) {
+    try {
+      const seen = (await terminal.inspectForeground())?.processGroupId
+      last = typeof seen === 'number' ? seen : 'no group'
+      if (seen === jobPgrp) return { owned: true, last }
+    } catch (error) {
+      // A control round trip that failed is not an answer: the bridge can be busy, and
+      // the terminal can still be handed over inside the ceiling.
+      last = `probe failed: ${detailText(error)}`
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return { owned: false, last }
+}
+
 const plan = planWsl(resolveLinuxHome(distro), distro)
 console.log(`driving the terminal handle in ${distro}\n`)
 
@@ -107,12 +138,67 @@ check('foreground inspection returns a process group', typeof foreground?.proces
 const activity = await terminal.inspectActivity()
 check('activity inspection returns a known state', ['idle', 'busy', 'unknown'].includes(activity.state), activity)
 
-await terminal.write('sleep 60\n')
-await until(() => false, 1500)
+// --- the interrupt: the job must own the terminal before it is signalled --------
+//
+// What used to sit between the write and the signal was `until(() => false, 1500)` — a
+// fixed 1500 ms wait, not a condition. The transition it stood in for is the interactive
+// shell reading the line, forking the job and calling tcsetpgrp, and under CPU contention
+// each of those wakeups can take seconds. Measured (the run under 384 in-distribution
+// busy loops plus 8 on the host, whose worst wakeup latency for a nominal 20 ms sleep was
+// 1012 ms): one run failed here with the shell still holding the line 1.5 s after the
+// write — readline echoed its ^C, discarded what it had consumed, and the shell ran
+// `leep 60` ("command not found"), so ALIVE-25 never appeared. The signalling check
+// PASSED in that same run, because the SIGINT had reached the SHELL's live group:
+// `signalled > 0` cannot tell the job's group from the shell's.
+//
+// The wait is now the condition the signal actually needs — the PTY reporting the group
+// the JOB announced — and the signalling check asserts the group it reached. A stale
+// group left by an earlier job cannot satisfy the condition: it differs from the shell's
+// group too, but it is not the job's, and killpg on it raises ESRCH — one of the two ways
+// this op can answer 0 (measured: a dead foreground group is observable for < 2 ms
+// unloaded, and the other way is a session leader that is gone, where the PTY reports no
+// group at all and the bridge's own killpg(0) signals itself).
+/** The process group the interrupt job announced on the PTY, or 0 before it has. */
+function announcedPgrp() {
+  const match = /JOBPGRP-(\d+)/.exec(output)
+  return match === null ? 0 : Number(match[1])
+}
+
+await terminal.write("sh -c 'echo JOBPGRP-$$; exec sleep 60'\n")
+const announced = await until(() => announcedPgrp() > 0, 30_000)
+const jobPgrp = announcedPgrp()
+const owned = await ownsTerminal(terminal, jobPgrp, 30_000)
+check('the job owns the terminal before the interrupt',
+  announced && owned.owned,
+  `announced=${String(announced)} jobPgrp=${String(jobPgrp)} idlePgrp=${String(foreground?.processGroupId)} lastForeground=${String(owned.last)}`)
 const signalled = await terminal.signalForeground('SIGINT')
-check('signalling returns the group it reached', signalled > 0, signalled)
+check('signalling returns the group it reached', signalled === jobPgrp, `signalled=${String(signalled)} jobPgrp=${String(jobPgrp)}`)
 await terminal.write('echo ALIVE-$((5*5))\n')
 check('the shell survives the interrupt', await until(() => output.includes('ALIVE-25')), JSON.stringify(output.slice(-200)))
+
+// --- the pin: no timer may stand in for that condition again ---------------------
+//
+// The fixed wait was removed because it was MEASURED to fail; this rejects the idiom at
+// the same site so it cannot return silently. The site is the span from the job's write
+// to the signal call, read from this file's own text with the comment and string bodies
+// blanked — so a comment naming the idiom neither satisfies nor trips the pin.
+//
+// What it does NOT establish: that no other duration-based wait exists anywhere (a poll
+// gap inside ownsTerminal is a different thing and is not rejected), and it is
+// spelling-bound — the region is delimited by two calls, so a rename has to move with it.
+// The behavioural half is the check above: a fixed wait under load signals the shell's
+// group, which `signalled === jobPgrp` now rejects.
+{
+  const blanked = blankLiterals(await readFile(fileURLToPath(import.meta.url), 'utf8'))
+  const signalAt = blanked.indexOf('terminal.signalForeground(')
+  const writeAt = signalAt > -1 ? blanked.lastIndexOf('terminal.write(', signalAt) : -1
+  const site = writeAt > -1 && writeAt < signalAt ? blanked.slice(writeAt, signalAt) : ''
+  const conditionInSite = site.includes('await ownsTerminal(')
+  const timerInSite = /until\(\s*\(\s*\)\s*=>\s*false\s*,|setTimeout\(/.test(site)
+  check('the interrupt waits on the job owning the terminal, and no timer stands in for it',
+    site !== '' && conditionInSite && !timerInSite,
+    `siteLength=${String(site.length)} condition=${String(conditionInSite)} timer=${String(timerInSite)}`)
+}
 
 // --- the plugin's own edge: a dimension the PTY cannot carry ---------------
 //
