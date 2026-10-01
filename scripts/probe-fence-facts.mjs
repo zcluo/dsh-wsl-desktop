@@ -36,9 +36,15 @@ const primary = resolveDistro()
 const requested = process.argv[2] // a SECOND distribution, or the probe reports UNMEASURED
 const otherIsPrimary = requested !== undefined && requested.toLowerCase() === primary.toLowerCase()
 const other = otherIsPrimary ? undefined : requested
-const unmeasured = requested === undefined
+// The reason is built per probe, because the ARTEFACT is per probe: passing the primary
+// distribution twice leaves F3 comparing a share's (dev,ino) with its own, so F3's artefact
+// is a vacuous COLLIDES — but F5's target is a path under the PRIMARY share, which the
+// lexical fast path contains before any walk runs, so F5's artefact is a lexical `true`
+// (measured above). One shared string described F3's artefact to F5, which made the F5 row
+// wrong about the probe it was reporting.
+const unmeasured = (selfComparison) => requested === undefined
   ? 'UNMEASURED - pass a second distribution as argv[2]'
-  : `UNMEASURED - "${requested}" IS the primary distribution; a share compared with itself reports a vacuous COLLIDES`
+  : `UNMEASURED - "${requested}" IS the primary distribution; ${selfComparison}`
 const home = resolveLinuxHome()
 const rows = []
 
@@ -83,7 +89,8 @@ try {
 // dev-only comparison would print COLLIDES on every machine and answer nothing about
 // the inode half. Both halves are reported and both are compared.
 if (other === undefined) {
-  report('F3 cross-share identity', unmeasured)
+  report('F3 cross-share identity',
+    unmeasured('a share compared with itself reports a vacuous COLLIDES'))
 } else {
   for (const rel of ['', '/tmp', '/home']) {
     try {
@@ -118,7 +125,9 @@ try {
 // false and never compares anything, so the row states that precondition instead of
 // letting "false" be read as "the walk ran and denied".
 if (other === undefined) {
-  report('F5 isUnderHost(foreign target, root)', unmeasured)
+  report('F5 isUnderHost(foreign target, root)',
+    unmeasured('the target is a path under the primary share, which the lexical fast path contains on its own'
+      + ' — the true it would report is a vacuous fast-path result, not a walk verdict'))
 } else {
   try {
     const verdict = await isUnderHost(joinWslUnc(other, home + '/proj/src/main.py'), root)

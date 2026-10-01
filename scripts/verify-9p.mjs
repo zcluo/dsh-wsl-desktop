@@ -344,15 +344,24 @@ if (linkProblem !== '') {
     // The rest of the write surface, which the fence's containment also rests on:
     // a rename whose destination traverses the link IS resolved by the server,
     // and so is a mkdir — which is the one the provider can actually reach.
+    //
+    // "It did not throw" is not the measurement: a destination that spells the
+    // source's own path succeeds as a self-rename and says nothing about whether the
+    // server resolved the link. The destination is therefore a SECOND fresh name, and
+    // the answer is read from where the file actually is afterwards — the same
+    // pathExists() the mkdir fact below reads its own landing from. A rename that does
+    // not put the file at the link's target is recorded as not having landed there.
     let renameDetail = ''
     try {
-      await writeFile(`${linkOutside}\\renamed.txt`, 'renamed\n', 'utf8')
-      await rename(`${linkOutside}\\renamed.txt`, `${linkEntry}\\renamed.txt`)
-      renameDetail = 'LANDS at the link\'s target'
+      await writeFile(`${linkOutside}\\renamed-src.txt`, 'renamed\n', 'utf8')
+      await rename(`${linkOutside}\\renamed-src.txt`, `${linkEntry}\\renamed-dst.txt`)
+      renameDetail = 'accepted without error'
     } catch (error) {
-      renameDetail = `${error.code}`
+      renameDetail = `reported ${error.code}`
     }
-    fact('a rename whose destination traverses the link', `${renameDetail} (the fence authorizes the destination spelling; the provider never reaches this primitive — the mkdir below aborts first, fs-local/src/fsio.ts:598)`)
+    const renameLanded = await pathExists(`${linkOutside}\\renamed-dst.txt`)
+    fact('a rename whose destination traverses the link',
+      `rename ${renameDetail} and ${linkOutside}\\renamed-dst.txt exists: ${renameLanded} -> the file ${renameLanded ? 'landed AT' : 'did NOT land at'} the link's target (the fence authorizes the destination spelling; the provider never reaches this primitive — the mkdir below aborts first, fs-local/src/fsio.ts:598)`)
     let mkdirDetail = ''
     try {
       await mkdir(`${linkEntry}\\dsh-link-dir`)

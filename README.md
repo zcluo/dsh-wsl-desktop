@@ -359,7 +359,7 @@ node scripts/verify-9p.mjs
 ```
   FACT    realpath(/lib), a merged-/usr symlink — ENOENT -> the link is NOT followed (control /usr/lib resolves (\\wsl.localhost\debian\usr\lib))
   FACT    realpath / read of the link (the file behind it exists) — realpath ENOENT; read ENOENT -> the link is exposed but NOT followed
-  FACT    a rename whose destination traverses the link — LANDS at the link's target (the fence authorizes the destination spelling; the provider never reaches this primitive — the mkdir below aborts first, fs-local/src/fsio.ts:598)
+  FACT    a rename whose destination traverses the link — rename accepted without error and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\renamed-dst.txt exists: true -> the file landed AT the link's target (the fence authorizes the destination spelling; the provider never reaches this primitive — the mkdir below aborts first, fs-local/src/fsio.ts:598)
   HAZARD  mkdir through the link, at a spelling the fence authorizes — isUnderHost(...) === true; mkdir reported EINVAL and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\dsh-link-dir exists: true
   FACT    cross-share identity <share root> — debian (0,2) vs debian-dev (0,2) -> COLLIDES - the identity comparison cannot tell the two shares apart
   FACT    cross-share identity /tmp — debian (0,1) vs debian-dev (0,1) -> COLLIDES - the identity comparison cannot tell the two shares apart
