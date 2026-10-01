@@ -26,8 +26,8 @@
 # session user aim it at uid 0. Root inside the fence is NOT a reader: the
 # read-only state is a per-mount bind remount in a private namespace, so uid 0
 # can remount it read-write - measured: `mount -o remount,rw /` and
-# `mount -o remount,rw /mnt/c` both succeed and a write to a root-only path
-# lands. An empty or unset SUDO_USER is REFUSED, not skipped (fail-closed;
+# `mount -o remount,rw /mnt/c` both succeed, and a write lands on each
+# filesystem (a root-only path, and a file created under /mnt/c). An empty or unset SUDO_USER is REFUSED, not skipped (fail-closed;
 # root's own direct invocation passes SUDO_USER=root explicitly). The gate is a
 # boundary only where the deployment's sudoers does
 # NOT grant SETENV: a caller who may set environment variables can forge
@@ -151,7 +151,7 @@ done
 # forgery, and the fence drops to the FORGED uid: root WRITE, not a read
 # primitive - the read-only state is a per-mount bind remount in this private
 # namespace, so the forged uid 0 can remount `/` and `/mnt/c` read-write
-# (measured: both remounts succeed and a write to a root-only path lands) and
+# (measured: both remounts succeed and a write lands on each filesystem) and
 # write to the distribution's filesystem and to the Windows filesystem. The
 # namespace and NO_NEW_PRIVS still apply; the file fence does not.
 [[ -n "${SUDO_USER:-}" ]] || { echo 'dsh-wsl-confine: cannot determine the invoking user (SUDO_USER is empty or unset; pass SUDO_USER=root for a direct root invocation)' >&2; exit 2; }

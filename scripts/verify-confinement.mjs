@@ -265,12 +265,21 @@ check('the drop identity is checked against the invoking user',
 const gateLines = helperCode.split('\n')
 const guardAt = gateLines.findIndex((line) => line.includes('cannot determine the invoking user'))
 const compareAt = gateLines.findIndex((line) => line.includes('"$uid" != "$CALLER_UID"'))
+// Every assignment to CALLER_UID/CALLER_GID must DERIVE its value from the resolved
+// record. A synthesized one - `[[ -n "$CALLER_UID" ]] || { CALLER_UID="$uid"; ... }` -
+// leaves the guard and the comparison untouched, satisfies every clause above, and makes
+// the comparison pass for any SUDO_USER that does not exist (measured: that mutation
+// reached unshare with SUDO_USER=nosuchuser1234 instead of the identity mismatch).
+const callerAssignments = gateLines.filter((line) => /(?:^|[;{\s])CALLER_(?:UID|GID)=/.test(line))
 check('an empty or unset SUDO_USER is refused rather than skipping the identity gate',
   guardAt !== -1 && compareAt !== -1 && guardAt < compareAt
     && /\[\[\s*(?:-n|-z)\s+"\$\{SUDO_USER:-\}"\s*\]\]\s*(?:\|\||&&)\s*\{[^}]*exit 2;\s*\}/.test(gateLines[guardAt])
     && !/\bif\b/.test(gateLines.slice(guardAt, compareAt).join('\n'))
-    && !/^\s/.test(gateLines[compareAt]),
-  'the guard must refuse on the VALUE (empty or unset) ahead of the comparison, and the comparison must be reachable unconditionally: `[[ -v SUDO_USER ]]` (existence only) or a wrapped comparison re-opens the hole this closes')
+    && !/^\s/.test(gateLines[compareAt])
+    && /-z\s+"\$CALLER_UID"/.test(gateLines[compareAt])
+    && callerAssignments.length >= 2
+    && callerAssignments.every((line) => line.includes('CALLER_RECORD') && /cut -d: -f[0-9]/.test(line)),
+  'the guard must refuse on the VALUE (empty or unset) ahead of the comparison, the comparison must be reachable unconditionally AND keep its own fail-closed `-z "$CALLER_UID"` clause, and every CALLER_UID/CALLER_GID value must be derived from the getent record: `[[ -v SUDO_USER ]]`, a wrapped comparison, or a synthesized record each re-opens the hole this closes')
 // The structural pin can only read text; these RUN the shipped helper, which is an
 // assertion no spelling can satisfy. Unprivileged and deterministic: the refusal
 // precedes every privileged step, so no grant is needed (the same pattern as the
@@ -298,6 +307,59 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
           && !refusal.stdout.includes('GATE-SKIPPED'),
         `stdout=${JSON.stringify(refusal.stdout.slice(-200))} stderr=${JSON.stringify(refusal.stderr.slice(-200))}`)
     }
+  }
+}
+// M7 synthesizes the record instead of resolving it: with the guard untouched, one line
+// that assigns CALLER_UID="$uid" when the record is empty makes the comparison pass for
+// any user that does not exist. The pin asserts the derivation; this asserts it by
+// running: a SUDO_USER that cannot be resolved must refuse with the identity mismatch,
+// not walk on toward the fence.
+{
+  const mnt = windowsToMntPath(helperPathFile)
+  if (mnt === null) {
+    console.log('  SKIP  the shipped helper refuses an unresolvable SUDO_USER (helper not on a drive path)')
+  } else {
+    const refusal = await runWslShell({
+      distro,
+      linuxCwd: '/',
+      command: `SUDO_USER=nosuchuser1234 bash ${shellQuote(mnt)} --uid 0 --gid 0 --home /root --cwd / -- 'echo GATE-SKIPPED'; echo EXIT=$?`,
+      loginShell: false,
+      timeoutMs: 60_000,
+    })
+    check('the shipped helper refuses a SUDO_USER that does not resolve',
+      refusal.stdout.includes('EXIT=2')
+        && refusal.stderr.includes('identity mismatch')
+        && !refusal.stdout.includes('GATE-SKIPPED'),
+      `stdout=${JSON.stringify(refusal.stdout.slice(-200))} stderr=${JSON.stringify(refusal.stderr.slice(-200))}`)
+  }
+}
+// M5 reopens the ORIGINAL hole with the pin still green: the correct guard wrapped in
+// `if [[ "$(id -u)" != 0 ]]; then ... fi` (flush-left, so a leading-whitespace test does
+// not see it). The unprivileged variants above cannot see it either - they only vary
+// SUDO_USER's emptiness while euid != 0, where the wrapper's condition is true. euid 0 is
+// reachable with NO grant through a user namespace (measured: `unshare -r id -u` -> 0), so
+// the same assertion is repeated under `unshare -r`: the guard must refuse on the VALUE
+// whoever is running it. Probed first and SKIPped when the machine has no user
+// namespaces - a check that reddens a healthy machine for a kernel-policy reason is worse
+// than a documented gap.
+{
+  const mnt = windowsToMntPath(helperPathFile)
+  const usernsProbe = mnt === null ? null : await runWslShell({ distro, linuxCwd: '/', command: 'unshare -r id -u 2>/dev/null', loginShell: false, timeoutMs: 60_000 })
+  if (mnt === null || usernsProbe.stdout.trim() !== '0') {
+    console.log(`  SKIP  the shipped helper refuses an empty SUDO_USER under user-namespace root (${mnt === null ? 'helper not on a drive path' : `unshare -r id -u -> ${JSON.stringify(usernsProbe.stdout.trim())}`})`)
+  } else {
+    const refusal = await runWslShell({
+      distro,
+      linuxCwd: '/',
+      command: `SUDO_USER= unshare -r bash ${shellQuote(mnt)} --uid 0 --gid 0 --home /root --cwd / -- 'echo GATE-SKIPPED'; echo EXIT=$?`,
+      loginShell: false,
+      timeoutMs: 60_000,
+    })
+    check('the shipped helper refuses an empty SUDO_USER under user-namespace root',
+      refusal.stdout.includes('EXIT=2')
+        && refusal.stderr.includes('cannot determine the invoking user')
+        && !refusal.stdout.includes('GATE-SKIPPED'),
+      `stdout=${JSON.stringify(refusal.stdout.slice(-200))} stderr=${JSON.stringify(refusal.stderr.slice(-200))}`)
   }
 }
 {
