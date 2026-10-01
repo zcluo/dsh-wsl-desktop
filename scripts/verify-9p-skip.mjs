@@ -27,6 +27,8 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listDistros, resolveDistro } from './env.mjs'
@@ -34,6 +36,7 @@ import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const distro = resolveDistro()
+const probePath = join(here, 'verify-9p.mjs')
 
 let failures = 0
 
@@ -55,6 +58,16 @@ const CROSS_SHARE_LABELS = [
   'cross-share identity /home',
 ]
 
+/** The facts the link fixture records; each is lost when the fixture cannot be built. */
+const LINK_FIXTURE_FACTS = [
+  'realpath / read of the link (the file behind it exists)',
+  'a rename whose destination traverses the link',
+  'mkdir through the link, at a spelling the share resolves elsewhere',
+]
+
+/** The assertion the link fixture exists for: the HAZARD-to-assertion conversion. */
+const LINK_FIXTURE_ASSERTION = 'the fence refuses the target its own canonicalization produces for that spelling'
+
 /**
  * Run the probe in a child process with an explicit environment.
  *
@@ -62,13 +75,14 @@ const CROSS_SHARE_LABELS = [
  * developer's own override would otherwise decide which branch runs, and the
  * control below needs the machine's real answer.
  * @param {Record<string, string>} env - overrides applied after the removal.
+ * @param {string} [probe] - the probe to run; the fixture mutant below points this at a copy.
  * @returns {{code: number, out: string}} the child's exit code and combined output.
  */
-function runProbe(env) {
+function runProbe(env, probe = probePath) {
   const childEnv = { ...process.env }
   delete childEnv.DSH_WSL_OTHER_DISTRO
   Object.assign(childEnv, env)
-  const run = spawnSync(process.execPath, [join(here, 'verify-9p.mjs'), distro], {
+  const run = spawnSync(process.execPath, [probe, distro], {
     encoding: 'utf8',
     timeout: 300_000,
     killSignal: 'SIGKILL',
@@ -222,6 +236,79 @@ function assertSkipContent(where, run, reasonMustName) {
     `${factLines.length} FACT line(s):\n${factLines.join('\n')}`)
 }
 
+/**
+ * A copy of the probe whose own `wsl.exe` calls FAIL, so the branch that runs when the
+ * link fixture cannot be built is reachable on a healthy machine.
+ *
+ * That branch holds the assertion the whole file's HAZARD-to-assertion conversion
+ * produced — the fence's refusal of the escaping spelling — and the precondition that
+ * triggers it (a hung or failing wsl.exe, which the probe's own comment calls
+ * hang-prone) cannot be produced on demand. The mutation is applied to a COPY in a
+ * throwaway tree that also carries the probe's imports, so the real scripts are never
+ * touched. ONLY the probe's own child_process import is shadowed: env.mjs keeps its own,
+ * so the second distribution still resolves and the cross-share rows are still measured
+ * — which is what isolates the fixture branch in this run.
+ * @returns {{path: string, tree: string, mutated: boolean}} the copy's path, its tree, and
+ *   whether the mutation applied (a stale mutation must redden, never pass silently).
+ */
+function buildFixtureFailedCopy() {
+  const tree = mkdtempSync(join(tmpdir(), 'dsh-9p-skip-pin-'))
+  mkdirSync(join(tree, 'scripts'), { recursive: true })
+  mkdirSync(join(tree, 'lib', 'wsl'), { recursive: true })
+  for (const [from, to] of [
+    [join(here, 'env.mjs'), join(tree, 'scripts', 'env.mjs')],
+    [join(here, 'detail.mjs'), join(tree, 'scripts', 'detail.mjs')],
+    [join(here, '..', 'lib', 'wsl', 'fence.js'), join(tree, 'lib', 'wsl', 'fence.js')],
+    [join(here, '..', 'lib', 'wsl', 'paths.js'), join(tree, 'lib', 'wsl', 'paths.js')],
+  ]) copyFileSync(from, to)
+  const source = readFileSync(probePath, 'utf8')
+  const importLine = "import { execFileSync } from 'node:child_process'"
+  const mutated = source.includes(importLine)
+  writeFileSync(join(tree, 'scripts', 'verify-9p.mjs'), source.replace(importLine, [
+    "import { execFileSync as realExecFileSync } from 'node:child_process'",
+    '// PIN MUTANT: every wsl.exe call from THIS file fails (the fixture build and its',
+    '// cleanup); env.mjs keeps its own import, so the machine still offers a second share.',
+    'const execFileSync = (file, args, options) => {',
+    "  if (file === 'wsl.exe') throw new Error('pin mutant: wsl.exe forced to fail, so the fixture cannot be built')",
+    '  return realExecFileSync(file, args, options)',
+    '}',
+  ].join('\n')), 'utf8')
+  return { path: join(tree, 'scripts', 'verify-9p.mjs'), tree, mutated }
+}
+
+/**
+ * Assert the content the fixture-failure SKIP must carry.
+ * @param {{code: number, out: string}} run - the mutant child's result.
+ */
+function assertFixtureSkipContent(run) {
+  const block = skipBlockOf(run.out)
+  const blockText = block.join('\n')
+  const { line, reason } = skipLineOf(block)
+  check('fixture skip: exit 2, so verify-all reports the probe as SKIP instead of as a pass',
+    run.code === 2,
+    `exit ${run.code}; the run's FAIL/SKIP lines and its end:\n${failureLinesOf(run.out)}\n${tailOf(run.out)}`)
+  check('fixture skip: the SKIP names the fixture and the precondition that failed',
+    line.includes('the link fixture') && reason.includes('pin mutant'),
+    line || `(no "  SKIP  " line); the run ends:\n${tailOf(run.out)}`)
+  check('fixture skip: the SKIP names the three facts that went unmeasured',
+    LINK_FIXTURE_FACTS.every((label) => blockText.includes(label)),
+    `the SKIP block:\n${blockText || '(none)'}\n${LINK_FIXTURE_FACTS.map((label) => `${label}: ${blockText.includes(label)}`).join('; ')}`)
+  check('fixture skip: the SKIP names the fence assertion the fixture exists for',
+    blockText.includes(LINK_FIXTURE_ASSERTION), blockText || '(the run printed no SKIP block)')
+  check('fixture skip: the SKIP names the remedy',
+    blockText.includes('wsl.exe') && /wake the distribution/.test(blockText),
+    blockText || '(the run printed no SKIP block)')
+  const tail = run.out.split('\n').find((entry) => entry.includes('WERE NOT MEASURED')) ?? ''
+  check('fixture skip: the tail counts the unmeasured facts AND the unevaluated checks',
+    /3 SHARE FACT\(S\) WERE NOT MEASURED/.test(tail) && /4 CHECK\(S\)/.test(tail),
+    tail || `(no line saying the facts were not measured); the run ends:\n${tailOf(run.out)}`)
+  const factLines = run.out.split('\n').filter((entry) => entry.startsWith('  FACT    '))
+  check('fixture skip: the UNMEASURED fixture row is NOT counted among the recorded facts',
+    !factLines.some((entry) => entry.includes('a Linux symlink inside a fixture root'))
+      && run.out.includes('NOT measured (named in the SKIP above)'),
+    `${factLines.length} FACT line(s):\n${factLines.join('\n')}`)
+}
+
 // A: the machine's second distribution exists but the operator pointed the probe
 // at the selected one, so there is no second share to compare against — the branch
 // a one-distribution machine takes.
@@ -255,6 +342,18 @@ if (machineSecond.hasSecond) {
   check(`control: this machine lists no second distribution beyond "${distro}", so the unforced run skips too`,
     control.code === 2 && skipBlockOf(control.out).length > 0, `exit ${control.code}; the run ends:\n${tailOf(control.out)}`)
 }
+
+// D: the probe's OTHER skip. When wsl.exe fails or a cold VM start exceeds its ceiling
+// the link fixture cannot be built, and that branch holds the assertion the
+// HAZARD-to-assertion conversion produced. A green run there would report the fence's
+// rule as established without ever evaluating it, so the branch must be a counted SKIP
+// — the same convention A and B pin for the cross-share family.
+console.log('\nthe probe whose link fixture could not be built (wsl.exe forced to fail in a copy)')
+const fixtureCopy = buildFixtureFailedCopy()
+check('fixture skip: the mutation applied to the copy (a stale mutation must not pass silently)',
+  fixtureCopy.mutated, `the copy at ${fixtureCopy.path} still imports node:child_process unshadowed`)
+assertFixtureSkipContent(runProbe({}, fixtureCopy.path))
+rmSync(fixtureCopy.tree, { recursive: true, force: true })
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1

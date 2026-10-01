@@ -35,6 +35,8 @@ const root = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe`
 let failures = 0
 /** Share facts that could not be measured here; the suite's exit code reports them (see the tail). */
 let skipped = 0
+/** Checks that could not be evaluated here for the same reason; counted separately because the tail names facts. */
+let skippedChecks = 0
 
 /**
  * Record one probe outcome against its expected availability.
@@ -256,9 +258,13 @@ if (!libListed) {
 // The fixture needs wsl.exe twice — to create the link and to remove it, because
 // the share can neither follow a link entry nor delete one (measured from the
 // Windows side: unlink ENOENT, rm EISDIR, and ENOTEMPTY for a directory holding
-// one). wsl.exe is the call a cold VM start can hang, so both calls are bounded
-// and a fixture failure is reported as UNMEASURED: the fixture is this probe's,
-// not the suite's precondition.
+// one). wsl.exe is the call a cold VM start can hang, so both calls are bounded and
+// a fixture failure is reported as a SKIP: the fixture is this probe's own rather than
+// a suite precondition, but this branch also holds THE ASSERTION the fence's rule is
+// proved by (below), so losing it silently would report that rule as established
+// without ever evaluating it — the class this plan removes. The facts it records are
+// named in the SKIP block, counted in the tail, and NOT pushed into `facts` (which
+// counts measurements).
 const WSL_TIMEOUT_MS = 30_000
 const linkScratchLinux = '/tmp/dsh-wsl-9p-probe-link'
 const linkScratch = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe-link`
@@ -267,6 +273,24 @@ const linkOutside = `${linkScratch}\\outside`
 const linkEntry = `${linkFixture}\\escape`
 const linkOutsideLinux = `${linkScratchLinux}/outside`
 const linkEntryLinux = `${linkScratchLinux}/root/escape`
+
+/** The share facts the link fixture records; each is lost when the fixture cannot be built. */
+const LINK_FACTS = {
+  follow: 'realpath / read of the link (the file behind it exists)',
+  rename: 'a rename whose destination traverses the link',
+  mkdir: 'mkdir through the link, at a spelling the share resolves elsewhere',
+}
+
+/**
+ * The checks the link fixture evaluates; each is unevaluated when the fixture cannot be
+ * built, and `fenceRefusal` is the assertion the fixture EXISTS for.
+ */
+const LINK_CHECKS = {
+  listed: 'the symlink the probe created is listed by the share, so the answers below are about a link that exists',
+  targetReadable: "the control: the link's own target is readable at its real path",
+  createTraversal: 'realpath cannot see the link, so the share must not resolve it for create either',
+  fenceRefusal: 'the fence refuses the target its own canonicalization produces for that spelling',
+}
 
 /**
  * Remove the symlink fixture through the distribution.
@@ -305,10 +329,15 @@ try {
 }
 
 if (linkProblem !== '') {
-  fact('a Linux symlink inside a fixture root', `UNMEASURED - the fixture could not be built (${linkProblem})`)
+  console.log(`  SKIP  the link fixture — the probe could not build it: ${linkProblem}`)
+  console.log(`        NOT MEASURED (${Object.keys(LINK_FACTS).length} facts): ${Object.values(LINK_FACTS).join(', ')}`)
+  console.log(`        NOT EVALUATED (${Object.keys(LINK_CHECKS).length} checks): the two controls the fixture's answers rest on (the link is listed; its target is readable), the traversal refusal they qualify, and the assertion this fixture exists for — "${LINK_CHECKS.fenceRefusal}" — the fence's rule for a target whose components cannot be canonicalized, which no other check in this suite covers.`)
+  console.log(`        Remedy: wake the distribution once ("wsl.exe -d ${distro} -- true") and re-run — the fixture needs wsl.exe twice (to create the link, and to remove it) and is this probe's own, not the suite's precondition.`)
+  skipped += Object.keys(LINK_FACTS).length
+  skippedChecks += Object.keys(LINK_CHECKS).length
 } else {
   const listed = (await readdir(linkFixture)).includes('escape')
-  identityCheck('the symlink the probe created is listed by the share, so the answers below are about a link that exists',
+  identityCheck(LINK_CHECKS.listed,
     listed === true, `readdir(${linkFixture}) did not list "escape"`)
   let targetRead = ''
   let targetReadable = false
@@ -318,7 +347,7 @@ if (linkProblem !== '') {
   } catch (error) {
     targetRead = `${error.code} ${error.message}`
   }
-  probe("the control: the link's own target is readable at its real path", targetReadable, 'available', targetRead)
+  probe(LINK_CHECKS.targetReadable, targetReadable, 'available', targetRead)
   if (listed && targetReadable) {
     // realpathSync.native is the fence's own call, so "blind" below is the fence's
     // blindness and not a different resolver's opinion.
@@ -339,7 +368,7 @@ if (linkProblem !== '') {
     } catch (error) {
       readDetail = error.code
     }
-    fact('realpath / read of the link (the file behind it exists)',
+    fact(LINK_FACTS.follow,
       readTraversed || realpathBlind === false
         ? `realpath ${realDetail}; read ${readDetail} -> the link IS resolved through the share`
         : `realpath ${realDetail}; read ${readDetail} -> the link is exposed but NOT followed`)
@@ -358,7 +387,7 @@ if (linkProblem !== '') {
       createDetail = `${error.code}`
     }
     const createLanded = await pathExists(`${linkOutside}\\landed.txt`)
-    identityCheck('realpath cannot see the link, so the share must not resolve it for create either',
+    identityCheck(LINK_CHECKS.createTraversal,
       !(realpathBlind && createLanded),
       `realpath blind: ${realpathBlind}; create reported ${createDetail} and ${linkOutside}\\landed.txt exists: ${createLanded}`)
     // The rest of the write surface, which the fence's containment also rests on:
@@ -380,7 +409,7 @@ if (linkProblem !== '') {
       renameDetail = `reported ${error.code}`
     }
     const renameLanded = await pathExists(`${linkOutside}\\renamed-dst.txt`)
-    fact('a rename whose destination traverses the link',
+    fact(LINK_FACTS.rename,
       `rename ${renameDetail} and ${linkOutside}\\renamed-dst.txt exists: ${renameLanded} -> the file ${renameLanded ? 'landed AT' : 'did NOT land at'} the link's target (the SHARE resolves the destination spelling; the fence refuses it — the assertion below — and the provider never reaches this primitive anyway: the mkdir below aborts first, fs-local/src/fsio.ts:598)`)
     let mkdirDetail = ''
     try {
@@ -396,7 +425,7 @@ if (linkProblem !== '') {
     // landing, not the call's outcome, is the measurement.
     const rawSpelling = `${linkEntry}\\dsh-link-dir`
     const rawVerdict = await isUnderHost(rawSpelling, canonicalHostPath(linkFixture))
-    fact('mkdir through the link, at a spelling the share resolves elsewhere',
+    fact(LINK_FACTS.mkdir,
       `mkdir ${mkdirDetail} and ${linkOutside}\\dsh-link-dir exists: ${mkdirEscaped}; isUnderHost(the raw spelling) === ${rawVerdict}`)
     // The fence's answer to that spelling is an ASSERTION now, not a record: the
     // HAZARD this line used to carry is closed by the rule in lib/wsl/fence.js
@@ -413,7 +442,7 @@ if (linkProblem !== '') {
     // arm is the one that runs, which is what makes the escape unreachable.
     const fenceTarget = canonicalHostPath(rawSpelling)
     const fenceVerdict = await isUnderHost(fenceTarget, canonicalHostPath(linkFixture))
-    identityCheck('the fence refuses the target its own canonicalization produces for that spelling',
+    identityCheck(LINK_CHECKS.fenceRefusal,
       fenceVerdict === false,
       `canonicalHostPath(${rawSpelling}) = ${fenceTarget}; isUnderHost(...) = ${fenceVerdict} (raw spelling: ${rawVerdict}; realpath blind: ${realpathBlind})`)
   }
@@ -513,13 +542,13 @@ await rm(root, { recursive: true, force: true })
 // that could not be measured here), which `verify-all` shows as SKIP rather than
 // as a pass — the same contract `verify-fs-fence.mjs` uses for its own skips.
 if (failures > 0) {
-  console.log(`\n${failures} PRIMITIVE(S) DIFFER FROM THE ASSUMED PROFILE${skipped === 0 ? '' : `, AND ${skipped} SHARE FACT(S) WERE NOT MEASURED (see the SKIP above)`}`)
-} else if (skipped > 0) {
-  console.log(`\nTHE PROFILE MATCHES WHAT THE PROVIDER ASSUMES, BUT ${skipped} SHARE FACT(S) WERE NOT MEASURED — exit 2, so verify-all reports this suite as SKIP`)
+  console.log(`\n${failures} PRIMITIVE(S) DIFFER FROM THE ASSUMED PROFILE${skipped === 0 && skippedChecks === 0 ? '' : `, AND ${skipped} SHARE FACT(S) WERE NOT MEASURED${skippedChecks === 0 ? '' : ` AND ${skippedChecks} CHECK(S) WERE NOT EVALUATED`} (see the SKIP above)`}`)
+} else if (skipped > 0 || skippedChecks > 0) {
+  console.log(`\nTHE PROFILE MATCHES WHAT THE PROVIDER ASSUMES, BUT ${skipped} SHARE FACT(S) WERE NOT MEASURED${skippedChecks === 0 ? '' : ` AND ${skippedChecks} CHECK(S) WERE NOT EVALUATED`} — exit 2, so verify-all reports this suite as SKIP`)
 } else {
   console.log('\nTHE 9P PROFILE MATCHES WHAT THE PROVIDER ASSUMES')
 }
 if (facts.length > 0) {
   console.log(`${facts.length} share fact(s) recorded above${skipped === 0 ? '' : `, ${skipped} NOT measured (named in the SKIP above)`} — NOT assertions: the fence's answers to them are pinned in verify-fs-fence.mjs`)
 }
-process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0
+process.exitCode = failures > 0 ? 1 : skipped > 0 || skippedChecks > 0 ? 2 : 0

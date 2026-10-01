@@ -404,7 +404,12 @@ if (linkFixtureReady) {
   // the write-key check and the raw-spelling check evaluate ONE string there (the
   // walk stops at the fixture root), and the relation that says so is pinned right
   // below instead of being left for a reader to discover.
-  check('the fence refuses a spelling whose ancestor is a link it cannot see through',
+  // The assertion is a RELATION, so the label states the relation: on a blind share the
+  // rule refuses this spelling (an ancestor exists and does not canonicalize), while on a
+  // share that RESOLVES the link the whole-path canonicalization still fails on the
+  // missing tail — so the key stays the spelling, every component canonicalizes, and the
+  // raw spelling is AUTHORIZED. The write key below is the one refused on both arms.
+  check('the raw spelling is refused exactly when the canonicalizer is blind to the link',
     await isUnderHost(escapeTarget, canonicalRoot) === !escapeBlind,
     `${escapeTarget} vs ${canonicalRoot}; blind to the link: ${escapeBlind}`)
   check('the WRITE KEY the fence is actually handed is refused',
