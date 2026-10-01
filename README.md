@@ -238,6 +238,104 @@ node scripts/verify-all.mjs        # 离线全量
 
 **两层钉子 + 活体验收**：`scripts/verify-modules.mjs` 钉住围栏的存在（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、拒绝用 `FS_SANDBOX_DENIED`、包含性比较有分隔符边界）；`scripts/verify-fs-fence.mjs` 离线验证纯逻辑（分隔符边界、大小写、**跨发行版同拼写路径被拒**、可写根推导、未知模式 fail-closed）；`verify-9p.mjs` 增补了身份映射探针（不同文件 (dev,ino) 互异、wsl.localhost/wsl$ 拼写稳定——围栏的身份回退以此为负载假设）。类的接线已由 `verify-post-restart.mjs` 活体验收（越界写拒绝 PASS）。
 
+### Measured fence facts
+
+围栏的几条开放记录不是读源码能定的：9P 共享的大小写语义、realpath 会不会穿过 Linux 符号链接、两个发行版的共享是否报告相同的 (dev,ino)、fs-fence 夹具根是否存在——这些是**这台机器**的属性，不是仓库的属性。给猜测出来的答案写修复，等于给另一台机器写修复，所以先测再记。这张表是 D8 与四条待定记录（token / argv / FIFO / budget）的判定输入。
+
+`scripts/probe-fence-facts.mjs` 只读：每个探针都是 stat / realpath，不创建、不写任何东西；第二个发行版由 argv[2] 传入，缺省时 F3/F5 如实报 `UNMEASURED`——**UNMEASURED 是结果，不是失败**。
+
+测量时间 **2026-10-01**；主发行版 `debian`，第二个发行版 `debian-dev`：
+
+```powershell
+node scripts/probe-fence-facts.mjs debian-dev
+```
+
+```
+F1 case: /TMP resolves                               ENOENT -> CASE-SENSITIVE (Linux semantics)
+F2 symlink: realpath(/lib)                           ENOENT -> the link is NOT followed (control /usr/lib resolves (\\wsl.localhost\debian\usr\lib))
+F3 identity <share root>                             dev 0 vs 0, ino 2 vs 2 -> COLLIDES
+F3 identity /tmp                                     dev 0 vs 0, ino 1 vs 1 -> COLLIDES
+F3 identity /home                                    dev 0 vs 0, ino 16386 vs 16386 -> COLLIDES
+F4 fixture root \\wsl.localhost\debian\home\zcluo\proj ENOENT (verify-fs-fence.mjs never creates it)
+F5 isUnderHost(foreign target, root)                 false (root absent, so the walk short-circuits; see F4)
+
+[
+  {
+    "label": "F1 case: /TMP resolves",
+    "value": "ENOENT -> CASE-SENSITIVE (Linux semantics)"
+  },
+  {
+    "label": "F2 symlink: realpath(/lib)",
+    "value": "ENOENT -> the link is NOT followed (control /usr/lib resolves (\\\\wsl.localhost\\debian\\usr\\lib))"
+  },
+  {
+    "label": "F3 identity <share root>",
+    "value": "dev 0 vs 0, ino 2 vs 2 -> COLLIDES"
+  },
+  {
+    "label": "F3 identity /tmp",
+    "value": "dev 0 vs 0, ino 1 vs 1 -> COLLIDES"
+  },
+  {
+    "label": "F3 identity /home",
+    "value": "dev 0 vs 0, ino 16386 vs 16386 -> COLLIDES"
+  },
+  {
+    "label": "F4 fixture root \\\\wsl.localhost\\debian\\home\\zcluo\\proj",
+    "value": "ENOENT (verify-fs-fence.mjs never creates it)"
+  },
+  {
+    "label": "F5 isUnderHost(foreign target, root)",
+    "value": "false (root absent, so the walk short-circuits; see F4)"
+  }
+]
+```
+
+不传第二个发行版时：
+
+```powershell
+node scripts/probe-fence-facts.mjs
+```
+
+```
+F1 case: /TMP resolves                               ENOENT -> CASE-SENSITIVE (Linux semantics)
+F2 symlink: realpath(/lib)                           ENOENT -> the link is NOT followed (control /usr/lib resolves (\\wsl.localhost\debian\usr\lib))
+F3 cross-share identity                              UNMEASURED - pass a second distribution as argv[2]
+F4 fixture root \\wsl.localhost\debian\home\zcluo\proj ENOENT (verify-fs-fence.mjs never creates it)
+F5 isUnderHost(foreign target, root)                 UNMEASURED - pass a second distribution as argv[2]
+
+[
+  {
+    "label": "F1 case: /TMP resolves",
+    "value": "ENOENT -> CASE-SENSITIVE (Linux semantics)"
+  },
+  {
+    "label": "F2 symlink: realpath(/lib)",
+    "value": "ENOENT -> the link is NOT followed (control /usr/lib resolves (\\\\wsl.localhost\\debian\\usr\\lib))"
+  },
+  {
+    "label": "F3 cross-share identity",
+    "value": "UNMEASURED - pass a second distribution as argv[2]"
+  },
+  {
+    "label": "F4 fixture root \\\\wsl.localhost\\debian\\home\\zcluo\\proj",
+    "value": "ENOENT (verify-fs-fence.mjs never creates it)"
+  },
+  {
+    "label": "F5 isUnderHost(foreign target, root)",
+    "value": "UNMEASURED - pass a second distribution as argv[2]"
+  }
+]
+```
+
+**怎么读这张表**（每条都是实测，不是推断）：
+
+- **F1 大小写敏感（Linux 语义）**：`/TMP` 不折叠到 `/tmp`，报 ENOENT。共享本身可达（同一张表里 F2 的对照解析成功、F3 的 stat 也成功），所以这条 ENOENT 是「共享区分大小写」，不是「共享没答话」。
+- **F2 realpath 不穿过 Linux 符号链接**：`/lib`（→ `usr/lib`）的 realpath 报 ENOENT，而同一共享上链接自己的目标 `/usr/lib` 正常解析（对照写在探针里，也写在这一行）。按 `lib/wsl/fence.js:31-37`，`canonicalHostPath` 对这类路径走 catch 分支原样返回。
+- **F3 跨发行版 (dev,ino) 相撞**：`debian` 与 `debian-dev` 的共享对同拼写路径报告**完全相同**的二元组（`/`=2、`/tmp`=1、`/home`=16386，dev 两侧都是 0）。围栏的身份回退按 `dev === dev && ino === ino` 判相等（`lib/wsl/fence.js:87`），这个相等测试因此区分不了两个发行版。只比 dev 的写法在这台机器上永远报 COLLIDES，问不出 ino 那一半，所以探针比较并打印整个二元组。
+- **F4 夹具根不存在**：`<home>/proj` 报 ENOENT，`verify-fs-fence.mjs` 从不创建它。
+- **F5 身份行走没有跑**：根不存在时 `isUnderHost` 在 stat 根处短路返回 false（`lib/wsl/fence.js:82-83`），所以这一行的 `false` 是「根不存在」，不是「行走拒绝了跨发行版目标」。**F3 的相撞与 F5 的 false 不能合起来读成「跨发行版包含是安全的」。**
+
 ## 许可证
 
 本项目基于 [MIT 协议](LICENSE) 发布。
