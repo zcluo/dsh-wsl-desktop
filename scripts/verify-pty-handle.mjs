@@ -114,6 +114,33 @@ check('signalling returns the group it reached', signalled > 0, signalled)
 await terminal.write('echo ALIVE-$((5*5))\n')
 check('the shell survives the interrupt', await until(() => output.includes('ALIVE-25')), JSON.stringify(output.slice(-200)))
 
+// --- the plugin's own edge: a dimension the PTY cannot carry ---------------
+//
+// The harness terminal controller bounds dimensions before it ever calls this
+// provider (Number.isSafeInteger plus its configured limits, at both create and
+// resize), which is why the audit REJECTED the injection candidate: no
+// lower-trust producer can supply an impossible dimension. A consumer's guard is
+// not the plugin's guarantee, though, and it cannot cover the one path where a
+// dimension is fatal before the bridge's dispatcher exists — the spawn path below
+// — so the plugin bounds the value it frames.
+//
+// A row count of zero is the case the PTY can actually SHOW: the ioctl carries it
+// (measured: `stty size` then reports `0 120`), so a plugin that forwarded it
+// would move the terminal to a size no caller can have meant. An over-range value
+// is deliberately NOT used here: the bridge's own backstop rejects it and the PTY
+// keeps its size either way, so a check on it could not fail.
+const beforeFloor = output.length
+await terminal.resize(120, 0)
+await terminal.write('stty size\n')
+check('a dimension below the PTY floor is bounded, not forwarded',
+  await until(() => /\b40 120\b/.test(output.slice(beforeFloor))), JSON.stringify(output.slice(beforeFloor).slice(-200)))
+
+const beforeAccepted = output.length
+await terminal.resize(100, 30)
+await terminal.write('stty size\n')
+check('a legitimate resize still reaches the PTY',
+  await until(() => /\b30 100\b/.test(output.slice(beforeAccepted))), JSON.stringify(output.slice(beforeAccepted).slice(-200)))
+
 await terminal.terminate()
 const settled = await Promise.race([
   terminal.done.then(() => true),
@@ -134,6 +161,52 @@ const outcome = await terminal.done
 console.log(`        terminated outcome: exitCode=${String(outcome.exitCode)} signal=${String(outcome.signal)}`)
 check('termination leaves the bridge signalled, not exited cleanly',
   outcome.exitCode === null || outcome.exitCode > 128, `exitCode=${String(outcome.exitCode)}`)
+
+// --- the spawn path: the dimension framed before the dispatcher exists ------
+//
+// `main()` hands argv[2]/argv[3] straight to the FIRST resize, which runs inside
+// `Bridge.__init__` — before `run()` can read a single control line, so a
+// dimension the ioctl cannot carry there is fatal with no guard able to answer
+// it — and it is fatal AFTER the bridge has already announced the session, so the
+// allocation still returns a handle and the failure only shows up as a terminal
+// that never answers. That is what makes the spawn path the one the plugin MUST
+// bound itself.
+let bounded = null
+let boundedFailure = null
+try {
+  bounded = await spawnWslTerminal({
+    local: { spawn: localAdapter },
+    plan,
+    bridgeSource,
+    argv: ['/bin/bash', '--noprofile', '--norc', '-i'],
+    cols: 70_000,
+    rows: 0,
+    graceMs: 3000,
+  })
+} catch (error) {
+  boundedFailure = error
+}
+let boundedOutput = ''
+if (bounded !== null) {
+  bounded.output.setEncoding('utf8')
+  bounded.output.on('data', (chunk) => { boundedOutput += chunk })
+  await bounded.write('stty size\n')
+}
+// The size the shell reports IS the evidence, and the two checks are one claim:
+// pre-fix the bridge exited inside Bridge.__init__ — AFTER it had announced the
+// session, which is why the allocation still returned a handle and why the
+// failure is not the allocation throwing but the answer never coming.
+const boundedAnswered = await until(() => /\b24 80\b/.test(boundedOutput))
+const boundedOutcome = !boundedAnswered && bounded !== null
+  ? await Promise.race([bounded.done, new Promise((resolve) => setTimeout(() => resolve('still running'), 2000))])
+  : undefined
+check('an allocation whose dimensions the PTY cannot carry falls back to 80x24',
+  boundedAnswered, boundedFailure ?? `output=${JSON.stringify(boundedOutput.slice(-200))} done=${JSON.stringify(boundedOutcome)}`)
+if (bounded !== null) {
+  // Bounded: a session that cannot be reached (the pre-fix state) must fail this
+  // suite, not leave it waiting on a process the bridge no longer answers.
+  await Promise.race([bounded.terminate(), new Promise((resolve) => setTimeout(() => resolve(false), 8000))])
+}
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1

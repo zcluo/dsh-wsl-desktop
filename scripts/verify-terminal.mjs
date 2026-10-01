@@ -131,23 +131,59 @@ const settled = new Promise((resolve) => {
   control.on('close', done)
 })
 
+// A request the dead bridge can never answer fails NOW, not after its whole
+// timeout: the production handle settles its pending requests the same way when
+// its bridge exits, and a suite that has just measured a fatal defect should not
+// spend 15 seconds per line re-measuring it.
+data.on('close', () => {
+  for (const [id, waiter] of waiters) {
+    waiters.delete(id)
+    waiter({ ok: false, error: 'the bridge exited before answering' })
+  }
+})
+
+/**
+ * Send one RAW control line and await the bridge's answer to it.
+ *
+ * `controlRequest` frames a payload object; a malformed line has to be written
+ * exactly as it is, because the whole point is a shape that is not an object at
+ * all. A line that carries an id is answered by an id-matched reply; one that
+ * cannot carry an id (a list, a scalar, a line that is not JSON) is answered by
+ * an id-less reply, so that branch waits on the reply log instead.
+ * @param {string} line - the exact line to write.
+ * @param {string} [id] - the id the line carries, when it can carry one.
+ * @returns {Promise<object>} the bridge's reply, or this suite's own failure text.
+ */
+async function controlRequestLine(line, id) {
+  if (id !== undefined) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        // Removed before resolving: a late reply must find no waiter, or it
+        // would be mispaired with a later request.
+        waiters.delete(id)
+        resolve({ ok: false, error: `control timeout; stderr=${err.slice(-300)}` })
+      }, 15_000)
+      waiters.set(id, (reply) => {
+        clearTimeout(timer)
+        resolve(reply)
+      })
+      control.stdin.write(`${line}\n`)
+    })
+  }
+  const before = replies.length
+  control.stdin.write(`${line}\n`)
+  const answered = await until(() => replies.length > before || data.exitCode !== null, 15_000)
+  if (!answered) return { ok: false, error: `control timeout; stderr=${err.slice(-300)}` }
+  // A bridge that exited without answering leaves nothing at that index; the
+  // failure text has to say so rather than pass for a reply.
+  return replies[before] ?? { ok: false, error: 'the bridge exited before answering' }
+}
+
 /** Send one control request and await its id-matched reply. */
 let requestSeq = 0
 function controlRequest(payload) {
   const id = `ctl-${requestSeq += 1}`
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      // Removed before resolving: a late reply must find no waiter, or it
-      // would be mispaired with a later request.
-      waiters.delete(id)
-      resolve({ ok: false, error: `control timeout; stderr=${err.slice(-300)}` })
-    }, 15_000)
-    waiters.set(id, (reply) => {
-      clearTimeout(timer)
-      resolve(reply)
-    })
-    control.stdin.write(`${JSON.stringify({ ...payload, id })}\n`)
-  })
+  return controlRequestLine(JSON.stringify({ ...payload, id }), id)
 }
 
 data.stdin.write('echo MARK-42\r')
@@ -171,6 +207,88 @@ const signalled = await controlRequest({ op: 'signal', signal: 'SIGINT' })
 check('a signal reaches the foreground group', signalled.ok === true, signalled)
 data.stdin.write('echo ALIVE-25\r')
 check('the shell survives the interrupt', await until(() => out.includes('ALIVE-25')), JSON.stringify(out.slice(-300)))
+
+// --- malformed control payloads: the bridge's own guarantee -----------------
+//
+// The audit REJECTED the injection candidate these cases come from. The escape
+// mechanics are source-accurate line by line — struct.error out of struct.pack,
+// OverflowError for a value Python decodes as infinity, TypeError out of
+// SIGNALS.get — but NO LOWER-TRUST PRODUCER CAN SUPPLY THE VALUES: the harness
+// terminal controller bounds dimensions with Number.isSafeInteger plus its
+// configured limits at both create and resize, and exposes no signal method at
+// all. None of this is a live vulnerability, and it must not be read as one.
+//
+// What that consumer guard does NOT cover is the claim in this bridge's own
+// dispatcher comment: that a malformed payload must not kill the session. The
+// bridge IS the terminal, so an exception escaping the dispatcher takes the PTY
+// down with it — the guarantee was really being enforced by the consumer, not by
+// the bridge. These cases pin the bridge's half, and they go over the raw control
+// channel this suite already owns, because lib/wsl/pty.js can no longer FRAME one:
+// it bounds the dimensions it writes (verify-pty-handle.mjs pins that side), its
+// other ops write literals, and the one caller-supplied string it passes through
+// — the signal name — is a value the bridge now rejects safely instead of dying on.
+const malformed = [
+  { what: 'a column count above what the ioctl can carry (struct.error)', line: '{"op":"resize","cols":70000,"rows":24}', echo: true },
+  { what: 'a negative column count (struct.error)', line: '{"op":"resize","cols":-1,"rows":24}', echo: true },
+  { what: 'a column count Python decodes as infinity (OverflowError)', line: '{"op":"resize","cols":1e400,"rows":24}', echo: true },
+  { what: 'an unhashable signal name (TypeError)', line: '{"op":"signal","signal":[]}', echo: true },
+  { what: 'a JSON list where the request object belongs (AttributeError)', line: '[]', echo: false, expect: /control payload must be an object/ },
+  { what: 'a JSON scalar where the request object belongs (AttributeError)', line: '42', echo: false, expect: /control payload must be an object/ },
+  { what: 'a line that is not JSON at all (ValueError)', line: 'not json at all', echo: false, expect: /control line is not JSON/ },
+]
+
+let malformedSeq = 0
+for (const entry of malformed) {
+  const id = `mal-${malformedSeq += 1}`
+  // The id is spliced into the LINE, not added to a parsed object: a payload that
+  // is not an object cannot be given one, and 1e400 must survive as written
+  // (JSON.parse would read it as Infinity, JSON.stringify would write null).
+  const line = entry.echo ? entry.line.replace('{"op"', `{"id":"${id}","op"`) : entry.line
+  const reply = await controlRequestLine(line, entry.echo ? id : undefined)
+  // `ok === false` alone would pass on this suite's OWN failure text, so the
+  // answer must be identifiable as the bridge's: an id-matched reply when the line
+  // could carry an id, the bridge's own words when it could not.
+  const answered = reply.ok === false && (entry.echo ? reply.id === id : entry.expect.test(String(reply.error)))
+  check(`a malformed control line is answered, not fatal: ${entry.what}`, answered, reply)
+  check(`the bridge survives it: ${entry.what}`, data.exitCode === null, `exit=${String(data.exitCode)}`)
+}
+
+data.stdin.write('echo SURVIVED-49\r')
+check('the shell still answers after every malformed line', await until(() => out.includes('SURVIVED-49')), JSON.stringify(out.slice(-300)))
+
+const afterMalformed = await controlRequest({ op: 'resize', cols: 100, rows: 30 })
+check('a well-formed request still works after the malformed ones', afterMalformed.ok === true, afterMalformed)
+data.stdin.write('stty size\r')
+check('the PTY still takes a size after the malformed ones', await until(() => /\b30 100\b/.test(out)), JSON.stringify(out.slice(-160)))
+
+// The bridge's stderr is the stream the host demultiplexes replies off, so a
+// diagnostic written there has to be recognizable as NOT a reply: a line that
+// began with the reply prefix would be parsed as a malformed reply and dropped,
+// and a swallowed defect would leave the operator nothing to read.
+const prefixed = err.split('\n').filter((line) => line.startsWith('#dsh-pty '))
+check('every line the host demuxes as a reply really is one',
+  prefixed.length > 0 && prefixed.every((line) => {
+    try {
+      JSON.parse(line.slice('#dsh-pty '.length))
+      return true
+    } catch {
+      return false
+    }
+  }),
+  prefixed.slice(-3))
+// A blanket catch that only answered ok:false would hide a genuine defect inside
+// a reply the host never surfaces — nothing in lib/wsl/pty.js reads `error` — so
+// the failure has to reach the diagnostic stream as well.
+check('an internal dispatcher failure is reported on the diagnostic channel',
+  /bridge: control op 'resize' raised struct\.error/.test(err) && err.includes('Traceback'),
+  err.split('\n').filter((line) => line.startsWith('bridge: ')).slice(-4))
+// The two layers have to stay distinguishable, or the diagnostic channel stops
+// meaning anything: an unhashable signal name is a payload the op guard can
+// REJECT, so it belongs in the reply and not in the defect stream, while the
+// resize failures that guard cannot express belong in both.
+check('a payload the op guards reject is not reported as an internal defect',
+  !/bridge: control op 'signal'/.test(err),
+  err.split('\n').filter((line) => line.startsWith('bridge: ')).slice(-6))
 
 const terminated = await controlRequest({ op: 'terminate' })
 check('terminate is acknowledged and the session was signalled', terminated.ok === true && terminated.terminated === true, terminated)

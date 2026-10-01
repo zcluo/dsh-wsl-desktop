@@ -31,8 +31,18 @@ import struct
 import sys
 import termios
 import time
+import traceback
 
 REPLY_PREFIX = b"#dsh-pty "
+
+# Prefix for a diagnostic line. The host demultiplexes control replies off the
+# same stream by REPLY_PREFIX, so a diagnostic must never begin with it: it would
+# be parsed as a reply, fail to decode, and be dropped without a trace.
+DIAGNOSTIC_PREFIX = "bridge: "
+
+# Longest diagnostic line written. The host reads this stream line by line, and a
+# single write this size cannot come back short and merge two lines into one.
+DIAGNOSTIC_LIMIT = 1000
 
 SIGNALS = {
     "SIGINT": signal.SIGINT,
@@ -52,6 +62,39 @@ def reply(payload):
     except OSError:
         # The host is gone; nothing left to report to.
         pass
+
+
+def describe_error(error):
+    """Name an exception for a reply and for a diagnostic line.
+
+    The bare class name is not enough for everything the stdlib raises here:
+    `struct.error`'s own name is "error", which names nothing on its own.
+    """
+    kind = type(error)
+    qualified = "%s.%s" % (kind.__module__, kind.__name__)
+    name = kind.__name__ if kind.__module__ == "builtins" else qualified
+    return "%s: %s" % (name, error) if str(error) else name
+
+
+def diagnostic(message):
+    """Report an internal failure on the host's diagnostic stream.
+
+    stderr is the stream the host demultiplexes control replies off, so this
+    writes one prefixed line per line of the message and never a line that could
+    be read as a reply: a traceback written raw would be parsed as a malformed
+    reply and dropped, and a defect swallowed that way would leave the operator
+    nothing to read. The prefix is what survives the host's per-line truncation.
+    """
+    for line in str(message).splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        payload = (DIAGNOSTIC_PREFIX + text)[:DIAGNOSTIC_LIMIT].encode("utf-8", "replace")
+        try:
+            os.write(2, payload + b"\n")
+        except OSError:
+            # The host is gone; nothing left to report to.
+            return
 
 
 def exit_code_of(status):
@@ -150,55 +193,96 @@ class Bridge:
                 return
             os.write(self.stdout_fd, data)
 
+    def answer(self, request, payload):
+        """Answer the request, echoing its id so the host can pair the reply."""
+        request_id = request.get("id")
+        if request_id is not None:
+            payload = {"id": request_id, **payload}
+        reply(payload)
+
     def handle_control(self, line):
-        """Run one control request and answer it."""
+        """Answer one control line.
+
+        A malformed payload must not kill the session: the bridge IS the
+        terminal, so an unhandled exception in this dispatch would take down every
+        later control op and the PTY itself. That guarantee is enforced HERE, not
+        by the callers that happen to bound what they send.
+        """
         try:
             request = json.loads(line.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             reply({"ok": False, "error": "control line is not JSON"})
             return
-        request_id = request.get("id")
+        # json.loads accepts a scalar or a list as readily as an object, and every
+        # branch below reads the request as a mapping: `request.get` on anything
+        # else raises AttributeError BEFORE an op is even dispatched, which is how
+        # a bare `[]` control line killed the session. Check the shape once, here,
+        # so no branch has to defend against it.
+        if not isinstance(request, dict):
+            reply({"ok": False, "error": "control payload must be an object"})
+            return
+        try:
+            self.dispatch(request)
+        except Exception as error:          # noqa: BLE001 - the session outranks the diagnosis
+            # The op guards in dispatch answer a payload they can REJECT; this is
+            # the backstop for everything else, because the set of exceptions a
+            # decoded payload can provoke is open. Measured in the distribution
+            # this ships on: struct.error is NOT a ValueError (its only base is
+            # Exception), and int() of a float that overflowed raises
+            # OverflowError — neither is in the resize guard's tuple, so both
+            # escaped the dispatcher and killed the session. This still answers,
+            # so the control channel stays in sync, but an unexpected failure is a
+            # DEFECT and not a rejection: it goes to the diagnostic stream too,
+            # because swallowing it into an ok:false reply — which nothing in
+            # lib/wsl/pty.js reads — would hide it from the operator. BaseException
+            # is deliberately NOT caught: a signal to the bridge is not a payload.
+            diagnostic("control op %r raised %s | %s" % (
+                request.get("op"), describe_error(error), traceback.format_exc()))
+            self.answer(request, {"ok": False, "error": "control failed: " + describe_error(error)})
 
-        def ans(payload):
-            """Answer the request, echoing its id so the host can pair the reply."""
-            if request_id is not None:
-                payload = {"id": request_id, **payload}
-            reply(payload)
-
+    def dispatch(self, request):
+        """Run one decoded control request and answer it."""
         op = request.get("op")
         if op == "resize":
             try:
                 self.resize(request.get("cols", 80), request.get("rows", 24))
-                ans({"ok": True})
+                self.answer(request, {"ok": True})
             except (TypeError, ValueError, OSError) as error:
-                # A malformed payload must not kill the session: the bridge IS
-                # the terminal, so an unhandled exception in this dispatch
-                # would take down every later control op and the PTY itself.
-                ans({"ok": False, "error": str(error)})
+                # A payload this op can REJECT: answered without a diagnostic,
+                # because the reply already names the caller's mistake and the
+                # diagnostic stream is reserved for defects.
+                self.answer(request, {"ok": False, "error": str(error)})
         elif op == "foreground":
             pgrp = self.foreground_pgrp()
-            ans({"ok": True, "pgrp": pgrp, "shellPgrp": self.shell_pgrp})
+            self.answer(request, {"ok": True, "pgrp": pgrp, "shellPgrp": self.shell_pgrp})
         elif op == "activity":
-            ans({"ok": True, **self.activity()})
+            self.answer(request, {"ok": True, **self.activity()})
         elif op == "signal":
             name = request.get("signal")
-            number = SIGNALS.get(name)
+            try:
+                # Inside the guard: SIGNALS.get raises TypeError on an unhashable
+                # name, and that is a payload this op can reject like any other —
+                # it must not read as an internal defect on the diagnostic stream.
+                number = SIGNALS.get(name)
+            except TypeError as error:
+                self.answer(request, {"ok": False, "error": str(error)})
+                return
             if number is None:
-                ans({"ok": False, "error": "unsupported signal %s" % name})
+                self.answer(request, {"ok": False, "error": "unsupported signal %s" % name})
                 return
             pgrp = self.foreground_pgrp()
             if pgrp is None:
-                ans({"ok": False, "error": "no foreground process group"})
+                self.answer(request, {"ok": False, "error": "no foreground process group"})
                 return
             try:
                 os.killpg(pgrp, number)
-                ans({"ok": True, "pgrp": pgrp})
+                self.answer(request, {"ok": True, "pgrp": pgrp})
             except OSError as error:
-                ans({"ok": False, "error": str(error)})
+                self.answer(request, {"ok": False, "error": str(error)})
         elif op == "terminate":
-            ans({"ok": True, "terminated": self.terminate()})
+            self.answer(request, {"ok": True, "terminated": self.terminate()})
         else:
-            ans({"ok": False, "error": "unknown op"})
+            self.answer(request, {"ok": False, "error": "unknown op"})
 
     def terminate(self):
         """Signal the whole session and report the group that received it."""
