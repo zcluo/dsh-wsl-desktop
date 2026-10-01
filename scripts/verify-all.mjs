@@ -24,6 +24,7 @@ const live = process.argv.includes('--live')
 const STANDALONE = [
   'verify-modules.mjs',
   'verify-fs-fence.mjs',
+  'verify-fs-fence-skip.mjs',
   'verify-world.mjs',
   'verify-preset.mjs',
   'verify-9p.mjs',

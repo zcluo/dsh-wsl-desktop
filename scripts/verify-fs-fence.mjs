@@ -21,6 +21,15 @@
  * comparing a single ancestor — the vacuous pass this file was fixed for (the
  * audit's D2: a pin whose subject is never created is not a pin).
  *
+ * With no second distribution to compare against, the four cross-distribution
+ * assertions cannot be evaluated at all. The suite then SKIPS them — naming the
+ * precondition, every unevaluated assertion from the single list those assertions are
+ * registered in, and the remedy — counts them, and exits 2, which `verify-all.mjs`
+ * reports as SKIP instead of as a pass. A silent skip would leave a green aggregate
+ * implying the fence's cross-distribution coverage was established, so the report's
+ * content is pinned by `scripts/verify-fs-fence-skip.mjs`, which forces the branch on
+ * every machine and proves, in the other class, that all four still run.
+ *
  * Run: node scripts/verify-fs-fence.mjs
  */
 
@@ -654,13 +663,50 @@ if (publicationCode === null) {
 // The second distribution is resolved from the MACHINE, never named here. A
 // hardcoded name makes this pin depend on the machine that happens to have that
 // name and compare nothing at all anywhere else — and a pin whose subject does
-// not exist asserts nothing, so an absent second share is reported as a missing
-// precondition instead of being skipped or passed.
+// not exist asserts nothing, so a machine with no second share cannot evaluate
+// ANY of the assertions below.
+//
+// The owner ruled that this is a SKIP rather than a FAIL: a missing precondition,
+// not a broken fence. The SKIP is LOUD because it is quieter than the FAIL it
+// replaces — every unevaluated assertion is named one by one, the count reaches the
+// tail, and the suite exits 2, which `verify-all` shows as SKIP rather than as PASS —
+// so a green aggregate cannot imply the fence's cross-distribution coverage was
+// established. What the branch refuses is "disclosed and green": the class this
+// whole effort exists to remove, and before this change a real one-distribution
+// machine could never report anything but red.
+//
+// Only this family is skipped. Every assertion that needs no second share still
+// runs and is printed, and the branch is taken only when there is no second share
+// to compare against at all: a resolved distribution whose share does not answer is
+// the same missing precondition — the reason names which — rather than a fence
+// defect. The report's content is pinned by `scripts/verify-fs-fence-skip.mjs`,
+// which forces this branch on every machine and proves the class with a second
+// share present still runs all four assertions.
+
+/**
+ * The assertions the cross-distribution family evaluates.
+ *
+ * ONE list for both jobs: these labels are what the checks below PRINT when a second
+ * share answers, and what the SKIP names when none does — so the list inside the SKIP
+ * cannot drift from what actually did not run. A prose sentence ("the two
+ * cross-distribution assertions", the text this branch used to print) counted them
+ * wrongly and named none of them.
+ */
+const CROSS_DISTRO_CHECKS = {
+  foreignLexical: 'a same-spelled path of ANOTHER distribution is lexically outside',
+  foreignDenied: 'the cross-distribution target is denied by the full check too',
+  foreignSharedRoot: 'a cross-distribution target is refused under a root whose identity it SHARES',
+  sameDistroAlias: 'a case-variant spelling of the SAME distribution is still contained',
+}
+
 let otherDistro = ''
 let otherProblem = ''
 try {
   const resolved = resolveOtherDistro(distro)
   if (resolved === undefined) otherProblem = `no distribution other than "${distro}" is installed`
+  // An EMPTY override is not a second share either, and it used to fail the
+  // precondition with a detail that named nothing at all.
+  else if (resolved.trim() === '') otherProblem = 'DSH_WSL_OTHER_DISTRO is set to an empty value, so no second share is named'
   else if (resolved.toLowerCase() === distro.toLowerCase()) otherProblem = `the resolved second distribution is "${distro}" itself, so there is nothing to compare against`
   else otherDistro = resolved
 } catch (error) {
@@ -668,13 +714,27 @@ try {
 }
 const otherShare = otherDistro === '' ? '' : joinWslUnc(otherDistro, fixtureParentLinux)
 const otherReachable = otherShare !== '' && existsSync(otherShare)
-check("a second distribution's share answers, so the cross-distribution pin compares a foreign inode",
-  otherReachable === true,
-  otherProblem || `${otherShare} does not exist — install a second distribution, or set DSH_WSL_OTHER_DISTRO`)
-
-if (otherReachable) {
+if (!otherReachable) {
+  // The SKIP must always name its precondition: a resolver that failed without a
+  // message, and a resolved share that does not answer, must not produce a
+  // reasonless SKIP.
+  const reason = otherProblem.trim() !== ''
+    ? otherProblem
+    : `${otherShare} does not exist, so the second distribution's share did not answer`
+  console.log(`  SKIP  the cross-distribution assertions — no second share to compare against: ${reason}`)
+  // Every label is interpolated from CROSS_DISTRO_CHECKS: prose that merely DESCRIBES
+  // the four would drift the moment one of them is reworded, and the reader of a SKIP
+  // has no other way to know what did not run.
+  console.log(`        NOT EVALUATED (${Object.keys(CROSS_DISTRO_CHECKS).length} checks, every label from CROSS_DISTRO_CHECKS): ${Object.values(CROSS_DISTRO_CHECKS).map((label) => `"${label}"`).join('; ')}`)
+  console.log('        Unestablished: whether containment refuses a same-spelled path of a FOREIGN')
+  console.log('        distribution — the reason this comparison runs in the host namespace, and the')
+  console.log('        distribution binding (lib/wsl/fence.js) that closes the share-identity collision')
+  console.log('        verify-9p.mjs records. No other check in this suite covers it.')
+  console.log('        Remedy: install a second WSL distribution, or point DSH_WSL_OTHER_DISTRO at one this machine already has (wsl.exe -l -q).')
+  skipped += Object.keys(CROSS_DISTRO_CHECKS).length
+} else {
   const crossDistro = joinWslUnc(otherDistro, `${fixtureLinux}/src/main.py`)
-  check('a same-spelled path of ANOTHER distribution is lexically outside',
+  check(CROSS_DISTRO_CHECKS.foreignLexical,
     isLexicallyUnderHost(crossDistro, root) === false,
     `${crossDistro} vs ${root}`)
   // This denial USED to be the identity walk's doing: the root exists (the
@@ -685,7 +745,7 @@ if (otherReachable) {
   // still matters (it is what made the pre-binding behaviour a real comparison
   // instead of a missing-root short-circuit), and the check below is the one that
   // proves WHICH of the two answered.
-  check('the cross-distribution target is denied by the full check too',
+  check(CROSS_DISTRO_CHECKS.foreignDenied,
     await isUnderHost(crossDistro, root) === false,
     `${crossDistro} vs ${root}`)
 
@@ -712,7 +772,7 @@ if (otherReachable) {
     }
   })()
   const foreignProbe = joinWslUnc(otherDistro, '/tmp/dsh-fence-probe.txt')
-  check('a cross-distribution target is refused under a root whose identity it SHARES',
+  check(CROSS_DISTRO_CHECKS.foreignSharedRoot,
     await isUnderHost(foreignProbe, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === false,
     `${foreignProbe} vs ${distro} /tmp — the two shares collide on this host: ${sharedTmpIdentity}`
       + (sharedTmpIdentity
@@ -727,12 +787,10 @@ if (otherReachable) {
   // The `wsl$` host keeps the lexical fast path out of it, so the walk is what
   // answers (measured true before the fix).
   const sameDistroAlias = `\\\\wsl$\\${distro.toUpperCase()}\\tmp\\dsh-fence-probe.txt`
-  check('a case-variant spelling of the SAME distribution is still contained',
+  check(CROSS_DISTRO_CHECKS.sameDistroAlias,
     isLexicallyUnderHost(sameDistroAlias, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === false
       && await isUnderHost(sameDistroAlias, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === true,
     sameDistroAlias)
-} else {
-  console.log('  SKIP  the two cross-distribution assertions (no second share to compare against; see the FAIL above)')
 }
 
 console.log('\nidentity fallback and missing roots')
