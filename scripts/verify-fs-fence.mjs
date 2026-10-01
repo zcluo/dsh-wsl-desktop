@@ -6,13 +6,16 @@
  * entry points) is pinned structurally by `verify-modules.mjs`; its real
  * behavior needs a live session. What CAN be verified offline is the part
  * that has to be right for the fence to mean anything: the writable-root
- * derivation and the containment comparison — including the two ways a naive
- * implementation goes wrong (a missing separator boundary, and comparing in
- * the Linux namespace where two distributions share every path spelling).
+ * derivation and the containment comparison — including the three ways a naive
+ * implementation goes wrong (a missing separator boundary, comparing in the
+ * Linux namespace where two distributions share every path spelling, and
+ * authorizing a spelling whose components the canonicalizer cannot resolve).
  *
  * Its fixtures are BUILT, not assumed: the containment root is a scratch
  * directory the suite creates inside the distribution's /tmp and removes again
- * on every exit path, and the second distribution is resolved from the machine.
+ * on every exit path, the second distribution is resolved from the machine, and
+ * the traversal fixture's Linux symlinks are created — and removed — with the
+ * distribution's own tools, because the Windows side can do neither.
  * A root nothing creates makes `isUnderHost` return at its missing-root check
  * BEFORE the identity walk, so an assertion written against one passes without
  * comparing a single ancestor — the vacuous pass this file was fixed for (the
@@ -21,7 +24,8 @@
  * Run: node scripts/verify-fs-fence.mjs
  */
 
-import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { joinWslUnc } from '../lib/wsl/paths.js'
 import { canonicalHostPath, isLexicallyUnderHost, isUnderHost, writableHostRootsFor } from '../lib/wsl/fence.js'
@@ -34,6 +38,20 @@ const distro = resolveDistro()
 // the distribution rather than from the Linux home: a fixture under the home
 // would have to create — and later delete — a directory that may already be the
 // user's, and its answer would then depend on what that machine happens to hold.
+
+/**
+ * The link fixture's two Linux roots, set BEFORE the fixture is built so the
+ * cleanup below still runs when the build fails halfway.
+ *
+ * A Linux symlink entry cannot be removed from the Windows side (measured:
+ * `unlink` ENOENT, `rm` EISDIR, and ENOTEMPTY for a directory that holds one),
+ * so the fixture's removal has to run inside the distribution.
+ */
+let linkFixtureLinux = ''
+let outsideFixtureLinux = ''
+
+/** Ceiling for the distribution calls below — wsl.exe is the call a cold VM start can hang. */
+const WSL_TIMEOUT_MS = 30_000
 
 let failures = 0
 
@@ -97,6 +115,16 @@ try {
  * on stderr.
  */
 function removeFixtureRoot() {
+  // Through the distribution first: the link entries the traversal fixture below
+  // creates make `rmSync` fail with ENOTEMPTY, and only the Linux side can
+  // delete them at all (measured: unlink ENOENT, rm EISDIR).
+  if (linkFixtureLinux !== '') {
+    try {
+      execFileSync('wsl.exe', ['-d', distro, '-e', 'rm', '-rf', linkFixtureLinux, outsideFixtureLinux], { timeout: WSL_TIMEOUT_MS })
+    } catch (error) {
+      console.error(`verify-fs-fence: the link fixture could not be removed: ${linkFixtureLinux} (${error?.code ?? error?.status ?? String(error)})`)
+    }
+  }
   try {
     rmSync(root, { recursive: true, force: true })
   } catch (error) {
@@ -194,6 +222,142 @@ check('a sibling prefix is NOT contained (separator boundary)',
   isLexicallyUnderHost(joinWslUnc(distro, `${fixtureLinux}-secret/x`), root) === false)
 check('a path above the root is NOT contained',
   isLexicallyUnderHost(joinWslUnc(distro, fixtureParentLinux), root) === false)
+
+// ---------------------------------------------------------------------------
+// The component the canonicalizer cannot see through
+//
+// The comparisons above decide on SPELLINGS, and the fence's canonicalizer is
+// `realpathSync.native` (`canonicalHostPath`). On this share that call is BLIND
+// to a Linux symlink: measured, it reports ENOENT for the link entry while
+// `lstat` reports EISDIR and `readdir` lists the entry, and `stat` (which
+// follows) reports ENOENT too — so the entry is invisible to every call that
+// resolves a path. The harness resolves targets with the same call
+// (`resolveLocalTarget`, fs-local/src/fsio.ts:161-210), so a target spelled
+// THROUGH such a link keeps the lexical spelling as its target key, the
+// comparison above authorizes it, and the publication that follows resolves it
+// anyway: its first step is `mkdir(directory, {recursive:true})`
+// (fs-local/src/fsio.ts:598), which CREATES the missing level AT THE LINK'S
+// TARGET — outside the writable root — and then fails. verify-9p.mjs measures
+// both halves of that on every run; the HAZARD it used to record for this gap
+// is now the assertion it carries, and the rule below is what closes it.
+//
+// The rule under test — the one the fence now implements: a target is authorized
+// only when every component strictly between the writable root and the target's
+// OWN NAME either does not exist on the share (`lstat` ENOENT/ENOTDIR) or
+// canonicalizes; a component that EXISTS but does not canonicalize refuses the
+// target. The target's own name is deliberately EXEMPT: a final-component link
+// is measured safe (the publication's rename replaces the link entry inside the
+// root and the link's target file is untouched) and it works today, so refusing
+// it would refuse a working legitimate write — and a rule that refuses
+// legitimate same-root writes is worse than the gap it closes.
+//
+// The fixture is built and removed with the distribution's own tools, because a
+// Linux symlink cannot be created from the Windows side (measured EPERM) and
+// cannot be deleted there either (measured unlink ENOENT, rm EISDIR, ENOTEMPTY
+// for a directory that holds one). Its targets are both sides of the rule:
+// `escape` points OUTSIDE the root, `inside-link` INSIDE it, `dangling`
+// nowhere, and `file-link` at a file outside (the exempt final component).
+// ---------------------------------------------------------------------------
+console.log('\ncomponents the canonicalizer cannot resolve')
+linkFixtureLinux = fixtureLinux
+outsideFixtureLinux = `${fixtureLinux}-outside`
+const linkNames = ['escape', 'inside-link', 'dangling', 'file-link']
+const outsideHost = joinWslUnc(distro, outsideFixtureLinux)
+let linkProblem = ''
+try {
+  // One distribution call for the whole fixture: a cold VM start costs the same
+  // whether it runs one command or five.
+  const script = [
+    `mkdir -p ${fixtureLinux}/realdir ${outsideFixtureLinux}`,
+    `printf 'outside\\n' > ${outsideFixtureLinux}/inside.txt`,
+    ...linkNames.map((name) => `rm -f ${fixtureLinux}/${name}`),
+    `ln -s ${outsideFixtureLinux} ${fixtureLinux}/escape`,
+    `ln -s realdir ${fixtureLinux}/inside-link`,
+    `ln -s ${outsideFixtureLinux}/no-such-target ${fixtureLinux}/dangling`,
+    `ln -s ${outsideFixtureLinux}/inside.txt ${fixtureLinux}/file-link`,
+  ].join(' && ')
+  execFileSync('wsl.exe', ['-d', distro, '-e', 'bash', '-c', script], { timeout: WSL_TIMEOUT_MS })
+} catch (error) {
+  linkProblem = `${error?.code ?? error?.status ?? 'error'}: ${String(error?.message ?? error).slice(0, 120)}`
+}
+const listed = linkProblem === '' ? readdirSync(root) : []
+const missingLinks = linkNames.filter((name) => !listed.includes(name))
+const linkFixtureReady = linkProblem === '' && missingLinks.length === 0
+// The precondition is a FAIL, not a skip: a link that was never created answers
+// ENOENT to every call below, so the traversal assertions would pass while
+// testing nothing — the vacuous-pin class (D2) this suite exists to remove.
+check('the link fixture exists, so the traversal pins are about a real link',
+  linkFixtureReady,
+  linkProblem || `readdir(${root}) did not list ${missingLinks.join(', ')}`)
+
+if (linkFixtureReady) {
+  const canonicalRoot = canonicalHostPath(root)
+  /** A host spelling below the fixture root, built from Linux components. */
+  const below = (...parts) => joinWslUnc(distro, [fixtureLinux, ...parts].join('/'))
+  // The raw spelling the fence sees, and the one its own canonicalization would
+  // produce for a write: `checkedTarget` hands `isUnderHost` the target key that
+  // `resolveLocalTarget` returns, and for these targets that key IS this spelling
+  // — the resolution walk stops at the fixture root, which is the first ancestor
+  // that canonicalizes (measured).
+  const escapeTarget = below('escape', 'missing', 'file.txt')
+  check('a target whose ancestor is a link to OUTSIDE the root is refused',
+    await isUnderHost(escapeTarget, canonicalRoot) === false,
+    `${escapeTarget} vs ${canonicalRoot}`)
+  check('the write target its own canonicalization cannot place is refused',
+    await isUnderHost(canonicalHostPath(escapeTarget), canonicalRoot) === false,
+    `${canonicalHostPath(escapeTarget)} vs ${canonicalRoot}`)
+  check('a target whose own PARENT is the link is refused (the mkdir level)',
+    await isUnderHost(below('escape', 'file.txt'), canonicalRoot) === false,
+    below('escape', 'file.txt'))
+  // The cost of the rule, measured rather than argued: the canonicalizer cannot
+  // tell an inside-pointing link from an outside-pointing one, so the rule
+  // refuses both. What it costs is nothing that works: a write through EITHER
+  // link cannot publish on this share at all (measured — `mkdir(directory,
+  // {recursive:true})` reports ENOENT for a path through a link, and the write
+  // never reaches its rename), so the refusal replaces a confusing ENOENT that
+  // leaves a stray directory behind with a refusal BEFORE anything is created.
+  check('a link that points INSIDE the root is refused too (the canonicalizer cannot tell them apart)',
+    await isUnderHost(below('inside-link', 'missing', 'file.txt'), canonicalRoot) === false,
+    below('inside-link', 'missing', 'file.txt'))
+  // Unconditional on any share: a dangling link is a component that exists and
+  // resolves nowhere, whether or not the share follows links.
+  check('a dangling link refuses the target on any share',
+    await isUnderHost(below('dangling', 'missing', 'file.txt'), canonicalRoot) === false,
+    below('dangling', 'missing', 'file.txt'))
+  // The rule is not a property of one spelling: the wsl$ alias reaches the same
+  // share, so a link below the root must refuse it too. This spelling is NOT
+  // lexically under the root, so the answer comes from the identity walk — which
+  // is exactly where the alias spelling is authorized today.
+  const aliasEscape = escapeTarget.replace('wsl.localhost', 'wsl$')
+  check('the wsl$ alias spelling of the same target is refused too',
+    await isUnderHost(aliasEscape, canonicalRoot) === false,
+    `${aliasEscape} vs ${canonicalRoot}`)
+  // The controls: the rule must not touch what it is not about. Each of these is
+  // a write the fence authorizes today, and must keep authorizing.
+  check('control: a missing component under a REAL directory is still authorized',
+    await isUnderHost(below('realdir', 'missing', 'file.txt'), canonicalRoot) === true,
+    below('realdir', 'missing', 'file.txt'))
+  check('control: a missing component directly under the root is still authorized',
+    await isUnderHost(below('plain-missing', 'file.txt'), canonicalRoot) === true,
+    below('plain-missing', 'file.txt'))
+  check('control: an existing real directory is still authorized',
+    await isUnderHost(below('realdir'), canonicalRoot) === true,
+    below('realdir'))
+  // The exemption, both shapes: the target's OWN name may be a link, because the
+  // publication's rename replaces the entry inside the root (measured: the
+  // link's target file is untouched, and the entry becomes a regular file).
+  check('control: a final-component FILE link is still authorized',
+    await isUnderHost(below('file-link'), canonicalRoot) === true,
+    below('file-link'))
+  check('control: a final-component DIRECTORY link is still authorized',
+    await isUnderHost(below('escape'), canonicalRoot) === true,
+    below('escape'))
+  check('the fixture outside the root really exists (the escape link has a target)',
+    existsSync(`${outsideHost}\\inside.txt`),
+    `${outsideHost}\\inside.txt`)
+} else {
+  console.log('  SKIP  the traversal assertions (no link fixture; see the FAIL above)')
+}
 
 // The reason containment runs in the HOST namespace: in the Linux namespace
 // this target's path is <fixture>/src/main.py — identical spelling, different

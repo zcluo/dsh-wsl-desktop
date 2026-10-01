@@ -142,8 +142,11 @@ try {
 //     by binding the identity walk to the distribution, and that defence is
 //     pinned there too (a cross-distribution target under a root whose identity
 //     it shares must be refused).
-//   * symlink traversal: the fence's answer to it is not a pass/fail at all —
-//     see the HAZARD recorded below.
+//   * symlink traversal: the fence's answer to it is a RULE — a target is
+//     authorized only when every component between the writable root and the
+//     target's own name either does not exist or canonicalizes — and it is
+//     ASSERTED below, beside the share's own mkdir answer. The share's blindness
+//     is the premise, so the assertion is written to hold on either answer.
 //
 // A FACT is therefore not a check. What is asserted beside one is only what
 // makes it a measurement instead of a print: that the subject EXISTS and that
@@ -155,19 +158,20 @@ try {
 // ---------------------------------------------------------------------------
 
 const facts = []
-const hazards = []
 
 /**
  * Record one measured property of the share.
+ *
+ * There is no HAZARD form any more: the one recorded hazard — mkdir through a
+ * Linux symlink the canonicalizer cannot resolve, which created a directory
+ * outside the writable root — is closed by the fence's rule and asserted below,
+ * and a reporting path no check can redden is the class this plan removes.
  * @param {string} label - what was measured.
  * @param {string} value - the measured answer.
- * @param {{ hazard?: boolean }} [options] - true when the fence does NOT cover the answer.
  */
-function fact(label, value, options = {}) {
-  const hazard = options.hazard === true
-  console.log(`  ${hazard ? 'HAZARD' : 'FACT  '}  ${label} — ${value}`)
+function fact(label, value) {
+  console.log(`  FACT    ${label} — ${value}`)
   facts.push({ label, value })
-  if (hazard) hazards.push(`${label} — ${value}`)
 }
 
 /**
@@ -361,7 +365,7 @@ if (linkProblem !== '') {
     }
     const renameLanded = await pathExists(`${linkOutside}\\renamed-dst.txt`)
     fact('a rename whose destination traverses the link',
-      `rename ${renameDetail} and ${linkOutside}\\renamed-dst.txt exists: ${renameLanded} -> the file ${renameLanded ? 'landed AT' : 'did NOT land at'} the link's target (the fence authorizes the destination spelling; the provider never reaches this primitive — the mkdir below aborts first, fs-local/src/fsio.ts:598)`)
+      `rename ${renameDetail} and ${linkOutside}\\renamed-dst.txt exists: ${renameLanded} -> the file ${renameLanded ? 'landed AT' : 'did NOT land at'} the link's target (the SHARE resolves the destination spelling; the fence refuses it — the assertion below — and the provider never reaches this primitive anyway: the mkdir below aborts first, fs-local/src/fsio.ts:598)`)
     let mkdirDetail = ''
     try {
       await mkdir(`${linkEntry}\\dsh-link-dir`)
@@ -370,13 +374,32 @@ if (linkProblem !== '') {
       mkdirDetail = `reported ${error.code}`
     }
     const mkdirEscaped = await pathExists(`${linkOutside}\\dsh-link-dir`)
-    // The hazard is the COMBINATION — the fence authorizes a spelling the share can
-    // resolve elsewhere — and not today's outcome, so the line stays a HAZARD even
-    // if a future share refuses this mkdir: the value reports what was measured.
-    const fenceVerdict = await isUnderHost(`${linkEntry}\\dsh-link-dir`, canonicalHostPath(linkFixture))
-    fact('mkdir through the link, at a spelling the fence authorizes',
-      `isUnderHost(...) === ${fenceVerdict}; mkdir ${mkdirDetail} and ${linkOutside}\\dsh-link-dir exists: ${mkdirEscaped}`,
-      { hazard: true })
+    // The share's answer, and only the share's: mkdir at a spelling that traverses
+    // the link CREATES the directory at the link's target — outside the fixture root
+    // that stands in for a writable root — while the client reports an error. The
+    // landing, not the call's outcome, is the measurement.
+    const rawSpelling = `${linkEntry}\\dsh-link-dir`
+    const rawVerdict = await isUnderHost(rawSpelling, canonicalHostPath(linkFixture))
+    fact('mkdir through the link, at a spelling the share resolves elsewhere',
+      `mkdir ${mkdirDetail} and ${linkOutside}\\dsh-link-dir exists: ${mkdirEscaped}; isUnderHost(the raw spelling) === ${rawVerdict}`)
+    // The fence's answer to that spelling is an ASSERTION now, not a record: the
+    // HAZARD this line used to carry is closed by the rule in lib/wsl/fence.js
+    // (`canonicalizationOf` / `componentsCanonicalize`) — a target is authorized
+    // only when every component between the writable root and the target's own name
+    // either does not exist or canonicalizes.
+    //
+    // What is asserted is the target key the WRITE hands the fence: `checkedTarget`
+    // re-resolves the target and passes THAT key to `isUnderHost`. While the
+    // canonicalizer is blind (measured above) the key is the spelling itself, and
+    // the rule refuses it; on a share that DOES resolve the link the key is the
+    // link's target, and containment refuses that. Both arms refuse, so the
+    // assertion holds whichever way the share answers — and on this share the first
+    // arm is the one that runs, which is what makes the escape unreachable.
+    const fenceTarget = canonicalHostPath(rawSpelling)
+    const fenceVerdict = await isUnderHost(fenceTarget, canonicalHostPath(linkFixture))
+    identityCheck('the fence refuses the target its own canonicalization produces for that spelling',
+      fenceVerdict === false,
+      `canonicalHostPath(${rawSpelling}) = ${fenceTarget}; isUnderHost(...) = ${fenceVerdict} (raw spelling: ${rawVerdict}; realpath blind: ${realpathBlind})`)
   }
 }
 
@@ -446,5 +469,4 @@ console.log(`\n${failures === 0 ? 'THE 9P PROFILE MATCHES WHAT THE PROVIDER ASSU
 if (facts.length > 0) {
   console.log(`${facts.length} share fact(s) recorded above — NOT assertions: the fence's answers to them are pinned in verify-fs-fence.mjs`)
 }
-for (const entry of hazards) console.log(`RECORDED HAZARD THE FENCE DOES NOT COVER: ${entry}`)
 process.exitCode = failures === 0 ? 0 : 1

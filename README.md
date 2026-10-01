@@ -242,7 +242,7 @@ node scripts/verify-all.mjs        # 离线全量
 
 **因此 selftest 也改了**：它现在像真实调用方一样显式传策略 `{ mode: 'workspace-write', workspaceRoot: <会话 cwd> }`。之前它不传，是"用一个真实调用方永远不会用的方式调 fs"，那才是上次被拒的原因——不是围栏太严。
 
-**两层钉子 + 活体验收**：`scripts/verify-modules.mjs` 钉住围栏的存在（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、拒绝用 `FS_SANDBOX_DENIED`、包含性比较有分隔符边界）；`scripts/verify-fs-fence.mjs` 离线验证纯逻辑（分隔符边界、大小写、**跨发行版同拼写路径被拒**、可写根推导、未知模式 fail-closed）；`verify-9p.mjs` 增补了身份映射探针（不同文件 (dev,ino) 互异、wsl.localhost/wsl$ 拼写稳定——围栏的身份回退以此为负载假设）。类的接线已由 `verify-post-restart.mjs` 活体验收（越界写拒绝 PASS）。
+**两层钉子 + 活体验收**：`scripts/verify-modules.mjs` 钉住围栏的存在（声明 `sandboxMode`、两个变更入口都过 `checkedTarget`、拒绝用 `FS_SANDBOX_DENIED`、包含性比较有分隔符边界）；`scripts/verify-fs-fence.mjs` 离线验证纯逻辑（分隔符边界、大小写、**跨发行版同拼写路径被拒**、**无法规范化的已存在组件被拒**（Task 2，自建链接夹具与 5 条对照，见下节）、可写根推导、未知模式 fail-closed）；`verify-9p.mjs` 增补了身份映射探针（不同文件 (dev,ino) 互异、wsl.localhost/wsl$ 拼写稳定——围栏的身份回退以此为负载假设），并把「链接下的 mkdir」那行从 HAZARD 记录改成真断言。类的接线已由 `verify-post-restart.mjs` 活体验收（越界写拒绝 PASS）。
 
 ### Measured fence facts
 
@@ -363,8 +363,9 @@ node scripts/verify-9p.mjs
 ```
   FACT    realpath(/lib), a merged-/usr symlink — ENOENT -> the link is NOT followed (control /usr/lib resolves (\\wsl.localhost\debian\usr\lib))
   FACT    realpath / read of the link (the file behind it exists) — realpath ENOENT; read ENOENT -> the link is exposed but NOT followed
-  FACT    a rename whose destination traverses the link — rename accepted without error and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\renamed-dst.txt exists: true -> the file landed AT the link's target (the fence authorizes the destination spelling; the provider never reaches this primitive — the mkdir below aborts first, fs-local/src/fsio.ts:598)
-  HAZARD  mkdir through the link, at a spelling the fence authorizes — isUnderHost(...) === true; mkdir reported EINVAL and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\dsh-link-dir exists: true
+  FACT    a rename whose destination traverses the link — rename accepted without error and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\renamed-dst.txt exists: true -> the file landed AT the link's target (the SHARE resolves the destination spelling; the fence refuses it — the assertion below — and the provider never reaches this primitive anyway: the mkdir below aborts first, fs-local/src/fsio.ts:598)
+  FACT    mkdir through the link, at a spelling the share resolves elsewhere — mkdir reported EINVAL and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\dsh-link-dir exists: true; isUnderHost(the raw spelling) === false
+  OK    the fence refuses the target its own canonicalization produces for that spelling
   FACT    cross-share identity <share root> — debian (0,2) vs debian-dev (0,2) -> COLLIDES - the identity comparison cannot tell the two shares apart
   FACT    cross-share identity /tmp — debian (0,1) vs debian-dev (0,1) -> COLLIDES - the identity comparison cannot tell the two shares apart
   FACT    cross-share identity /home — debian (0,16386) vs debian-dev (0,16386) -> COLLIDES - the identity comparison cannot tell the two shares apart
@@ -372,7 +373,6 @@ node scripts/verify-9p.mjs
 
 THE 9P PROFILE MATCHES WHAT THE PROVIDER ASSUMES
 8 share fact(s) recorded above — NOT assertions: the fence's answers to them are pinned in verify-fs-fence.mjs
-RECORDED HAZARD THE FENCE DOES NOT COVER: mkdir through the link, at a spelling the fence authorizes — isUnderHost(...) === true; mkdir reported EINVAL and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\dsh-link-dir exists: true
 ```
 
 **F2 的完整答案：共享对符号链接到底做了什么。** Task 1 的 F2 只测了 `realpath`。同一个探针现在在夹具根里用 `ln -s` 自己建链接（目标在夹具根**之外**，两个目录都归探针所有、用完即删），于是每条答案都有一个**确定是链接**的主体：
@@ -382,7 +382,21 @@ RECORDED HAZARD THE FENCE DOES NOT COVER: mkdir through the link, at a spelling 
 - 末级是符号链接是**安全**的：rename 替换的是根内的链接项本身（实测链接目标文件内容不变），独占创建报 `EEXIST`。
 - Windows 侧连链接项本身都删不掉：`unlink` → ENOENT、`rm` → EISDIR、含链接的目录 `rm -r` → ENOTEMPTY。所以夹具必须用 `wsl.exe ... rm -rf` 清理，并为此挂了 `exit`/`SIGINT`/`SIGTERM` 处理器（Windows 侧删不掉的东西不能留给用户）——这不是洁癖，是这条事实的直接后果。
 
-**HAZARD（已记录，未修；不在本套件的断言里）**：`fs-local` 的发布序列是 `mkdir(directory, {recursive:true})` → 建暂存目录 → `open(temp,'wx')` → `rename`（`fs-local/src/fsio.ts:598-649`）。写一个「可写根内、但路径中间是共享上已有的符号链接」的目标时：围栏的 `canonicalHostPath` 与 `resolveLocalTarget` 都用 `realpathSync.native`，它**看不见**这个链接（F2），于是词法比较授权该拼写；随后第 598 行那个 `mkdir` 把**缺失的那一级目录建在链接目标处**——可写根之外——客户端报错、写本身失败。**没有任何文件内容落到根外**（暂存目录、独占创建、带链接源的 rename 都因不穿过而失败），影响是越界**建目录**加残留，不是越界写文件；而且需要可写根里**先存在**一个指向界外的符号链接。记录在此而不在本套件里变红：这不是「共享的画像与提供方假设不符」，而是围栏看不见的一个缺口，它该有自己的任务。
+### 围栏的新规则（Task 2）：无法规范化的已存在组件即拒绝
+
+**规则（一句，可被证伪）**：一个目标的包含性判定为真，当且仅当「可写根」与「目标自身文件名」之间的**每一个路径组件**要么在共享上**不存在**（`lstat` 报 ENOENT/ENOTDIR），要么**能被规范化**（`realpathSync.native` 成功）；一个**存在却无法规范化**的组件（本机实测：`lstat` 报 EISDIR、`realpath` 与 `stat` 都报 ENOENT 的 Linux 符号链接）直接拒绝该目标。目标**自身的文件名不在规则内**。
+
+**这条 HAZARD 因此关闭**：原记录是「围栏授权一个共享会解析到别处的拼写，而发布的第一个动作 `mkdir(directory, {recursive:true})`（`fs-local/src/fsio.ts:598`）把缺失的那一级目录建在链接目标处——可写根之外」。规则落地后，同一个拼写在 `verify-9p.mjs` 里的实测从 `isUnderHost(...) === true` 变成 `false`，那行 HAZARD 换成真断言（「围栏拒绝它自己的规范化给出的目标」）。**FACT 行仍然为真**：共享侧的 mkdir 依旧把目录建在链接目标处（那是共享的行为），变的只是围栏对它的回答。
+
+**为什么选 (b) 而不是 (a)**：候选规则 (a)「拒绝路径**组件**存在却不解析的目标」字面上把**末级组件**也算进去，而末级是链接是**实测安全**的——发布的 rename 替换的是根内的链接项本身，链接目标文件内容不变（上面 F2 的第三条），并且**今天就能成功**（`verify-fs-fence.mjs` 的对照钉子「末级文件链接 / 末级目录链接仍被授权」）。拒绝它就是拒掉一条能工作的合法写入，而「拒掉合法同根写入的规则比缺口更糟」。另外 (a) 没有给规则划根边界，字面读下去会因为**根之上**的某个组件无法解析而拒绝一切。选定的 (b) 把范围钉死在「根与目标文件名之间」——这正是第 598 行那个 `mkdir` 会遍历、并会创建的组件集合。
+
+**规则住在哪**：`lib/wsl/fence.js` 的 `isUnderHost`（新助手 `canonicalizationOf` / `componentsCanonicalize`），**不是** `checkedTarget`。理由有三：一，授权判定就是 `isUnderHost` 的答案（`checkedTarget` 只是对每个可写根调用它，并把它当作授权），把规则放在别处会让 `isUnderHost('<root>\<link>\...', root)` 继续返回 `true`——而那条表达式正是原 HAZARD 记录的实测对象，那样只能「注释掉」缺口，不能关闭它；二，规则需要根边界，而 `isUnderHost` 已经有（词法前缀 + 身份行走）；三，两条路（词法快路与身份回退）都必须过它，否则 `wsl$` 别名拼写会绕开规则——别名钉子就是为这一条存在的。`checkedTarget` 与两个变更入口一字未改。
+
+**代价（实测，不是推理）**：规范化分不出「指向界内」与「指向界外」的链接，所以两种都被拒。代价是**零**——穿过链接的写在本共享上**本来就不能发布**：`mkdir(directory, {recursive:true})` 对穿过链接的路径报 ENOENT（实测，含中间目录已存在的情形），写永远走不到 rename；围栏的拒绝只是把「先留下一个越界目录、再报 ENOENT」换成「在建任何东西之前拒绝」。`readlink` 也救不了：它对链接项报 EISDIR（实测），拿不到链接目标。
+
+**残留**：**检查与发布之间的竞态**。规则只能拒绝**先已存在**的组件；在 `checkedTarget` 通过之后、第 598 行 `mkdir` 之前由 bash 工具种下的链接仍然看不见（规范化对这类组件本来就是瞎的，任何检查都看不见它）。窗口是亚毫秒级，收益仍只是越界建目录、无内容外泄。
+
+**钉子与变异体**：`verify-fs-fence.mjs` 自建链接夹具（`escape` 指向界外、`inside-link` 指向界内、`dangling` 指向不存在的目标、`file-link` 指向界外的文件；用发行版的 `ln -s` 建、`wsl.exe rm -rf` 删，因为 Windows 侧既建不了也删不了链接项），断言拒绝矩阵（界外祖先、`canonicalHostPath` 给出的目标、目标自己的父级、界内链接、悬空链接、`wsl$` 别名拼写）**加 5 条对照**（真实目录下的缺失组件、根下直接缺失组件、已存在目录、末级文件链接、末级目录链接——都必须仍然放行）；夹具建不起来时**先 FAIL 再跳过**，不允许「链接不存在所以断言空洞地通过」。`verify-9p.mjs` 那行改成真断言。变异体：只删词法快路那一半 → `verify-fs-fence.mjs` 只红 5 条词法钉子（别名那条仍绿）、`verify-9p.mjs` 红 1 条、退出码 1；只删身份行走那一半 → 只红别名那条；两半都删 = 改动前的状态 → 红 6 条。每次变异后按 SHA-256 还原到逐字节相同（`f43d0bd1…`）。
 
 ## 许可证
 
