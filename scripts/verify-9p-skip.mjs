@@ -1,27 +1,35 @@
 /**
- * Pin the report `verify-9p.mjs` gives when there is no second share to measure.
+ * Pin the two reports `verify-9p.mjs` gives when it cannot establish something, in both
+ * machine classes, and the control that keeps them conditional.
  *
- * `verify-9p.mjs` measures the three cross-share identity facts by comparing the
- * selected distribution's share with ANOTHER distribution's. On a machine with one
- * distribution there is nothing to compare against, and the probe must say so
- * LOUDLY: it exits 2, which `verify-all.mjs` reports as SKIP rather than as a
- * pass, and the SKIP names the missing precondition, the three facts that
- * therefore went unmeasured, and the remedy.
+ * FAMILY 1 — the cross-share identity facts (3). They compare the selected distribution's
+ * share with ANOTHER distribution's, so a machine with one distribution cannot measure
+ * them: the probe must say so LOUDLY (a SKIP naming the missing precondition, the three
+ * facts and the remedy) and exit 2, which `verify-all.mjs` reports as SKIP rather than as
+ * a pass. Sections A and B force that precondition through the probe's own override —
+ * pointed at the selected distribution itself, and at an empty value.
  *
- * Why this is its own suite. That branch cannot run on a machine that HAS a second
- * distribution, and a check written inside `verify-9p.mjs` for the
- * one-distribution case would be a check that never runs here — the
- * unreachable-check class this plan removes. This suite FORCES the precondition
- * through the probe's own override (pointed at the selected distribution itself,
- * and at an empty value) and reads the real child's stdout and exit code, so every
- * assertion below runs on every machine. It is a CONTENT pin: "the child skipped"
- * would be unfalsifiable here, because this suite is what forces the skip.
+ * FAMILY 2 — the link fixture (3 facts + 4 checks). When the fixture cannot be built
+ * (wsl.exe fails, or a cold VM start exceeds the probe's own ceiling) the probe loses the
+ * assertion the whole HAZARD-to-assertion conversion produced, so that branch must also be
+ * a counted SKIP and exit 2. The precondition cannot be produced on demand, so section D
+ * runs a COPY of the probe whose own `wsl.exe` calls fail.
  *
- * The two-distribution path is pinned as a CONTROL: a skip that fires
- * unconditionally, or one that also swallows the facts the share can still answer,
- * reddens it. The control classifies the machine from `wsl.exe -l -q` — never from
- * this process's `DSH_WSL_OTHER_DISTRO`, which every child strips — so an override
- * exported in the developer's shell cannot make the pin disagree with its own children.
+ * THE CONTROL (section C) pins that neither skip fires unconditionally: on a machine that
+ * has a second distribution the probe must still measure all three cross-share rows and
+ * exit 0. It classifies the machine from `wsl.exe -l -q` — never from this process's
+ * `DSH_WSL_OTHER_DISTRO`, which every child strips — so an override exported in the
+ * developer's shell cannot make the pin disagree with its own children. Section E then
+ * proves the OTHER class: on a machine with a second distribution it re-runs this whole
+ * suite against a copy whose `listDistros()` reports the selected distribution alone, so
+ * the pin is shown to pass with a second distribution present AND simulated absent.
+ *
+ * Why this is its own suite. Neither branch can run on a machine that HAS a second
+ * distribution (well, on a machine that has one), and a check written inside `verify-9p.mjs`
+ * for them would be a check that never runs here — the unreachable-check class this plan
+ * removes. Every assertion below reads a real child's stdout and exit code, so it runs on
+ * every machine. It is a CONTENT pin: "the child skipped" would be unfalsifiable here,
+ * because this suite is what forces the skips.
  *
  * Run: node scripts/verify-9p-skip.mjs
  */
@@ -278,9 +286,18 @@ function buildFixtureFailedCopy() {
 
 /**
  * Assert the content the fixture-failure SKIP must carry.
+ *
+ * The expected FACT count is derived from the machine class, not hardcoded: the mutant
+ * child's classification is this pin's own (both read `wsl.exe -l -q`, and runProbe strips
+ * the override), so on a machine with ONE distribution the child's cross-share family
+ * skips too — three more facts, no more checks. Hardcoding 3 reddened the pin on exactly
+ * the machine class the owner ruled must SKIP rather than fail (measured: 1 CHECK(S)
+ * FAILED, exit 1, aggregate FAIL).
  * @param {{code: number, out: string}} run - the mutant child's result.
+ * @param {{hasSecond: boolean}} machineSecond - the machine's class, as the control classified it.
  */
-function assertFixtureSkipContent(run) {
+function assertFixtureSkipContent(run, machineSecond) {
+  const expectedFacts = LINK_FIXTURE_FACTS.length + (machineSecond.hasSecond ? 0 : CROSS_SHARE_LABELS.length)
   const block = skipBlockOf(run.out)
   const blockText = block.join('\n')
   const { line, reason } = skipLineOf(block)
@@ -299,8 +316,8 @@ function assertFixtureSkipContent(run) {
     blockText.includes('wsl.exe') && /wake the distribution/.test(blockText),
     blockText || '(the run printed no SKIP block)')
   const tail = run.out.split('\n').find((entry) => entry.includes('WERE NOT MEASURED')) ?? ''
-  check('fixture skip: the tail counts the unmeasured facts AND the unevaluated checks',
-    /3 SHARE FACT\(S\) WERE NOT MEASURED/.test(tail) && /4 CHECK\(S\)/.test(tail),
+  check(`fixture skip: the tail counts the unmeasured facts (${expectedFacts} on this ${machineSecond.hasSecond ? 'two-distribution' : 'one-distribution'} machine) AND the four unevaluated checks`,
+    new RegExp(`(^| )${expectedFacts} SHARE FACT\\(S\\) WERE NOT MEASURED`).test(tail) && /4 CHECK\(S\) WERE NOT EVALUATED/.test(tail),
     tail || `(no line saying the facts were not measured); the run ends:\n${tailOf(run.out)}`)
   const factLines = run.out.split('\n').filter((entry) => entry.startsWith('  FACT    '))
   check('fixture skip: the UNMEASURED fixture row is NOT counted among the recorded facts',
@@ -352,8 +369,63 @@ console.log('\nthe probe whose link fixture could not be built (wsl.exe forced t
 const fixtureCopy = buildFixtureFailedCopy()
 check('fixture skip: the mutation applied to the copy (a stale mutation must not pass silently)',
   fixtureCopy.mutated, `the copy at ${fixtureCopy.path} still imports node:child_process unshadowed`)
-assertFixtureSkipContent(runProbe({}, fixtureCopy.path))
+assertFixtureSkipContent(runProbe({}, fixtureCopy.path), machineSecond)
 rmSync(fixtureCopy.tree, { recursive: true, force: true })
+
+/**
+ * A copy of THIS WHOLE PIN whose `listDistros()` reports the selected distribution alone —
+ * the owner's machine class, produced on a machine that has a second distribution.
+ *
+ * Section D's expected fact count depends on the machine class, so the class itself has
+ * to be exercised, not reasoned about: this copy is where the pin is shown to pass with a
+ * second distribution present AND absent. It carries the whole pinned tree (its own probe,
+ * its own env.mjs, the fence), so the copy's children are copies too and the simulation
+ * cannot leak into the real run. It is only built on a machine that HAS a second
+ * distribution — on a one-distribution machine this suite is already that class, and
+ * re-entering the simulation there would recurse.
+ * @returns {{path: string, tree: string, mutated: boolean}} the copy's pin, its tree, and
+ *   whether the one-distribution patch applied.
+ */
+function buildOneDistributionCopy() {
+  const tree = mkdtempSync(join(tmpdir(), 'dsh-9p-skip-one-'))
+  mkdirSync(join(tree, 'scripts'), { recursive: true })
+  mkdirSync(join(tree, 'lib', 'wsl'), { recursive: true })
+  for (const name of ['env.mjs', 'detail.mjs', 'verify-9p.mjs', 'verify-9p-skip.mjs']) {
+    copyFileSync(join(here, name), join(tree, 'scripts', name))
+  }
+  for (const name of ['fence.js', 'paths.js']) {
+    copyFileSync(join(here, '..', 'lib', 'wsl', name), join(tree, 'lib', 'wsl', name))
+  }
+  const envPath = join(tree, 'scripts', 'env.mjs')
+  const source = readFileSync(envPath, 'utf8')
+  const filter = 'filter((name) => name.length > 0)'
+  const mutated = source.includes(filter)
+  writeFileSync(envPath, source.replace(filter,
+    `filter((name) => name.length > 0 && name.toLowerCase() === resolveDistro().toLowerCase()) /* PIN: one distribution */`), 'utf8')
+  return { path: join(tree, 'scripts', 'verify-9p-skip.mjs'), tree, mutated }
+}
+
+// E: the OTHER machine class. A count derived from the class is only as good as the class
+// being exercised, so this re-runs the whole pin against a copy that reports the selected
+// distribution alone and asserts the child pin is green AND really classified the machine
+// as one-distribution (a patch that silently stopped applying would pass an "it exited 0"
+// check on a two-distribution machine).
+if (machineSecond.hasSecond) {
+  console.log('\nthe whole pin, re-run on a copy that reports ONE distribution')
+  const oneDistro = buildOneDistributionCopy()
+  const childPin = runProbe({}, oneDistro.path)
+  rmSync(oneDistro.tree, { recursive: true, force: true })
+  check('one-distribution class: the simulation applied to the copy',
+    oneDistro.mutated, `the copy at ${oneDistro.path} still lists every distribution`)
+  check('one-distribution class: the pin is GREEN there too (exit 0, ALL CHECKS PASSED)',
+    childPin.code === 0 && childPin.out.includes('ALL CHECKS PASSED'),
+    `exit ${childPin.code}; the child pin's FAIL lines and its end:\n${failureLinesOf(childPin.out)}\n${tailOf(childPin.out)}`)
+  check('one-distribution class: the child pin really classified the copy as one-distribution',
+    childPin.out.includes('this machine lists no second distribution beyond'),
+    tailOf(childPin.out, 6))
+} else {
+  console.log('\nthis machine ALREADY is the one-distribution class, so section E has nothing to simulate')
+}
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1

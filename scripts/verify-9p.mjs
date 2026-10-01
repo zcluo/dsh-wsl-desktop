@@ -331,7 +331,11 @@ try {
 if (linkProblem !== '') {
   console.log(`  SKIP  the link fixture — the probe could not build it: ${linkProblem}`)
   console.log(`        NOT MEASURED (${Object.keys(LINK_FACTS).length} facts): ${Object.values(LINK_FACTS).join(', ')}`)
-  console.log(`        NOT EVALUATED (${Object.keys(LINK_CHECKS).length} checks): the two controls the fixture's answers rest on (the link is listed; its target is readable), the traversal refusal they qualify, and the assertion this fixture exists for — "${LINK_CHECKS.fenceRefusal}" — the fence's rule for a target whose components cannot be canonicalized, which no other check in this suite covers.`)
+  // Every label below is interpolated from LINK_CHECKS: prose that merely DESCRIBES the
+  // four would drift the moment one of them is reworded, and the reader of a SKIP has no
+  // other way to know what did not run.
+  console.log(`        NOT EVALUATED (${Object.keys(LINK_CHECKS).length} checks, every label from LINK_CHECKS): ${Object.values(LINK_CHECKS).map((label) => `"${label}"`).join('; ')}`)
+  console.log(`        Of those, "${LINK_CHECKS.fenceRefusal}" is the assertion this fixture EXISTS for — the fence's rule for a target whose components cannot be canonicalized, which no other check in this suite covers.`)
   console.log(`        Remedy: wake the distribution once ("wsl.exe -d ${distro} -- true") and re-run — the fixture needs wsl.exe twice (to create the link, and to remove it) and is this probe's own, not the suite's precondition.`)
   skipped += Object.keys(LINK_FACTS).length
   skippedChecks += Object.keys(LINK_CHECKS).length
