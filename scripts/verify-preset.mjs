@@ -6,7 +6,7 @@
  * relative-name rewrite, the wsl-world isolate group).
  * Run: node scripts/verify-preset.mjs
  */
-import { buildVariantPlugins, buildWorldGroup, isHostWorldModule, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
+import { buildVariantPlugins, buildWorldGroup, isHostWorldModule, WORLD_MODULE_NAMES, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
 
 let passed = 0
 let failed = 0
@@ -36,12 +36,95 @@ const minimalBase = [
   ] },
   { id: 'tool-web', name: '@deepseek-ai/dsh-tool-web' },
 ]
+// The fixture declares what must SURVIVE it and the assertion compares the whole
+// kept list against that declaration. The previous form re-asked the matcher —
+// `hostModuleLeak` called isHostWorldModule on the output — so the assertion was
+// blind to exactly the spellings the matcher misses and could not fail on the
+// defect it existed to catch (D6).
+const minimalKept = ['persona', 'tool-web', 'wsl-world']
 const minOut = buildVariantPlugins(minimalBase, MODULES)
-const hostModuleLeak = (rows) => rows.some((row) => (typeof row?.name === 'string' && isHostWorldModule(row.name)) || (Array.isArray(row?.config) && hostModuleLeak(row.config)))
 check('the persistent-shell group is pruned empty and dropped', !minOut.plugins.some((row) => row.id === 'persistent-shell'), minOut.plugins.map((row) => row.id))
-check('no host-world module survives anywhere in the variant', !hostModuleLeak(minOut.plugins), minOut.plugins)
+check('the variant keeps exactly the rows the fixture declares safe', JSON.stringify(minOut.plugins.map((row) => row.id)) === JSON.stringify(minimalKept), minOut.plugins.map((row) => row.id))
 check('non-world rows survive the group prune', minOut.plugins.some((row) => row.id === 'tool-web'), minOut.plugins.map((row) => row.id))
 check('the removal log names the pruned rows', minOut.removed.includes('persistent-pwsh') && minOut.removed.includes('pty') && minOut.removed.includes('persistent-shell'), minOut.removed)
+
+console.log('\nhost-world spellings (D6 — the matcher missed a subpath of the same package)')
+// What the variant must do with a specifier is a fact about the SPECIFIER, so it is
+// declared here beside the spelling instead of asked of isHostWorldModule: a suite
+// that asks the code under test what the answer is has no oracle at all, which is
+// how the old leak assertion came to be blind to this exact defect.
+// `survives: true` entries are the controls — a matcher that answered `true` for
+// everything would pass every hostile row below and fail these.
+const SPELLINGS = [
+  // Live misses. The package's './src/*' subpath IS exported by the installed
+  // @deepseek-ai packages measured here (dsh-tool-pwsh, dsh-tool-fs,
+  // dsh-tool-fs-search, dsh-tool-bash, dsh-terminal, dsh-terminal-bash export
+  // './src/*'; dsh-tool-str-replace-editor and the persistent pair do not), and the
+  // harness's own tests name dsh-terminal-bash this way.
+  { name: '@deepseek-ai/dsh-tool-pwsh/src/index.ts', survives: false },
+  { name: '@deepseek-ai/dsh-tool-fs-search/src/glob.ts', survives: false },
+  { name: '@deepseek-ai/dsh-terminal-bash/src/config.ts', survives: false },
+  // Not loadable today, and asserted anyway: the predicate runs offline over
+  // arbitrary, future and user-authored presets and cannot consult an exports map,
+  // so its rule is package IDENTITY. A rule keyed to today's './src/*' map would be
+  // blind to a future './lib/*' export — the same class of miss it is fixing.
+  { name: '@deepseek-ai/dsh-tool-pwsh/lib/index.js', survives: false },
+  { name: '@deepseek-ai/dsh-tool-pwsh-persistent/src/index.ts', survives: false },
+  // Path and URL spellings. The exports map governs BARE subpath resolution only,
+  // so a URL into the package's own directory is loadable whatever the map says.
+  { name: 'file:///opt/x/@deepseek-ai/dsh-tool-pwsh/lib/index.js', survives: false },
+  { name: 'file:///opt/x/@deepseek-ai/dsh-tool-pwsh.js', survives: false },
+  { name: 'file:///opt/x/%40deepseek-ai/dsh-terminal/lib/index.js', survives: false },
+  { name: 'E:\\node_modules\\@deepseek-ai\\dsh-tool-str-replace-editor\\lib\\index.js', survives: false },
+  { name: '/opt/x/@deepseek-ai/dsh-terminal-bash/src/config.ts', survives: false },
+  // Controls: the same shapes, naming packages that are NOT host-world. tool-bash
+  // and tool-fs are deliberately absent from WORLD_MODULE_NAMES (their WSL forms
+  // are re-mounted inside the wsl-world group), so a fix that widened the set
+  // instead of resolving the package would redden here.
+  { name: './tool-bootstrap.mjs', survives: true },
+  { name: 'file:///E:/src/preset/tool-bootstrap.mjs', survives: true },
+  { name: '@deepseek-ai/dsh-tool-web/src/index.ts', survives: true },
+  { name: '@deepseek-ai/dsh-tool-bash/src/index.ts', survives: true },
+  { name: '@deepseek-ai/dsh-tool-fs/src/index.ts', survives: true },
+  { name: '@deepseek-ai/dsh-tool-pwsh-persistent-extra/src/index.ts', survives: true },
+  { name: 'cordis:group', survives: true },
+]
+const spellingOut = buildVariantPlugins(SPELLINGS.map((entry, index) => ({ id: `spelling-${index}`, name: entry.name })), MODULES)
+const keptSpellings = new Set(spellingOut.plugins.map((row) => row.name))
+for (const { name, survives } of SPELLINGS) {
+  check(`a ${survives ? 'non-world' : 'host-world'} row spelled as ${name} ${survives ? 'survives' : 'is pruned'}`,
+    keptSpellings.has(name) === survives,
+    { spelling: name, survives, kept: keptSpellings.has(name) })
+}
+// The rule forms a scoped package name from two adjacent path segments, which is
+// only sound while every name it matches against IS one: an unscoped member added
+// later would be silently unmatched.
+check('every host-world module name is a scoped pair the rule can form',
+  [...WORLD_MODULE_NAMES].every((name) => /^@[^/]+\/[^/]+$/u.test(name)), [...WORLD_MODULE_NAMES])
+
+console.log('\nrows the classifier cannot read are reported, not assumed safe')
+// `name` is typed as a plain string and the loader's expression nodes (`JsExpr`,
+// `{ __jsExpr }`) appear on `id`/`disabled` — so this input is malformed rather
+// than normal. It is still the one input the classifier has no verdict for, and a
+// row kept WITHOUT a verdict is the leak shape D6 is about: reported, not assumed
+// safe. Keeping it is deliberate — the transform must not guess a row out of a
+// preset whose specifier it cannot read.
+const unreadable = buildVariantPlugins([
+  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} },
+  { id: 'expression-row', name: { __jsExpr: "process.platform === 'win32'" } },
+], MODULES)
+check('a row whose name is not a specifier is recorded as unclassified',
+  Array.isArray(unreadable.unclassified) && unreadable.unclassified.length === 1 && unreadable.unclassified[0]?.id === 'expression-row',
+  unreadable.unclassified)
+check('the unclassified row is kept rather than guessed away',
+  unreadable.plugins.some((row) => row.id === 'expression-row'), unreadable.plugins.map((row) => row.id))
+check('a fully readable preset reports nothing unclassified',
+  Array.isArray(minOut.unclassified) && minOut.unclassified.length === 0, minOut.unclassified)
+// The predicate is exported, so a throw here is a caller-visible failure of its
+// own contract; caught so the suite reports it instead of dying mid-run.
+let nonStringVerdict
+try { nonStringVerdict = isHostWorldModule({ __jsExpr: 'x' }) } catch (error) { nonStringVerdict = error }
+check('a non-string specifier is answered false, not thrown on', nonStringVerdict === false, nonStringVerdict)
 
 const basePlugins = [
   { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { suffix: 'You are a coding agent.' } },
