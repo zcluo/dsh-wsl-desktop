@@ -336,6 +336,8 @@ F5 isUnderHost(foreign target, root)                 UNMEASURED - pass a second 
 - **F4 夹具根不存在**：`<home>/proj` 报 ENOENT，`verify-fs-fence.mjs` 从不创建它。
 - **F5 身份行走没有跑**：根不存在时 `isUnderHost` 在 stat 根处短路返回 false（`lib/wsl/fence.js:82-83`），所以这一行的 `false` 是「根不存在」，不是「行走拒绝了跨发行版目标」。**F3 的相撞与 F5 的 false 不能合起来读成「跨发行版包含是安全的」。**
 
+**更正（Task 4，提交 `850e104`）**：F4/F5 记录的是 Task 4 **之前**的状态——当时那个夹具根就是 `<home>/proj`。`verify-fs-fence.mjs` 现在自己创建夹具根：发行版 `/tmp` 下一次性的 `dsh-fence-fixture-<pid>-<rand>`，用完即删（正常退出、断言失败、`process.exit`、未捕获异常、SIGINT/SIGTERM 都清理），并且**不再引用 `<home>/proj`**，所以跨发行版那条钉子在有发行版的机器上都会真的跑身份行走。上表的数字**不改**：它是当时的实测记录，探针输出至今逐字可复现——`<home>/proj` 仍然 ENOENT，套件仍然从不创建**那个**路径。
+
 ## 许可证
 
 本项目基于 [MIT 协议](LICENSE) 发布。

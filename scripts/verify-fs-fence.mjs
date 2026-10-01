@@ -88,9 +88,36 @@ try {
 } catch (error) {
   fixtureProblem = `${error?.code ?? 'error'}: ${error?.message ?? String(error)}`
 }
-// Removed on EVERY exit path, including a failing assertion or a thrown stat —
-// an exit handler runs for a normal exit and for process.exit alike.
-process.on('exit', () => rmSync(root, { recursive: true, force: true }))
+/**
+ * Remove the scratch root, and never throw while doing it.
+ *
+ * This runs from an exit handler and from a signal handler, where a throw would
+ * replace the suite's verdict — or the signal's exit code — with an unrelated
+ * error. A leftover must not be silent either, so a failed removal is reported
+ * on stderr.
+ */
+function removeFixtureRoot() {
+  try {
+    rmSync(root, { recursive: true, force: true })
+  } catch (error) {
+    console.error(`verify-fs-fence: the scratch root could not be removed: ${root} (${error?.code ?? error?.message ?? String(error)})`)
+  }
+}
+// Removed on EVERY path that can still run code: a normal exit, `process.exit`,
+// an uncaught throw, a failed assertion. Signals need handlers of their own —
+// Node does not emit 'exit' when it dies from a signal, so Ctrl-C would
+// otherwise strand the scratch directory in the user's distribution. (An
+// unconditional kill — SIGKILL, or Stop-Process on Windows — runs no code at
+// all; the dsh-fence-fixture- prefix is then how the leftover is found.)
+process.on('exit', removeFixtureRoot)
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.on(signal, () => {
+    removeFixtureRoot()
+    // This handler replaces Node's default termination, so the conventional
+    // status (128 + the signal number) is set explicitly.
+    process.exit(code)
+  })
+}
 const rootExists = fixtureProblem === '' && existsSync(root)
 check('the containment fixture root exists, so the identity walk actually runs',
   rootExists === true,
