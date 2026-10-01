@@ -76,6 +76,58 @@ console.log('helper structural gates (offline)')
 // can never again ship unrunnable.
 const helperPathFile = fileURLToPath(new URL('../lib/wsl/dsh-wsl-confine.sh', import.meta.url))
 const helperSource = await readFile(helperPathFile, 'utf8')
+// The helper is a root-owned sudo target that calls twelve tools by bare name —
+// getent, cut, sed, tr, mount, findmnt, grep, mountpoint, setpriv, env, bash,
+// unshare — and sudo's env_reset does not save it. An EXPORTED PATH is replaced
+// when sudoers sets secure_path (measured: `sudo -n printenv PATH` prints the
+// secure_path value here), but a PATH handed over as a sudo command-line
+// assignment still reaches the target (measured on debian, debian-dev and arch:
+// `sudo -n PATH=/tmp/evil:/usr/bin:/bin printenv PATH` -> /tmp/evil:/usr/bin:/bin),
+// and the NOPASSWD grant is argument-wildcarded. The identity gate is the worst
+// case: it resolves getent and cut through that PATH and TRUSTS their output for
+// the --uid/--gid comparison, so a forged answer satisfied --uid 0 --gid 0.
+// Measured against a copy of this helper: with a forged getent/cut first on PATH
+// the gate accepted `--uid 0 --gid 0` and execution reached the fence, while the
+// same forged PATH refused the REAL identity — the gate answered from the
+// caller's PATH either way. The pin is the helper's own guarantee, and it has to
+// be the FIRST statement it executes: anything above it, the gate included, still
+// resolves from the caller's PATH.
+const pinnedPathLine = 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+const helperLines = helperSource.split('\n')
+const pinIndex = helperLines.indexOf(pinnedPathLine)
+check('the helper pins PATH to the standard system directories',
+  pinIndex !== -1,
+  `expected the exact line \`${pinnedPathLine}\` — a pin that leans on the incoming PATH (PATH=$PATH:/usr/bin) pins nothing, because the incoming PATH is the caller's`)
+check('the helper exports the pinned PATH so its children inherit it',
+  helperLines.some((line) => line.trim() === 'export PATH'),
+  'the fence body and the dropped command are separate processes; an unexported assignment leaves env/bash/unshare — and every bare-name call inside the fence — resolving from whatever PATH those children were handed')
+// Statements, not text: the pin must be the first thing the script EXECUTES.
+// The slice is guarded on the presence test, because indexOf returns -1 for a
+// missing pin and `slice(0, -1)` would then scan almost the whole file — a check
+// that can pass while the pin is absent is exactly the state this rejects.
+const pinPrelude = pinIndex === -1
+  ? ['<the pin is absent>']
+  : helperLines.slice(0, pinIndex)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#') && line !== 'set -euo pipefail')
+check('the pin is the first statement the helper executes',
+  pinIndex !== -1 && pinPrelude.length === 0,
+  `only comments, blank lines and \`set -euo pipefail\` may precede the pin; found ${JSON.stringify(pinPrelude)} — every statement above it, the identity gate included, runs with the caller's PATH`)
+// The pin must also be the LAST word on PATH: a later widening
+// (PATH="$PATH:/home/u/bin") would put a caller-writable directory back in front
+// of the gate's getent/cut, which is the whole defect.
+const pathAssignments = helperSource.match(/^\s*PATH=/gm) ?? []
+check('the pin is the only PATH assignment in the helper',
+  pathAssignments.length === 1,
+  `found ${pathAssignments.length} PATH assignment(s) — the pin must be the only one`)
+// Presence FIRST: indexOf returns -1 for a missing marker and -1 sorts before
+// every real index, so the bare comparison would pass on a helper with no pin at
+// all — the state this exists to reject.
+check('the pin precedes the identity gate',
+  helperSource.indexOf(pinnedPathLine) !== -1
+    && helperSource.indexOf('getent passwd') !== -1
+    && helperSource.indexOf(pinnedPathLine) < helperSource.indexOf('getent passwd'),
+  'the gate trusts getent/cut output for the --uid/--gid comparison, so a pin placed after it has not pinned it')
 check('the helper has no missing-semicolon brace groups', !/exit 2 \}/.test(helperSource), 'found `exit 2 }` — the brace group stays open and bash aborts at EOF')
 check('the fence receives its parameters as environment variables',
   helperSource.includes('DROP_UID="$uid"') && helperSource.includes('--reuid="$DROP_UID"'),

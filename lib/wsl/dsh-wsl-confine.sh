@@ -23,6 +23,28 @@
 # session user aim it at uid 0 — the fence is a WRITE boundary, so uid 0 inside
 # it still reads every root-only file. Root's own direct invocation has no
 # SUDO_USER and skips the check.
+#
+# This script runs as root and calls twelve tools by bare name (getent, cut, sed,
+# tr, mount, findmnt, grep, mountpoint, setpriv, env, bash, unshare). sudo's
+# env_reset does not save it: an exported PATH is replaced when sudoers sets
+# secure_path, but a PATH handed over as a sudo command-line assignment still
+# reaches us (measured on debian, debian-dev and arch), and the NOPASSWD grant is
+# argument-wildcarded. Every external below would then be resolved from that PATH
+# as uid 0 - including getent and cut, whose output the identity gate trusts for
+# the --uid/--gid comparison, so a forged answer satisfied --uid 0 --gid 0. Pin it
+# here, as the FIRST statement, rather than depending on a deployment option we
+# cannot verify.
+#
+# The pin is unconditional and has NO fallback: the twelve tools must be reachable
+# in these six directories. A distribution where one is not fails CLOSED - nothing
+# runs: a missing getent leaves the caller record empty and the gate refuses it, a
+# missing cut fails the pipeline under pipefail (127) before the fence, and the
+# command -v preflights below exit 97 with the setup-failure marker. No branch
+# re-widens PATH to the caller's, because a fallback would restore exactly this
+# hole.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 set -euo pipefail
 VERSION='dsh-wsl-confine v1.2'
 
