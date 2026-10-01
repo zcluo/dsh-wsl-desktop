@@ -114,12 +114,15 @@ check('the pin is the first statement the helper executes',
   pinIndex !== -1 && pinPrelude.length === 0,
   `only comments, blank lines and \`set -euo pipefail\` may precede the pin; found ${JSON.stringify(pinPrelude)} — every statement above it, the identity gate included, runs with the caller's PATH`)
 // The pin must also be the LAST word on PATH: a later widening
-// (PATH="$PATH:/home/u/bin") would put a caller-writable directory back in front
-// of the gate's getent/cut, which is the whole defect.
-const pathAssignments = helperSource.match(/^\s*PATH=/gm) ?? []
+// (export PATH="$PATH:/home/u/bin", PATH+=":/opt/bin") would put a caller-writable
+// directory back in front of the gate's getent/cut, which is the whole defect. The
+// matcher must cover the spellings a widening actually takes: an earlier
+// /^\s*PATH=/ missed `export PATH=...` and `PATH+=...`, so the check was weaker
+// than the claim in its own label.
+const pathAssignments = helperSource.match(/^\s*(?:export\s+)?PATH\+?=/gm) ?? []
 check('the pin is the only PATH assignment in the helper',
   pathAssignments.length === 1,
-  `found ${pathAssignments.length} PATH assignment(s) — the pin must be the only one`)
+  `found ${pathAssignments.length} PATH assignment(s) — the pin must be the only one, in any spelling (PATH=, PATH+=, export PATH=, export PATH+=)`)
 // Presence FIRST: indexOf returns -1 for a missing marker and -1 sorts before
 // every real index, so the bare comparison would pass on a helper with no pin at
 // all — the state this exists to reject.

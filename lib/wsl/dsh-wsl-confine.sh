@@ -45,6 +45,22 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
+# NOT closed here, and not closable by the pin above: a caller-supplied BASH_ENV is
+# sourced by bash BEFORE line 1, as root (measured: `sudo -n BASH_ENV=<file> <this
+# file> --version` runs <file> as uid 0). Privileged mode does not process BASH_ENV
+# (`bash -p script`, and `#!/bin/bash -p` under exec, both skip it) - but the fence
+# body is launched with `bash -c` below, which DOES process it, and -p on this script
+# would not remove the variable from the environment. TWO edits in THIS file close
+# it: the shebang becomes `#!/bin/bash -p`, and `unset BASH_ENV` goes before the exec
+# tail (which removes it for every descendant, the fence body and the drop-side
+# `bash -lc` included). Measured together on a copy: nothing sourced, and a real
+# confined command still completes. NOT applied here on purpose - a -p shebang
+# changes a root helper's startup and needs its own verification. Severity: this is
+# unconfined root code execution BEFORE the fence, which exceeds the
+# root-inside-the-fence read access the pin above closes - but only for a deployment
+# whose sudo grant is NARROW (this helper alone); an account holding NOPASSWD: ALL
+# already has that ceiling.
+
 set -euo pipefail
 VERSION='dsh-wsl-confine v1.2'
 
