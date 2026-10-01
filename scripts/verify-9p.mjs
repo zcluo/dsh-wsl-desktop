@@ -11,6 +11,13 @@
  * of asserting them: see "The three facts the fence rests on" below for why, and
  * `scripts/verify-fs-fence.mjs` for the fence's own answers to them.
  *
+ * With no second distribution to compare against, the cross-share identity facts
+ * cannot be measured at all. The suite then SKIPS them — naming the precondition,
+ * the three facts that therefore went unmeasured and the remedy — and exits 2,
+ * which `verify-all.mjs` reports as SKIP instead of as a pass. A silent skip would
+ * leave a green aggregate implying the fence's assumptions were established, so the
+ * report's content is pinned by `scripts/verify-9p-skip.mjs`.
+ *
  * Run: node scripts/verify-9p.mjs [distro]
  */
 
@@ -26,6 +33,8 @@ const distro = resolveDistro(process.argv[2])
 const root = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe`
 
 let failures = 0
+/** Share facts that could not be measured here; the suite's exit code reports them (see the tail). */
+let skipped = 0
 
 /**
  * Record one probe outcome against its expected availability.
@@ -416,21 +425,49 @@ if (linkProblem !== '') {
 // distribution, so a foreign target is refused before any stat (verify-fs-fence
 // pins that), but the INPUT to that comparison is a property of the host: this is
 // where a reader sees whether the two shares still collide.
+//
+// A machine with ONE distribution cannot answer any of these three rows, and the
+// owner ruled that this is a SKIP rather than a FAIL: a missing precondition, not
+// a broken profile. The SKIP is LOUD because it is quieter than the FAIL it
+// replaces — the rows are named, counted, and the suite exits 2 so `verify-all`
+// shows SKIP rather than PASS — so a green aggregate cannot imply these facts were
+// established. Only this family is skipped: every fact that does not need a second
+// share is still measured and printed below.
+
+/** The share paths the cross-share rows compare; each is one measured fact. */
+const CROSS_SHARE_PATHS = ['/', '/tmp', '/home']
+
+/**
+ * The FACT label of one cross-share row.
+ * @param {string} linuxPath - the share path compared, `/` being the share root.
+ * @returns {string} the label the row is recorded under.
+ */
+const crossShareLabel = (linuxPath) => `cross-share identity ${linuxPath === '/' ? '<share root>' : linuxPath}`
+
 let otherDistro = ''
 let otherProblem = ''
 try {
   const resolved = resolveOtherDistro(distro)
   if (resolved === undefined) otherProblem = `no distribution other than "${distro}" is installed`
+  // An EMPTY override is not a second share either, and it used to produce a SKIP
+  // with no reason at all ("UNMEASURED - "), which names nothing.
+  else if (resolved.trim() === '') otherProblem = 'DSH_WSL_OTHER_DISTRO is set to an empty value, so no second share is named'
   else if (resolved.toLowerCase() === distro.toLowerCase()) otherProblem = `the resolved second distribution is "${distro}" itself, so every row would compare the share with itself`
   else otherDistro = resolved
 } catch (error) {
   otherProblem = String(error?.message ?? error)
 }
+// The SKIP must always name its precondition: a resolver that failed without a
+// message must not produce a reasonless SKIP.
+if (otherDistro === '' && otherProblem.trim() === '') otherProblem = 'the second distribution could not be resolved, and no reason was reported'
 if (otherDistro === '') {
-  fact('cross-share identity', `UNMEASURED - ${otherProblem}`)
+  console.log(`  SKIP  cross-share identity — no second share to compare against: ${otherProblem}`)
+  console.log(`        NOT MEASURED (${CROSS_SHARE_PATHS.length} facts): ${CROSS_SHARE_PATHS.map(crossShareLabel).join(', ')}`)
+  console.log("        Unestablished: whether two shares report the same (dev,ino) — the INPUT to the fence's identity fallback (lib/wsl/fence.js) and the premise of verify-fs-fence.mjs's cross-distribution assertions.")
+  console.log('        Remedy: install a second WSL distribution, or point DSH_WSL_OTHER_DISTRO at one this machine already has (wsl.exe -l -q).')
+  skipped += CROSS_SHARE_PATHS.length
 } else {
-  for (const linuxPath of ['/', '/tmp', '/home']) {
-    const label = linuxPath === '/' ? '<share root>' : linuxPath
+  for (const linuxPath of CROSS_SHARE_PATHS) {
     const spell = (name) => linuxPath === '/' ? `\\\\wsl.localhost\\${name}` : `\\\\wsl.localhost\\${name}${linuxPath.split('/').join('\\')}`
     try {
       const [here, there] = await Promise.all([
@@ -438,10 +475,10 @@ if (otherDistro === '') {
         stat(spell(otherDistro), { bigint: true }),
       ])
       const same = here.dev === there.dev && here.ino === there.ino
-      fact(`cross-share identity ${label}`,
+      fact(crossShareLabel(linuxPath),
         `${distro} (${here.dev},${here.ino}) vs ${otherDistro} (${there.dev},${there.ino}) -> ${same ? 'COLLIDES - the identity comparison cannot tell the two shares apart' : 'distinct'}`)
     } catch (error) {
-      fact(`cross-share identity ${label}`, `UNMEASURED - ${error.code}`)
+      fact(crossShareLabel(linuxPath), `UNMEASURED - ${error.code}`)
     }
   }
 }
@@ -472,8 +509,17 @@ try {
 removeLinkFixture()
 
 await rm(root, { recursive: true, force: true })
-console.log(`\n${failures === 0 ? 'THE 9P PROFILE MATCHES WHAT THE PROVIDER ASSUMES' : `${failures} PRIMITIVE(S) DIFFER FROM THE ASSUMED PROFILE`}`)
-if (facts.length > 0) {
-  console.log(`${facts.length} share fact(s) recorded above — NOT assertions: the fence's answers to them are pinned in verify-fs-fence.mjs`)
+// The exit code is the aggregate's only view of this suite: 2 is a SKIP (a fact
+// that could not be measured here), which `verify-all` shows as SKIP rather than
+// as a pass — the same contract `verify-fs-fence.mjs` uses for its own skips.
+if (failures > 0) {
+  console.log(`\n${failures} PRIMITIVE(S) DIFFER FROM THE ASSUMED PROFILE${skipped === 0 ? '' : `, AND ${skipped} SHARE FACT(S) WERE NOT MEASURED (see the SKIP above)`}`)
+} else if (skipped > 0) {
+  console.log(`\nTHE PROFILE MATCHES WHAT THE PROVIDER ASSUMES, BUT ${skipped} SHARE FACT(S) WERE NOT MEASURED — exit 2, so verify-all reports this suite as SKIP`)
+} else {
+  console.log('\nTHE 9P PROFILE MATCHES WHAT THE PROVIDER ASSUMES')
 }
-process.exitCode = failures === 0 ? 0 : 1
+if (facts.length > 0) {
+  console.log(`${facts.length} share fact(s) recorded above${skipped === 0 ? '' : `, ${skipped} NOT measured (named in the SKIP above)`} — NOT assertions: the fence's answers to them are pinned in verify-fs-fence.mjs`)
+}
+process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0

@@ -27,6 +27,7 @@ const STANDALONE = [
   'verify-world.mjs',
   'verify-preset.mjs',
   'verify-9p.mjs',
+  'verify-9p-skip.mjs',
   'verify-confinement.mjs',
   'verify-terminal.mjs',
   'verify-pty-handle.mjs',

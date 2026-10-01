@@ -178,6 +178,7 @@ node scripts/verify-world.mjs        # 路径互译 + 在发行版里执行命�
 node scripts/verify-preset.mjs       # 预设重写（对着随附 standard 预设跑）
 node scripts/verify-fs-fence.mjs     # fs 围栏的纯逻辑：包含性、跨发行版、可写根推导
 node scripts/verify-9p.mjs           # 9P 共享原语画像 + 身份映射（围栏负载假设）
+node scripts/verify-9p-skip.mjs      # 9P 探针「机器只有一个发行版」时的 SKIP 报告：内容、退出码 2、以及不早退
 node scripts/verify-confinement.mjs  # 约束围栏：工作区可写、外部被拒、属主正确、含空格路径
 node scripts/verify-terminal.mjs     # PTY 桥：resize / 前台进程组 / 信号 / 终止
 node scripts/verify-pty-handle.mjs   # JS 终端句柄（对着真实桥跑）
@@ -349,6 +350,8 @@ F5 isUnderHost(foreign target, root)                 UNMEASURED - pass a second 
 ### verify-9p 记录的三条共享事实（Task 10）
 
 Task 1 的 `probe-fence-facts.mjs` 是**一次性测量**：它把答案记进上面的表，但它不进聚合器。围栏真正依赖的三条共享事实——符号链接、跨发行版身份、大小写——现在也由 `scripts/verify-9p.mjs` 测量，而它**在 `verify-all.mjs` 的 `STANDALONE` 列表里**：离线全量每次都会跑它，所以这三条事实每次全量都会被重新测一遍。
+
+**但机器只有一个发行版时只重新测两条。** 跨发行版身份那三条 `FACT` 行需要**第二个**发行版；机器只有一个时套件**跳过**这三条：`SKIP` 行点名缺失的前提、**逐条列出这三条事实**、给出补救办法（装第二个发行版，或把 `DSH_WSL_OTHER_DISTRO` 指向本机已有的一个），并**以退出码 2 结束**——`verify-all` 因此把它报成 `SKIP` 而不是 `PASS`，绿色的聚合不能说这三条事实已经确立。这是业主的裁定：单发行版是**缺前提**，不是坏画像。跳过**只限这一族**——不需要第二个共享的事实（符号链接、大小写）照常测量并打印，所以读者失去的正好是被点名的那三条。这段 `SKIP` 的**内容**由 `scripts/verify-9p-skip.mjs` 钉住：它用探针自己的覆盖项把前提强制出来、跑真进程读真输出（每条断言因此在**每台**机器上都会跑），并同时钉住对照——有第二个发行版时套件仍测满三条、退出码 0。
 
 **分工：一件事只有一个主人。** `verify-9p.mjs` 记录**共享怎么答**（`FACT` 行，不是断言）；**围栏怎么答**钉在 `scripts/verify-fs-fence.mjs`——大小写那条按共享自己的答案自适应断言（`isUnderHost(大小写变体) === foldsCase`），跨发行版那条断言共享身份的根下外来目标必须被拒。在画像探针里再断言一遍共享的答案，会在**答法不同但健康**的机器上变红，与「永远不会失败的检查」是同一类缺陷。
 
