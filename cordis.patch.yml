@@ -1,9 +1,11 @@
 # Bundle patch for dsh-wsl-desktop.
 #
 # The Host half registers the WSL discovery route the browser half calls; the
-# `dsh.client` manifest in package.json supplies the browser half. Later
-# milestones add the WSL execution-world providers (fs / subprocess / shell /
-# sandbox) and the `wsl` agent preset here.
+# `dsh.client` manifest in package.json supplies the browser half. The WSL
+# execution-world providers (fs / subprocess / shell) and the `wsl` agent
+# presets are deliberately NOT rows here: they are registered programmatically
+# (lib/index.js -> lib/wsl/preset.js), because a variant is generated per base
+# preset rather than mounted as one fixed row.
 - insert:
     - id: wsl-desktop
       name: 'dsh-wsl-desktop'

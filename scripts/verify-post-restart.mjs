@@ -6,10 +6,18 @@
  * Checks that cannot pass without a human opening a WSL session are reported as
  * pending rather than silently skipped.
  *
- * Run: node scripts/verify-post-restart.mjs [baseUrl]
+ * Run: node scripts/verify-post-restart.mjs [baseUrl] [distro]
+ *
+ * `distro` (argv[3]) selects the distribution every WSL-facing check uses,
+ * including the home the fixtures are built under. It falls back to
+ * DSH_WSL_DISTRO and then to env.mjs's FALLBACK_DISTRO ('debian') — NOT to
+ * WSL's machine default: on a host without that distribution the user probe
+ * throws during module evaluation, before the first check prints, so name the
+ * distribution (or set DSH_WSL_DISTRO) when the fallback is not installed.
  */
 
-import { readFile, readdir } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
@@ -20,7 +28,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
 const baseUrl = process.argv[2] ?? 'http://127.0.0.1:19387'
 const distro = resolveDistro(process.argv[3])
-const home = resolveLinuxHome()
+const home = resolveLinuxHome(distro)
 const endpoint = `${baseUrl}/wsl-desktop/api`
 // Every method this script uses is on the acceptance surface, which the route
 // fences behind the transport check plus this token.
@@ -177,13 +185,30 @@ check('the variant declares composition rows', Array.isArray(variant?.rows) && v
 check('the variant dropped the host PowerShell tool row', Array.isArray(variant?.rows) && !variant.rows.some((row) => row.entryId === 'tool-pwsh'), variant?.rows?.map((row) => row.entryId))
 
 console.log('\nexecution world')
-const identity = await call('execInWsl', { cwd: home, command: 'uname -s; pwd; echo "$WSL_DISTRO_NAME"' })
+// The distro is named EXPLICITLY on every one of these. Without it execInWsl
+// resolves the machine's DEFAULT distribution, which on this host is not the one
+// this gate tests — so the assertions below were passing while measuring
+// debian-dev and claiming debian, and a scratch directory created without the
+// distro landed in the wrong one (measured: the session then failed with
+// 'chdir(...) failed 2', because the directory was never there).
+const identity = await call('execInWsl', { cwd: home, distro, command: 'uname -s; pwd; echo "$WSL_DISTRO_NAME"' })
 check('a command runs inside the distribution', identity.exitCode === 0 && identity.stdout.includes('Linux'), identity)
 check('the working directory is a Linux path', identity.target?.linuxPath === home, identity.target)
+// The command echoes the distro NAME on its last line (uname -s; pwd; echo "$WSL_DISTRO_NAME").
+check('the command ran in the distribution under test', identity.stdout.trim().split('\n').pop() === distro, identity.stdout)
 check('the target carries the UNC workspace spelling', String(identity.target?.uncPath ?? '').startsWith('\\\\wsl.localhost\\'), identity.target)
 
 console.log('\nsession-level acceptance')
-const selftest = await call('selftest', { preset: 'wsl-standard', cwd: `\\\\wsl.localhost\\${distro}\\tmp` }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
+// The workspace must be one the fence ACCEPTS. This used to be /tmp, which the
+// fence refuses by design — the confinement mounts a private tmpfs over /tmp
+// AFTER binding the workspace, so such a root is shadowed and every write lands
+// in the tmpfs. The bash step therefore failed on a workspace the plugin is
+// right to reject, and the two confinement assertions downstream of it never
+// engaged. A scratch directory under the home is accepted, and is removed again
+// below.
+const wslScratch = `${home}/.dsh-wsl-selftest`
+await call('execInWsl', { cwd: home, distro, command: `rm -rf ${wslScratch} && mkdir -p ${wslScratch}` })
+const selftest = await call('selftest', { preset: 'wsl-standard', cwd: `\\\\wsl.localhost\\${distro}${wslScratch}` }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
 const step = (name) => selftest.steps.find((entry) => entry.name === name)
 const created = step('create')
 // The service-level agents.create does not honor meta.agentPreset (that seam
@@ -209,7 +234,7 @@ check('the subprocess provider reports a POSIX environment', probe?.environment?
 const bashText = step('tools.bash')?.text ?? ''
 check('the bash tool runs inside the distribution', bashText.includes('"isError":false') && bashText.includes('Linux'), bashText.slice(0, 200))
 const readText = step('tools.read')?.text ?? ''
-check('the read tool addresses a Linux path', readText.includes('"isError":false') && readText.includes('/tmp/dsh-wsl-selftest.txt'), readText.slice(0, 200))
+check('the read tool addresses a Linux path', readText.includes('"isError":false') && readText.includes(`${wslScratch}/dsh-wsl-selftest.txt`), readText.slice(0, 200))
 const pwshText = step('tools.pwsh')?.text ?? ''
 check('the session exposes no PowerShell tool', pwshText.includes('UNKNOWN_TOOL'), pwshText.slice(0, 200))
 const sandboxMode = /"sandbox":\{"mode":"([^"]+)"/.exec(bashText)?.[1]
@@ -220,11 +245,24 @@ const confinedTool = step('tools.bashConfined')
 check('the tool layer confines a write outside the workspace', confinedTool?.sandbox?.denied === true, confinedTool)
 check('the tool layer reports the same completeness', confinedTool?.sandbox?.enforcement === 'partial', confinedTool?.sandbox)
 
+// The scratch workspace is removed again, so a run leaves nothing behind in the
+// home — the fixture file it holds lives inside it.
+await call('execInWsl', { cwd: home, distro, command: `rm -rf ${wslScratch}` }).catch(() => ({ exitCode: -1 }))
+
 // The other half of "one process, two worlds": a Windows workspace must keep the
 // host execution world. Selecting the host preset explicitly is what the GUI
 // does when the workspace is not a WSL one.
 console.log('\nwindows workspace unaffected')
-const win = await call('selftest', { preset: 'standard', cwd: 'E:\\' }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
+// The Windows root is DERIVED, and it must NOT be a drive root. Deriving it as
+// `${SystemDrive}\\` fixed a C:-only host and broke every default install: the
+// host's ACL sandbox refuses a temp root inside the workspace
+// (assertTempRootOutsideWorkspace), and C:\ contains %LOCALAPPDATA%\Temp
+// everywhere — so tool-pwsh reported an environment mismatch that this gate then
+// blamed on the plugin. A scratch directory under the system temp is contained
+// BY the temp root rather than containing it, which is the direction that matters.
+const windowsRoot = join(tmpdir(), 'dsh-wsl-win-selftest')
+await mkdir(windowsRoot, { recursive: true })
+const win = await call('selftest', { preset: 'standard', cwd: windowsRoot }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
 const winStep = (name) => win.steps.find((entry) => entry.name === name)
 check('a Windows workspace stays on the host preset', winStep('select')?.composed === 'standard', winStep('select'))
 // 0.1.7: the host registers its own shell at the root scope, so a Windows

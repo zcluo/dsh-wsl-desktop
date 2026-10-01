@@ -12,7 +12,7 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
-import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, probeEvidence, hostExecutable, planWsl, buildWslExecArgv } from '../lib/wsl/world.js'
+import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, probeEvidence, hostExecutable, planWsl, buildWslExecArgv, decodeWslOutput } from '../lib/wsl/world.js'
 import {
   parseWslUnc,
   joinWslUnc,
@@ -95,7 +95,7 @@ check('at least one distribution is installed', distros.length > 0, distros)
 console.log(`        distros: ${distros.join(', ')}`)
 const fallback = await defaultDistro()
 const distro = resolveDistro(fallback ?? distros[0])
-const home = resolveLinuxHome()
+const home = resolveLinuxHome(distro)
 check('the selected distribution is installed', distros.includes(distro), { distro, distros })
 console.log(`        running checks in: ${distro} as ${home}`)
 
@@ -130,11 +130,51 @@ const interop = await runWslShell({
 })
 check('cmd.exe runs through interop', interop.exitCode === 0 && interop.stdout.includes('host-interop-ok'), `exit=${String(interop.exitCode)} out=${JSON.stringify(interop.stdout)} err=${JSON.stringify(interop.stderr)}`)
 
+console.log('\ndecoding: NUL-framed data vs UTF-16LE diagnostics')
+// Two shapes share one decoder. The listing protocol frames every entry
+// NUL-terminated, while wsl.exe emits its OWN diagnostics as UTF-16LE (a NUL
+// high byte in most code units). A probe of 'contains any NUL' decoded a framed
+// listing as UTF-16LE: the framing was destroyed and listLinuxDir returned []
+// for EVERY directory — while this suite stayed green, because its listing
+// assertion was only Array.isArray(entries), and [] is an array.
+const framedBytes = Buffer.from('d\talpha\0f\tbeta\0', 'utf8')
+check('NUL-framed UTF-8 data is not mistaken for UTF-16LE',
+  decodeWslOutput(framedBytes).split('\0').filter((chunk) => chunk.includes('\t')).length === 2,
+  JSON.stringify(decodeWslOutput(framedBytes)))
+const utf16Diagnostic = 'Wsl/Service/WSL_E_DISTRO_NOT_FOUND'
+check('UTF-16LE diagnostics still decode',
+  decodeWslOutput(Buffer.from(utf16Diagnostic, 'utf16le')) === utf16Diagnostic,
+  JSON.stringify(decodeWslOutput(Buffer.from(utf16Diagnostic, 'utf16le'))))
+const missingDistro = await runWslShell({ distro: 'dsh-wsl-no-such-distro', linuxCwd: '/', command: 'true', loginShell: false, timeoutMs: 30_000 })
+check('a wsl.exe-level failure decodes to readable text, not mojibake',
+  missingDistro.exitCode !== 0 && /Wsl\/Service|WSL_E_/i.test(missingDistro.stdout + missingDistro.stderr),
+  JSON.stringify((missingDistro.stdout + missingDistro.stderr).slice(0, 160)))
+
 console.log('\ndirectory facts')
-const listing = await listLinuxDir(distro, home)
-check('listing returns the requested path', listing.path === home, listing.path)
-check('listing reports entries', Array.isArray(listing.entries), listing)
-console.log(`        ${listing.entries.length} entries; first: ${listing.entries.slice(0, 5).map((e) => `${e.name}(${e.kind[0]})`).join(' ')}`)
+const listingProbe = home + '/dsh-wsl-listing-probe'
+await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + listingProbe + ' && mkdir -p ' + listingProbe + ' && touch ' + listingProbe + '/alpha.txt && mkdir ' + listingProbe + '/beta' })
+const listing = await listLinuxDir(distro, listingProbe)
+check('listing returns the requested path', listing.path === listingProbe, listing.path)
+check('listing recovers every entry, with its kind',
+  listing.entries.length === 2
+    && listing.entries.some((entry) => entry.name === 'alpha.txt' && entry.kind === 'file')
+    && listing.entries.some((entry) => entry.name === 'beta' && entry.kind === 'directory'),
+  listing)
+await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + listingProbe })
+// One-character names are the case that defeats a NUL-vs-UTF-16LE heuristic:
+// the payload becomes 'f\ta\0f\tb\0', where every NUL sits on exactly the byte
+// positions UTF-16LE uses, so a majority test accepts it and the framing is
+// destroyed. The listing protocol must not depend on that guess.
+const shortProbe = home + '/dsh-wsl-short-probe'
+await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + shortProbe + ' && mkdir -p ' + shortProbe + ' && touch ' + shortProbe + '/a ' + shortProbe + '/b ' + shortProbe + '/c' })
+const shortListing = await listLinuxDir(distro, shortProbe)
+check('a directory of one-character names still lists every entry',
+  shortListing.entries.length === 3 && ['a', 'b', 'c'].every((name) => shortListing.entries.some((entry) => entry.name === name && entry.kind === 'file')),
+  shortListing)
+await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + shortProbe })
+const homeListing = await listLinuxDir(distro, home)
+check('the user home lists without error', homeListing.path === home && Array.isArray(homeListing.entries), homeListing)
+console.log('        ' + homeListing.entries.length + ' entries in ' + home + '; first: ' + homeListing.entries.slice(0, 5).map((e) => e.name + '(' + e.kind[0] + ')').join(' '))
 const facts = await checkLinuxPath(distro, home)
 check('an existing directory is reported as a directory', facts.isDirectory === true, facts)
 const missing = await checkLinuxPath(distro, '/definitely-not-here-xyz')

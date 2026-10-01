@@ -75,7 +75,7 @@ async function until(predicate, timeoutMs = 20_000) {
   return false
 }
 
-const plan = planWsl(resolveLinuxHome(), distro)
+const plan = planWsl(resolveLinuxHome(distro), distro)
 console.log(`driving the terminal handle in ${distro}\n`)
 
 const terminal = await spawnWslTerminal({

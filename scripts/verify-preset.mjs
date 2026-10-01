@@ -59,11 +59,34 @@ check('non-world rows survive', plugins.some((row) => row.id === 'tool-web'), pl
 check('wsl-world group appended', plugins.at(-1)?.id === 'wsl-world', plugins.at(-1)?.id)
 check('group isolates shell/fs/subprocess', JSON.stringify(plugins.at(-1)?.isolate) === '{"shell":true,"fs":true,"subprocess":true}', plugins.at(-1)?.isolate)
 check('group carries the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.some((row) => row.id === id)), plugins.at(-1).config.map((row) => row.id))
-check('distro pinned on the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.distro === 'debian-dev'), plugins.at(-1).config.map((row) => [row.id, row.distro]))
-check('tool rows carry no distro pin', plugins.at(-1).config.filter((row) => row.id.startsWith('tool') || row.id === 'str-replace-editor').every((row) => row.distro === undefined), plugins.at(-1).config.map((row) => [row.id, row.distro]))
+// Under `config`, where the loader actually delivers it: a sibling `distro` key
+// is read by nobody, so pinning THAT certified an inert shape while every
+// provider silently ran with config.distro === undefined.
+check('distro pinned under config on the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.config?.distro === 'debian-dev'), plugins.at(-1).config.map((row) => [row.id, row.config?.distro]))
+check('no provider carries a bare row-level distro', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.distro === undefined), plugins.at(-1).config.map((row) => [row.id, row.distro]))
+check('tool rows carry no distro pin', plugins.at(-1).config.filter((row) => row.id.startsWith('tool') || row.id === 'str-replace-editor').every((row) => row.config?.distro === undefined && row.distro === undefined), plugins.at(-1).config.map((row) => [row.id, row.config?.distro]))
 check('editor re-mounted inside the group', plugins.at(-1).config.some((row) => row.id === 'str-replace-editor'), plugins.at(-1).config.map((row) => row.id))
 check('persona amended with the path-dialect sentence', plugins[0].config.suffix.includes('wsl.localhost'), plugins[0].config.suffix?.slice(0, 80))
 check('provider modules are absolute file paths', [MODULES.subprocessPath, MODULES.shellPath, MODULES.fsPath].every((p) => plugins.at(-1).config.some((row) => row.name === p)))
+
+// The re-mounted tool rows must carry the operator's own config. Re-declaring
+// them bare silently dropped whatever the base preset had set — a value honoured
+// in the host world simply vanished in the WSL world — and nothing pinned it.
+{
+  const withConfig = [
+    { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash', config: { enableRunInBackground: false } },
+    { id: 'str-replace-editor', name: '@deepseek-ai/dsh-tool-str-replace-editor', config: { maxOutputChars: 16000 } },
+  ]
+  const carried = buildVariantPlugins(withConfig, { ...MODULES, distro: 'debian-dev' }).plugins.at(-1)
+  const bashRow = carried.config.find((row) => row.id === 'tool-bash')
+  const editorRow = carried.config.find((row) => row.id === 'str-replace-editor')
+  check('the re-mounted tool rows keep the operator config',
+    bashRow?.config?.enableRunInBackground === false && editorRow?.config?.maxOutputChars === 16000,
+    carried.config.map((row) => [row.id, row.config]))
+  check('the carried config is a copy, not the base preset object',
+    bashRow !== undefined && bashRow.config !== withConfig[0].config,
+    'the registry shares the base preset rows by reference, so the variant must not alias them')
+}
 
 console.log('\ntransform purity (the registry shares row objects by reference)')
 const sharedBase = [

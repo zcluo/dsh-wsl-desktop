@@ -87,14 +87,14 @@ PTC 的 `stdio.control`（fd 通道）仍然明确拒绝：`wsl.exe` 无法转�
 ```
 Windows 工作区会话                      WSL 工作区会话
   preset: standard                        preset: wsl-standard
-  ctx.shell = pwsh-sandbox（宿主）          isolate: { shell, fs }
+  ctx.shell = pwsh-sandbox（宿主）          isolate: { shell, fs, subprocess }
   ctx.fs    = fs-sandbox（宿主）            ├─ shell-wsl  → ctx.shell
                                             ├─ fs-wsl     → ctx.fs
-                                            ├─ tool-bash / tool-fs
-                                            └─ ctx.subprocess 继承宿主的 subprocess-local
+                                            ├─ subprocess-wsl → ctx.subprocess
+                                            └─ tool-bash / tool-fs
 ```
 
-`wsl.exe` 本身是普通 Windows 进程，所以 WSL 执行器通过**继承来的** `ctx.subprocess` 启动它 —— realm 只隔离 `shell` 和 `fs`，托管进程的终止、输出溢出与回收仍归本地 provider。
+`wsl.exe` 本身是普通 Windows 进程，所以 WSL 执行器最终仍由**宿主的** subprocess provider 启动它。realm 隔离 `shell`、`fs` 与 `subprocess` 三者，因此 realm 内的 `ctx.subprocess` 解析到 realm 自己的 provider；宿主那一行在根组合里捕获根 provider（`lib/wsl/host-refs.js`），realm 行再读回它 —— 托管进程的终止、输出溢出与回收仍归本地 provider。
 
 **执行世界的命名发生在创建请求里。** 浏览器半边创建 WSL 会话时通过 `wslPresetFor` 把变体 id 写进 `agentPreset`；宿主半边只在 `api-session/added` 里对"没带 preset 的 WSL 路径会话"做兜底并告警（见「会话绑定」）。浏览器半边因此不依赖任何 preset 客户端 API 之外的东西。
 
@@ -113,13 +113,13 @@ read-only:        tmpfs /tmp        →  remount,ro,bind /
 
 - **必须 root。** WSL 内核拒绝在 user namespace 里做 bind mount：`unshare -Ur --mount` 能起，但 `mount --bind` 报 "wrong fs type"。所以用 `sudo -n unshare …`；没有免密 sudo 时受限模式**明确失败**（`SandboxUnavailableError`），而不是裸跑。
 - **降权后保留的 sudo 授权是围栏的已知边界——两条闭合路径。** 会话用户保留着 runner 自己依赖的免密 sudo 授权——被约束的命令可以重新调用它（新开一个不带围栏脚本的 `sudo -n unshare --mount`，或在围栏内 `sudo -n mount -o remount,rw /`），从而绕过文件围栏。闭合路径（按优先级）：
-  1. **专用 helper（推荐，一次性安装）**：
+  1. **专用 helper（推荐；一次安装，但每次升级插件后必须重装）**：
      ```bash
      # 在发行版内以 root 执行（路径按实际安装位置调整）
      install -m 0755 -o root -g root /mnt/c/Users/<you>/.dsh/profiles/desktop/plugins/dsh-wsl-desktop-*/lib/wsl/dsh-wsl-confine.sh /usr/local/sbin/dsh-wsl-confine
      echo "$USER ALL=(root) NOPASSWD: /usr/local/sbin/dsh-wsl-confine *" > /etc/sudoers.d/dsh-wsl-confine && chmod 0440 /etc/sudoers.d/dsh-wsl-confine
      ```
-     helper 以 root 身份**总是先施加完整围栏**再降权执行命令——重新调用只会从已围栏的上下文再围栏一次，参数游戏（workspace='/'）被 `/ is not read-only` 后置条件击败。插件自动探测并优先使用 helper（sudoers 只授权这一个文件）。
+     helper 以 root 身份**总是先施加完整围栏**再降权执行命令——重新调用只会从已围栏的上下文再围栏一次，参数游戏（workspace='/'）被 `/ is not read-only` 后置条件击败。插件自动探测并优先使用 helper（sudoers 只授权这一个文件），但**只接受与插件要求完全一致的版本（当前 v1.2）**：v1.1 的豁免正则没有转义，工作区路径含元字符时会被误清扫成只读，含 `|` 的路径甚至会让 `/mnt/c` 成为豁免目标（受限会话里 Windows 文件系统保持可写）。因此**升级插件后必须重新执行上面的 install**；helper 版本不匹配时插件不会选它，而是回落到直接 sudo-unshare runner（其进程内构造器一直是正确的），不会静默沿用旧围栏。版本要求是**精确匹配**（不是“不低于”），所以将来提升 helper 版本时必须同时提升 `confinement.js` 里的 `HELPER_VERSION`——`verify-confinement.mjs` 有一条钉子把两者钉在一起，不一致会红。
   2. **NO_NEW_PRIVS（自动，无 helper 时的缓解）**：降权时运行时探测 `setpriv --no-new-privs` 支持（debian 系现代 setpriv 满足，实测 `noNewPrivs: true` 已激活）——围栏内 setuid 提权响亮失败。不支持该标志的老 setpriv 上，此边界仍存在——如实记录于 `enforcement: 'partial'` 的 caveats。
 - **findmnt 的 `\xNN` 转义已解码。** `findmnt -r` 会把 TARGET 里的空格/制表/换行/反斜杠编码为 `\x20` 等——修复前清扫按字面转义名 remount（ENOENT 被 `|| true` 吞掉）且后置条件测的是假名，含空格的挂载点在只读模式下保持可写而退出码 97 不触发。现在两处管道都先解码再匹配，并有真实含空格 bind 目标的只读断言回归（verify-confinement）。
 - **进 namespace 后必须降回原用户。** 经 `sudo` 进入后 euid 是 root，直接用会让工作区里出现 root 属主文件；用 `setpriv --reuid --regid --init-groups` 降回会话用户（有断言覆盖属主）。

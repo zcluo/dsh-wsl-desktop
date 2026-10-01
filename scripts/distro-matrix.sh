@@ -62,13 +62,17 @@ for entry in "${IMAGES[@]}"; do
   tools_line=$(echo "$result" | grep -E '^(unshare|setpriv|findmnt|mount|bash|python3|sudo|nnp)=' | tr '\n' ' ')
   fence_out=$(echo "$result" | sed -n '/---FENCE---/,$p' | grep -vE '^---FENCE---|^FENCE-EXIT=' | tr '\n' ' ')
   fence_exit=$(echo "$result" | grep -oE 'FENCE-EXIT=[0-9]+' | head -1)
-  escaped=$(echo "$fence_out" | grep -o 'esc: ESCAPED' | head -1)
+  # The fixture prints a BARE `ESCAPED` when the escape write succeeded, and its
+  # `esc:` line carries the file's CONTENTS (`ESCAPE-ATTEMPT`) or `DENIED` — so
+  # matching 'esc: ESCAPED' could never fire and a distro that left /usr writable
+  # still reported PASS. Match the marker the fixture actually emits.
+  escaped=$(echo "$fence_out" | grep -o 'ESCAPED' | head -1)
   inside=$(echo "$fence_out" | grep -o 'INSIDE-OK' | head -1)
   fenceverif=$(echo "$fence_out" | grep -o 'FENCE-OK' | head -1)
 
   fence_verdict='PASS'
   [ "$fence_exit" = 'FENCE-EXIT=0' ] || fence_verdict='FAIL (exit != 0)'
-  [ -n "$fenceverif" ] || fence_verdict='FAIL (no /tmp verification)'
+  [ -n "$fenceverif" ] || fence_verdict='FAIL (no workspace fence-verification artifact)'
   [ -n "$inside" ] || fence_verdict='FAIL (workspace not writable)'
   [ -n "$escaped" ] && fence_verdict='FAIL (ESCAPED /usr writable!)'
 

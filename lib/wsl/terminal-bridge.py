@@ -79,6 +79,10 @@ class Bridge:
         # reaped it.
         self.exit_status = None
         self.control_buffer = b""
+        # Whether a writer still holds the control FIFO. A read end with no
+        # writer is always select-readable and returns b"", so it has to be
+        # dropped from the watch set on EOF — see the pump loop.
+        self.control_open = True
         self.revision = 0
         self.last_state = None
         self.control_fd = self._open_control(fifo)
@@ -226,7 +230,9 @@ class Bridge:
         """Pump bytes until the child settles, then exit with its status."""
         status = 0
         while True:
-            watched = [self.master, self.control_fd]
+            watched = [self.master]
+            if self.control_open:
+                watched.append(self.control_fd)
             if self.stdin_open:
                 watched.append(self.stdin_fd)
             try:
@@ -259,13 +265,29 @@ class Bridge:
                     # The host closed its side; keep the session but stop polling it.
                     self.stdin_open = False
 
-            if self.control_fd in ready:
-                chunk = os.read(self.control_fd, 65536)
-                self.control_buffer += chunk
-                while b"\n" in self.control_buffer:
-                    line, self.control_buffer = self.control_buffer.split(b"\n", 1)
-                    if line.strip():
-                        self.handle_control(line)
+            if self.control_open and self.control_fd in ready:
+                try:
+                    chunk = os.read(self.control_fd, 65536)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    self.control_buffer += chunk
+                    while b"\n" in self.control_buffer:
+                        line, self.control_buffer = self.control_buffer.split(b"\n", 1)
+                        if line.strip():
+                            self.handle_control(line)
+                else:
+                    # EOF: the writer that had the FIFO open has closed it (the
+                    # control process died, or the session is being torn down).
+                    # A read end whose writer has closed is ALWAYS
+                    # select-readable and returns b"", so leaving it watched spun
+                    # this loop at 100% CPU for the rest of the session.
+                    # Measured caveat: the latch does NOT fire before the FIRST
+                    # writer attaches — Linux suppresses the hangup until a
+                    # writer has been seen — so this covers the post-writer
+                    # state, which is the one that can persist. Stop polling it,
+                    # as stdin does.
+                    self.control_open = False
 
             try:
                 done, status = os.waitpid(self.pid, os.WNOHANG)

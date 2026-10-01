@@ -45,6 +45,23 @@ async function until(predicate, timeoutMs = 15_000) {
   return false
 }
 
+console.log('bridge structural gates (offline)')
+// A FIFO read end whose writer has CLOSED is always select-readable and returns
+// b"", so leaving it in the watch set spun the pump loop at 100% CPU for the
+// rest of the session — the state after the control process dies or a teardown
+// closes it. (Measured: the latch does NOT fire before the FIRST writer
+// attaches, because Linux suppresses the hangup until a writer has been seen;
+// the post-writer state is the one that can persist.) The stdin branch already
+// dropped its own fd on EOF; the control branch must do the same, and the watch
+// set must honour the flag.
+check('the bridge drops the control fd from its watch set on EOF',
+  /self\.control_open\s*=\s*False/.test(bridgeSource)
+    && /watched = \[self\.master\]\s*\n\s*if self\.control_open:\s*\n\s*watched\.append\(self\.control_fd\)/.test(bridgeSource),
+  'once the writer has closed, select returns immediately on every iteration and the pump loop spins for the rest of the session')
+check('the control read end starts open',
+  /self\.control_open\s*=\s*True/.test(bridgeSource),
+  'the flag must start True or the bridge would never read a control request at all')
+
 const token = randomUUID().slice(0, 8)
 const fifo = `/tmp/dsh-pty-${token}.fifo`
 const base = ['-d', distro, '--cd', '/', '-e']
@@ -165,8 +182,13 @@ check('the session settles after termination', exited, `exit=${String(data.exitC
 // with the status dropped on the reaping path: this read 0 on every run, so a
 // session killed a moment earlier was indistinguishable from a clean exit, and
 // the assertion above passed on it. 129 is 128+SIGHUP, the first signal sent.
+// The exact value the comment names, not a range: a terminate path that dropped
+// the SIGHUP grace would exit 143 (SIGTERM) or 137 (SIGKILL) and still satisfy
+// `> 128`, so the documented contract had no pin at all. This branch is the one
+// where the host never kills the bridge, so 129 is deterministic here (the
+// documented race belongs to verify-pty-handle, which keeps its range).
 check('a terminated session reports the signal, not a clean exit',
-  typeof data.exitCode === 'number' && data.exitCode > 128, `exit=${String(data.exitCode)}`)
+  data.exitCode === 129, `exit=${String(data.exitCode)}`)
 
 control.stdin.end()
 control.kill()

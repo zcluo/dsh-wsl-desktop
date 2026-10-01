@@ -1,5 +1,5 @@
 #!/bin/bash
-# dsh-wsl-confine v1.1 — DSH WSL confinement helper.
+# dsh-wsl-confine v1.2 — DSH WSL confinement helper.
 #
 # Root-owned fence executor: the ONLY thing this helper does is apply the
 # mount-namespace fence (workspace bind, tmpfs /tmp, read-only /, read-only
@@ -9,7 +9,8 @@
 # from the already-fenced context — the fence is no longer voidable by the
 # principal it constrains.
 #
-# Install (one-time, per distribution, as root):
+# Install (per distribution, as root; re-run it after every plugin upgrade —
+# the detector requires the exact HELPER_VERSION this package ships):
 #   install -m 0755 -o root -g root <this file> /usr/local/sbin/dsh-wsl-confine
 #   echo '<session-user> ALL=(root) NOPASSWD: /usr/local/sbin/dsh-wsl-confine *' \
 #     > /etc/sudoers.d/dsh-wsl-confine && chmod 0440 /etc/sudoers.d/dsh-wsl-confine
@@ -23,7 +24,7 @@
 # it still reads every root-only file. Root's own direct invocation has no
 # SUDO_USER and skips the check.
 set -euo pipefail
-VERSION='dsh-wsl-confine v1.1'
+VERSION='dsh-wsl-confine v1.2'
 
 uid=; gid=; home=; cwd=; workspace=; pidns=1
 ARGS=()
@@ -44,6 +45,16 @@ done
 [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] || { echo 'dsh-wsl-confine: uid/gid must be numeric' >&2; exit 2; }
 [[ -n "$cwd" && "$cwd" = /* && -n "$home" && "$home" = /* ]] || { echo 'dsh-wsl-confine: --cwd/--home must be absolute Linux paths' >&2; exit 2; }
 [[ -z "$workspace" || "$workspace" = /* ]] || { echo 'dsh-wsl-confine: --workspace must be absolute' >&2; exit 2; }
+# The fence mounts a private tmpfs over /tmp AFTER binding the workspace, so a
+# workspace at or below /tmp would be covered by it: the bind disappears, "cd
+# /tmp/proj" fails, and with the workspace exactly /tmp the writes would land in
+# the ephemeral tmpfs and vanish. Refuse instead of building a fence that lies.
+# Exit 97 WITH the setup-failure marker, unlike the exit-2 usage refusals above:
+# this is not a malformed argument, it is a fence that cannot be established for
+# the requested workspace, and the executor classifies that on code AND marker
+# (shell.js runnerFailed). A caller that ignores it would otherwise read a
+# fence that never ran as an ordinary command failure.
+[[ -z "$workspace" || ( "$workspace" != /tmp && "$workspace" != /tmp/* ) ]] || { echo 'dsh-wsl-sandbox: setup failed: --workspace must not be /tmp or below it (the private tmpfs would cover it)' >&2; exit 97; }
 ((${#ARGS[@]} >= 1)) || { echo 'dsh-wsl-confine: no command' >&2; exit 2; }
 
 # Identity gate: the caller may only drop to the user sudo says is invoking.
@@ -57,9 +68,28 @@ if [[ -n "${SUDO_USER:-}" ]]; then
   fi
 fi
 
-command -v unshare >/dev/null 2>&1 || { echo 'dsh-wsl-confine: unshare not found' >&2; exit 97; }
-command -v setpriv >/dev/null 2>&1 || { echo 'dsh-wsl-confine: setpriv not found' >&2; exit 97; }
-command -v findmnt >/dev/null 2>&1 || { echo 'dsh-wsl-confine: findmnt not found' >&2; exit 97; }
+# These pre-flight refusals carry the SAME setup-failure marker the fence's own
+# fail() prints: exit 97 alone is indistinguishable from a command that failed
+# with 97, and the executor classifies on code AND marker (shell.js
+# runnerFailed), so without it a fence that never ran reads as a command failure.
+command -v unshare >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: unshare not found' >&2; exit 97; }
+command -v setpriv >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: setpriv not found' >&2; exit 97; }
+command -v findmnt >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: findmnt not found' >&2; exit 97; }
+
+# The allow-list pattern is built HERE, from the validated parameters, with every
+# entry escaped so a PATH stays data and never becomes regex syntax. Unescaped,
+# a workspace like "/home/u/My Project (v2)" turned its own parentheses into an
+# ERE group: the real workspace stopped matching, so the sweep remounted it
+# READ-ONLY and every write inside it failed with EROFS. Worse, an unescaped "|"
+# became alternation — a workspace "/home/u/x|/mnt/c" made /mnt/c an EXEMPT
+# target, leaving the Windows filesystem WRITABLE inside a confined session,
+# which is the exact hole this fence exists to close. The escape set is the one
+# lib/wsl/confinement.js applies in escapeEre(), and the exempt entries are the
+# union it builds from KERNEL_SURFACES — the two fences must agree.
+KEEP_ENTRIES=(/tmp /dev /dev/pts /dev/mqueue /proc /sys)
+[[ -z "$workspace" ]] || KEEP_ENTRIES+=("$workspace")
+EXEMPT_PATTERN=$(printf '%s\n' "${KEEP_ENTRIES[@]}" | sed 's/[][\\^$.*+?(){}|]/\\&/g' | tr '\n' '|')
+EXEMPT_PATTERN="${EXEMPT_PATTERN%|}"
 
 # The fence script is built HERE from the validated parameters — the caller
 # never supplies script text. It is identical in effect to the in-process
@@ -68,24 +98,21 @@ command -v findmnt >/dev/null 2>&1 || { echo 'dsh-wsl-confine: findmnt not found
 # VARIABLES via env(1): bare KEY=VALUE words after the script name would be
 # positional parameters no variable reference can read, and $UID/$GID are
 # bash built-ins that would silently resolve to root's ids under sudo. The
-# exemption pattern anchors ONLY at the group end with an escaped trailing
-# `$` — a literal `/sys$")$"` tail is a bash parse error, not a regex.
+# exemption pattern crosses pre-built and already escaped (DROP_EXEMPT above),
+# so no path is ever interpolated into regex syntax here, and it is anchored at
+# BOTH ends — the trailing `$` is what stops the entry "/tmp" from matching a
+# sibling like "/tmp/x".
 FENCE='set -euo pipefail
-fail() { printf "%s: %s\n" "dsh-wsl-confine" "$1" >&2; exit 97; }
-if [[ -n "${DROP_WORKSPACE:-}" ]]; then
-  mount --bind "$DROP_WORKSPACE" "$DROP_WORKSPACE"
-  KEEP=("/tmp" "$DROP_WORKSPACE")
-else
-  KEEP=("/tmp")
-fi
+fail() { printf "%s: %s\n" "dsh-wsl-sandbox: setup failed" "$1" >&2; exit 97; }
+[[ -z "${DROP_WORKSPACE:-}" ]] || mount --bind "$DROP_WORKSPACE" "$DROP_WORKSPACE"
 mount -t tmpfs tmpfs /tmp
 mount -o remount,ro,bind /
-findmnt -rno TARGET | while IFS= read -r raw; do printf "%b\n" "$raw"; done | { grep -Ev "^($(printf "%s|" "${KEEP[@]}" | sed "s/|$//")|/dev|/proc|/sys)\$" || fail "exemption grep failed"; } | while IFS= read -r target; do
+findmnt -rno TARGET | while IFS= read -r raw; do printf "%b\n" "$raw"; done | { grep -Ev "^(${DROP_EXEMPT})\$" || fail "exemption grep failed"; } | while IFS= read -r target; do
   mount -o remount,ro,bind "$target" >/dev/null 2>&1 || true
 done
 mountpoint -q /tmp || fail "/tmp is not a private tmpfs"
 findmnt -rno OPTIONS / | grep -q "^ro" || fail "/ is not read-only"
-findmnt -rno TARGET | while IFS= read -r raw; do printf "%b\n" "$raw"; done | { grep -Ev "^($(printf "%s|" "${KEEP[@]}" | sed "s/|$//")|/dev|/proc|/sys)\$" || fail "exemption grep failed"; } | while IFS= read -r target; do
+findmnt -rno TARGET | while IFS= read -r raw; do printf "%b\n" "$raw"; done | { grep -Ev "^(${DROP_EXEMPT})\$" || fail "exemption grep failed"; } | while IFS= read -r target; do
   [[ -w "$target" ]] && fail "$target is still writable"
   true
 done
@@ -98,4 +125,5 @@ PID_FLAG=''
 exec unshare --mount --propagation private $PID_FLAG env \
   DROP_UID="$uid" DROP_GID="$gid" DROP_HOME="$home" DROP_USER="${SUDO_USER:-root}" \
   DROP_CWD="$cwd" DROP_WORKSPACE="$workspace" DROP_COMMAND="${ARGS[*]}" \
+  DROP_EXEMPT="$EXEMPT_PATTERN" \
   bash -c "$FENCE" dsh-wsl-confine

@@ -16,7 +16,7 @@
 import { tmpdir } from 'node:os'
 import { joinWslUnc } from '../lib/wsl/paths.js'
 import { canonicalHostPath, isLexicallyUnderHost, isUnderHost, writableHostRootsFor } from '../lib/wsl/fence.js'
-import { resolveDistro, resolveLinuxHome } from './env.mjs'
+import { resolveDistro, resolveLinuxHome, resolveLinuxUser } from './env.mjs'
 import { detailText } from './detail.mjs'
 
 const distro = resolveDistro()
@@ -35,6 +35,24 @@ let failures = 0
 function check(label, ok, detail) {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
+}
+
+// The user probe is on the critical path of EVERY suite that touches a
+// distribution, and wsl.exe is the call a cold VM start can hang. An unhandled
+// ETIMEDOUT threw out of module evaluation and killed a whole suite with a stack
+// trace before a single check printed — observed once in about eight full-suite
+// runs, and the reason this suite appeared flaky. It now retries, and a real
+// failure names the distribution and the way out.
+{
+  let message = ''
+  try {
+    resolveLinuxUser('dsh-wsl-no-such-distro')
+  } catch (error) {
+    message = String(error.message)
+  }
+  check('a failed user probe names the distribution instead of dumping a stack trace',
+    message.includes('cannot resolve the Linux user') && message.includes('dsh-wsl-no-such-distro') && !message.includes('spawnSync'),
+    message || 'no error was thrown for a distribution that does not exist')
 }
 
 console.log(`containment comparison (distro: ${distro})`)
@@ -63,10 +81,24 @@ check('the cross-distribution target is denied by the full check too',
 
 console.log('\nidentity fallback and missing roots')
 check('a missing root contains nothing', await isUnderHost(inside, joinWslUnc(distro, '/no/such/root')) === false)
-check('an existing real root contains its child',
-  await isUnderHost(inside, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === (
-    inside.startsWith(joinWslUnc(distro, '/tmp'))),
+// A real NEGATIVE: an existing root that genuinely does not contain the target.
+// (The previous expectation compared the result against the same lexical test it
+// already implied, so it asserted false === false and could never fail.)
+check('an existing real root does not contain an unrelated path',
+  await isUnderHost(inside, canonicalHostPath(joinWslUnc(distro, '/tmp'))) === false,
   `${inside} vs the distribution's /tmp`)
+
+// POSITIVE coverage for the stat-identity fallback. Every other expectation in
+// this file is satisfied by the lexical fast path alone, so deleting the walk
+// entirely left the whole suite green. The `wsl$` spelling is a different STRING
+// for the same object (verify-9p pins that (dev,ino) is stable across the two
+// spellings), so it is NOT lexically under the root and can only be contained by
+// the identity walk.
+const aliasTmp = `\\\\wsl$\\${distro}\\tmp`
+const realTmp = canonicalHostPath(joinWslUnc(distro, '/tmp'))
+check('the identity walk contains the same object under its wsl$ alias',
+  isLexicallyUnderHost(aliasTmp, realTmp) === false && await isUnderHost(aliasTmp, realTmp) === true,
+  `${aliasTmp} vs ${realTmp}`)
 
 console.log('\nwritable-root derivation')
 const workspaceRoot = joinWslUnc(distro, `${home}/proj`)

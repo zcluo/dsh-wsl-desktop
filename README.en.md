@@ -87,14 +87,14 @@ PTC's `stdio.control` (fd channel) remains explicitly rejected: `wsl.exe` cannot
 ```
 Windows workspace session                 WSL workspace session
   preset: standard                          preset: wsl-standard
-  ctx.shell = pwsh-sandbox (host)           isolate: { shell, fs }
+  ctx.shell = pwsh-sandbox (host)           isolate: { shell, fs, subprocess }
   ctx.fs    = fs-sandbox (host)             ├─ shell-wsl  → ctx.shell
                                             ├─ fs-wsl     → ctx.fs
-                                            ├─ tool-bash / tool-fs
-                                            └─ ctx.subprocess inherits the host's subprocess-local
+                                            ├─ subprocess-wsl → ctx.subprocess
+                                            └─ tool-bash / tool-fs
 ```
 
-`wsl.exe` itself is an ordinary Windows process, so the WSL executors launch it through the **inherited** `ctx.subprocess` — the realm isolates only `shell` and `fs`; managed-process termination, output overflow, and reaping still belong to the local provider.
+`wsl.exe` itself is an ordinary Windows process, so the WSL executors still end up launching it through the **host's** subprocess provider. The realm isolates `shell`, `fs` AND `subprocess`, so `ctx.subprocess` inside the realm resolves to the realm's own provider; the host row captures the root provider in the root composition (`lib/wsl/host-refs.js`) and the realm rows read it back — managed-process termination, output overflow, and reaping still belong to the local provider.
 
 **The execution world is named in the create request.** When the browser half creates a WSL session, it writes the variant id into `agentPreset` via `wslPresetFor`; the host half only does fallback + warning in `api-session/added` for "WSL-path sessions without a preset" (see "Session binding"). The browser half therefore depends on nothing beyond the preset client API.
 
@@ -113,13 +113,13 @@ Two preconditions established by measurement:
 
 - **Must be root.** The WSL kernel refuses bind mounts inside a user namespace: `unshare -Ur --mount` starts, but `mount --bind` reports "wrong fs type". So `sudo -n unshare …` is used; without passwordless sudo, confined mode **fails explicitly** (`SandboxUnavailableError`) instead of running bare.
 - **sudo grants retained after dropping privileges are a known boundary of the fence — two closing paths.** The session user keeps the passwordless sudo grant that the runner itself depends on — a confined command can re-invoke it (open a fresh `sudo -n unshare --mount` without the fence script, or run `sudo -n mount -o remount,rw /` inside the fence), thereby bypassing the file fence. Closing paths (by priority):
-  1. **Dedicated helper (recommended, one-time install)**:
+  1. **Dedicated helper (recommended; installed once, but re-installed after every plugin upgrade)**:
      ```bash
      # run as root inside the distro (adjust the path to the actual install location)
      install -m 0755 -o root -g root /mnt/c/Users/<you>/.dsh/profiles/desktop/plugins/dsh-wsl-desktop-*/lib/wsl/dsh-wsl-confine.sh /usr/local/sbin/dsh-wsl-confine
      echo "$USER ALL=(root) NOPASSWD: /usr/local/sbin/dsh-wsl-confine *" > /etc/sudoers.d/dsh-wsl-confine && chmod 0440 /etc/sudoers.d/dsh-wsl-confine
      ```
-     As root, the helper **always applies the full fence first**, then drops privileges and executes the command — re-invocation just re-fences from an already-fenced context, and parameter games (workspace='/') are defeated by the `/ is not read-only` postcondition. The plugin auto-detects and prefers the helper (the sudoers file authorizes only this one file).
+     As root, the helper **always applies the full fence first**, then drops privileges and executes the command — re-invocation just re-fences from an already-fenced context, and parameter games (workspace='/') are defeated by the `/ is not read-only` postcondition. The plugin auto-detects and prefers the helper (the sudoers file authorizes only this one file), but **accepts only the exact version this plugin requires (currently v1.2)**: v1.1 did not escape its exemption pattern, so a workspace path containing a metacharacter was swept read-only and a path containing `|` could make `/mnt/c` an exempt target (leaving the Windows filesystem writable inside a confined session). **Re-run the install above after upgrading the plugin**; a mismatched helper is simply not selected, and the plugin falls back to the direct sudo-unshare runner (whose in-process builder always escaped correctly) rather than silently keeping the old fence. The requirement is an **exact match, not a minimum**, so a future helper version bump must move `HELPER_VERSION` in `confinement.js` with it — `verify-confinement.mjs` pins the two together, so a mismatch goes red.
   2. **NO_NEW_PRIVS (automatic; the mitigation when no helper exists)**: when dropping privileges, the runtime probes for `setpriv --no-new-privs` support (modern debian-family setpriv satisfies it; verified `noNewPrivs: true` active) — setuid escalation inside the fence fails loudly. On old setpriv builds without that flag, this boundary still exists — honestly recorded in the `enforcement: 'partial'` caveats.
 - **The `\xNN` escapes from `findmnt` are decoded.** `findmnt -r` encodes spaces/tabs/newlines/backslashes in TARGET as `\x20` etc. — before the fix, the sweep remounted the literal escaped name (ENOENT swallowed by `|| true`) and the postcondition tested a fake name, so mount points containing spaces stayed writable under read-only mode and exit code 97 never triggered. Both pipelines now decode before matching, with a regression that asserts read-only on a real bind target containing spaces (verify-confinement).
 - **After entering the namespace, drop back to the original user.** Entering via `sudo` leaves euid as root; using it directly would leave root-owned files in the workspace; `setpriv --reuid --regid --init-groups` drops back to the session user (ownership covered by an assertion).

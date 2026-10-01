@@ -13,6 +13,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -39,6 +40,29 @@ const LIVE = ['verify-route.mjs', 'inspect-live-client.mjs', 'verify-post-restar
 
 const suites = live ? [...STANDALONE, ...LIVE] : STANDALONE
 const results = []
+
+// The suites' own check() contract, verified mechanically BEFORE anything runs: a
+// check whose second argument is a string literal passes a truthy value where the
+// boolean belongs, so it prints PASS unconditionally and asserts nothing at all.
+// That class has appeared twice in this repository — once among the round-1 suite
+// findings (a range asserted where the contract named an exact value, a grep that
+// could never match, an assertion that was false === false) and once in a pin
+// written while fixing them — so it is scanned for rather than trusted.
+{
+  const offenders = []
+  for (const suite of suites) {
+    const source = readFileSync(join(here, suite), 'utf8')
+    for (const match of source.matchAll(/\bcheck\(\s*(?:'[^']*'|"[^"]*"|`[^`]*`)\s*,\s*['"`]/g)) {
+      const line = source.slice(0, match.index).split('\n').length
+      offenders.push(`${suite}:${line}`)
+    }
+  }
+  if (offenders.length > 0) {
+    console.log(`\nFAIL  a check() passes its detail string where the boolean belongs (always PASS): ${offenders.join(', ')}`)
+    process.exit(1)
+  }
+  console.log(`check() contract clean across ${suites.length} suites`)
+}
 
 for (const suite of suites) {
   console.log(`\n=== ${suite} ===`)

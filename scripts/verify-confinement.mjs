@@ -15,18 +15,23 @@ import { runWslShell } from '../lib/wsl/world.js'
 import {
   DENIAL_SIGNATURES,
   HELPER_PATH,
+  HELPER_VERSION,
   RUNNER_HELPER,
+  RUNNER_SUDO_UNSHARE,
+  SETUP_FAILURE_EXIT,
+  SETUP_FAILURE_MARKER,
   buildConfinedCommand,
   detectRunner,
   resetConfinementCache,
   resolveIdentity,
+  workspaceUnderPrivateTmp,
 } from '../lib/wsl/confinement.js'
 import { shellQuote, windowsToMntPath } from '../lib/wsl/paths.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { detailText } from './detail.mjs'
 
 const distro = resolveDistro(process.argv[2])
-const home = resolveLinuxHome()
+const home = resolveLinuxHome(distro)
 const run = (options) => runWslShell(options)
 
 let failures = 0
@@ -76,9 +81,31 @@ check('the fence receives its parameters as environment variables',
   'params must cross into `bash -c` via env(1); bare KEY=VALUE words are positional parameters, and $UID is a bash built-in')
 check('the exec tail passes env before the fence script',
   /env \\\n\s+DROP_UID=/.test(helperSource) && !/bash -c "\$FENCE" \\\n\s+dsh-wsl-confine \\\n\s+UID=/.test(helperSource), null)
-check('the exemption grep anchors only at the group end',
-  helperSource.includes('|/dev|/proc|/sys)\\$') && !/\|\/sys\$"/.test(helperSource),
-  'the shipped `/sys$")$"` tail is a bash parse error: closing paren outside the string plus a `$"` locale-quote')
+check('the helper escapes ERE metacharacters before building the exemption pattern',
+  helperSource.includes('[][\\\\^$.*+?(){}|]') && helperSource.includes("]/\\\\&/g'"),
+  'the allow-list is DATA: unescaped, a workspace path containing ( ) | or [ becomes regex syntax — the real workspace is swept read-only, or a `|` grants an exemption to a path that was never allowed')
+// The detector accepts ONE version, so the two must be bumped together: bumping
+// the helper alone makes detectRunner refuse it, which falls back to the direct
+// runner and SKIPS the drift gate below — a silent mismatch. Pin them equal.
+// A refusal that means "this fence cannot be established" must be classifiable as
+// one: exit 97 + SETUP_FAILURE_MARKER, the pair shell.js's runnerFailed tests. An
+// exit-2 usage code would make a fence that never ran read as a command failure.
+// Built from the EXPORTED constants, not from literals: if SETUP_FAILURE_EXIT moves
+// in confinement.js while the helper keeps exiting 97, shell.js's runnerFailed tests
+// the pair and never matches — so a fence that never established itself would read as
+// an ordinary command failure again. Hardcoding 97 here would keep this pin green
+// through exactly that drift. The guard CONDITION is pinned too, or inverting it
+// (refusing everything except /tmp) would still satisfy the message and the code.
+check('the /tmp refusal is classifiable as a setup failure',
+  new RegExp(`${SETUP_FAILURE_MARKER.replace(/[.*+?^${}()|[\]\\\\]/g, '\\\\$&')}: --workspace must not be \\/tmp[^\\n]*exit ${SETUP_FAILURE_EXIT}`).test(helperSource)
+    && helperSource.includes('"$workspace" != /tmp && "$workspace" != /tmp/*'),
+  'the private tmpfs would cover such a workspace, so the fence refuses it — that is a setup failure, not a malformed argument')
+check('the shipped helper reports the version the detector requires',
+  helperSource.includes(`VERSION='dsh-wsl-confine ${HELPER_VERSION}'`),
+  `the helper must report ${HELPER_VERSION}; detectRunner refuses anything else, so a mismatch silently falls back to the direct sudo-unshare runner`)
+check('the exemption grep consumes the pre-built pattern, anchored at both ends',
+  helperSource.includes('grep -Ev "^(${DROP_EXEMPT})\\$"') && !helperSource.includes('sed "s/|$//"'),
+  'the fence must not hand-build a pattern from a path; the shipped `/sys$")$"` tail was a bash parse error (closing paren outside the string plus a `$"` locale-quote)')
 check('the drop identity is checked against the invoking user',
   helperSource.includes('getent passwd') && helperSource.includes('identity mismatch'),
   'the sudoers grant is argument-wildcarded; an unchecked --uid lets the session user run the helper as uid 0 (a root-read primitive)')
@@ -98,6 +125,42 @@ const helperWrite = buildConfinedCommand({ command: 'true', linuxCwd: '/ws', mod
 check('workspace-write routes through the helper with the workspace bound',
   helperWrite.includes('--workspace') && helperWrite.includes(HELPER_PATH), helperWrite)
 
+// The private /tmp tmpfs is mounted AFTER the workspace bind, so a workspace at
+// or below /tmp is covered by it: the bind disappears and `cd` into it fails,
+// and a workspace of exactly /tmp would silently BE the ephemeral tmpfs while the
+// 9P fs tool still sees the real directory. Both runners must refuse it. This is
+// a REAL call, not a source-text match: buildConfinedCommand is pure.
+{
+  const tmpIdentity = { uid: '1000', gid: '1000', home: '/home/tester', name: 'tester' }
+  const refuses = (root, runner) => {
+    try {
+      buildConfinedCommand({ command: 'true', linuxCwd: root, mode: 'workspace-write', workspaceLinuxRoot: root, identity: tmpIdentity, runner })
+      return false
+    } catch {
+      return true
+    }
+  }
+  check('a workspace at or below /tmp is refused by both runners',
+    refuses('/tmp', RUNNER_HELPER) && refuses('/tmp', RUNNER_SUDO_UNSHARE)
+      && refuses('/tmp/proj', RUNNER_HELPER) && refuses('/tmp/proj', RUNNER_SUDO_UNSHARE),
+    'the private tmpfs would cover the workspace bind')
+  check('a workspace that merely starts with /tmp is still allowed',
+    !refuses('/tmpfoo', RUNNER_SUDO_UNSHARE) && !refuses('/tmpfoo', RUNNER_HELPER)
+      && workspaceUnderPrivateTmp('/tmpfoo') === false,
+    '/tmpfoo must not be caught by the prefix boundary — on EITHER runner, since the helper branch is its own code path')
+  const readOnlyAcceptsTmp = (() => {
+    try {
+      buildConfinedCommand({ command: 'true', linuxCwd: '/tmp', mode: 'read-only', identity: tmpIdentity, runner: RUNNER_SUDO_UNSHARE })
+      return true
+    } catch {
+      return false
+    }
+  })()
+  check('read-only is unaffected by the /tmp refusal',
+    readOnlyAcceptsTmp,
+    'the guard exists because a WRITABLE workspace is bound; read-only binds nothing')
+}
+
 resetConfinementCache()
 const probeRoot = `${home}/dsh-wsl-sandbox-probe`
 await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${probeRoot} && mkdir -p ${probeRoot} && echo seed > ${probeRoot}/seed.txt` })
@@ -111,7 +174,11 @@ console.log('runner detection')
 // the outcome names both attempts so a persistent absence stays visible.
 const detectOnce = () => detectRunner({ distro, run }).catch(() => null)
 let runner = await detectOnce()
-let detectionRetried = runner !== 'sudo-unshare'
+// Only a NULL outcome needs the retry. Keying this on `runner !== 'sudo-unshare'`
+// made a helper machine sleep a second, re-probe a cached answer, and print
+// "first attempt failed; retried once" — evidence of a failure that never
+// happened.
+let detectionRetried = runner === null
 if (detectionRetried) {
   await new Promise((resolve) => { setTimeout(resolve, 1000) })
   runner = await detectOnce()
@@ -119,7 +186,36 @@ if (detectionRetried) {
 check('a confinement runner is available', runner === 'sudo-unshare' || runner === 'helper',
   `${String(runner)}${detectionRetried ? ' (first attempt failed; retried once)' : ''}`)
 console.log(`        runner=${runner}`)
-const identity = await resolveIdentity({ distro, run })
+// The checks below exercise the DETECTED runner — for the hardened path that is
+// the helper INSTALLED at HELPER_PATH, a copy the operator makes by hand. If
+// that copy has drifted from the file this package ships, a green suite would
+// describe an artifact nobody ships. Compare them, and name the repair.
+if (runner === RUNNER_HELPER) {
+  const helperMnt = windowsToMntPath(helperPathFile)
+  if (helperMnt === null) {
+    // The same condition the bash -n gate above SKIPs on: the checkout is not on
+    // a drive path (it lives inside a distribution), so the shipped file has no
+    // /mnt spelling to compare against. Failing here told the operator to
+    // reinstall a byte-identical helper.
+    console.log('  SKIP  the installed helper is the helper this package ships (helper not on a drive path)')
+  } else {
+    const sums = await runWslShell({ distro, linuxCwd: '/', command: `md5sum ${shellQuote(HELPER_PATH)} ${shellQuote(helperMnt)} 2>/dev/null`, loginShell: false, timeoutMs: 60_000 })
+    const [installedSum, shippedSum] = sums.stdout.trim().split('\n').map((line) => line.split(/\s+/)[0])
+    check('the installed helper is the helper this package ships',
+      typeof installedSum === 'string' && installedSum !== '' && installedSum === shippedSum,
+      `installed=${String(installedSum)} shipped=${String(shippedSum)} — the suite is exercising the installed copy; reinstall it per README: install -m 0755 -o root -g root <lib/wsl/dsh-wsl-confine.sh> ${HELPER_PATH}`)
+  }
+}
+// Guarded exactly like the identical probe inside `confined()` above:
+// resolveIdentity THROWS rather than returning null (confinement.js either builds
+// a non-null object or throws carrying the probe's own evidence), so an unguarded
+// call turns a transient probe fault into an unhandled rejection that aborts the
+// whole suite before the summary — instead of the FAIL this check exists to print.
+// With the guard, the null test below is meaningful again.
+const identity = await resolveIdentity({ distro, run }).catch((error) => {
+  console.log(`        identity probe error: ${error.message}`)
+  return null
+})
 check('the session identity resolves', identity !== null && /^\d+$/.test(identity?.uid ?? ''), identity)
 console.log(`        uid=${identity?.uid} gid=${identity?.gid}`)
 
@@ -152,6 +248,25 @@ check('a write outside a space-named workspace is still denied',
   !outSpaced.result.stdout.includes('OUT-SPACED-OK') && DENIAL_SIGNATURES.some((signature) => outSpaced.result.stderr.includes(signature)),
   `${outSpaced.result.exitCode} ${outSpaced.result.stderr}`)
 
+console.log('\nworkspace path with ERE metacharacters (exemption-pattern escaping)')
+// A space was only the FIRST metacharacter. The workspace path is DATA for the
+// exemption pattern, so every ERE metacharacter must stay inert. The helper
+// joined its allow-list into the pattern unescaped, so a workspace such as
+// `…/dsh-wsl-sandbox (v2)|probe` turned its own parentheses into an ERE group
+// and its `|` into alternation: the pattern then stopped matching the REAL
+// workspace — the sweep remounted it read-only, so every write inside it failed
+// — while starting to match paths that were never granted. The in-process
+// builder escaped through escapeEre() and was unaffected, so the two runners
+// silently disagreed about the same fence.
+const metaRoot = `${home}/dsh-wsl-sandbox (v2)|probe`
+await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${metaRoot}" && mkdir -p "${metaRoot}" && echo seed > "${metaRoot}/seed.txt"` })
+const inMeta = await confined(`echo written > "${metaRoot}/inside.txt" && echo META-OK`, { mode: 'workspace-write', workspaceLinuxRoot: metaRoot, linuxCwd: metaRoot })
+check('a write inside a metacharacter-named workspace succeeds', inMeta.result.exitCode === 0 && inMeta.result.stdout.includes('META-OK'), `${inMeta.result.exitCode} ${inMeta.result.stderr}`)
+const outMeta = await confined(`echo written > ${home}/dsh-wsl-forbidden.txt && echo OUT-META-OK`, { mode: 'workspace-write', workspaceLinuxRoot: metaRoot })
+check('a write outside a metacharacter-named workspace is still denied',
+  !outMeta.result.stdout.includes('OUT-META-OK') && DENIAL_SIGNATURES.some((signature) => outMeta.result.stderr.includes(signature)),
+  `${outMeta.result.exitCode} ${outMeta.result.stderr}`)
+
 console.log('\nspaced mount target outside the workspace (findmnt \\x20 decoding)')
 // findmnt -r hex-escapes unsafe characters in TARGET (\x20 for space): before
 // the decode-before-match fix, the sweep remounted the escaped literal name
@@ -164,12 +279,22 @@ const spacedMount = `${home}/mnt probe`
 await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
 const mountedCheck = await runWslShell({ distro, linuxCwd: '/', command: `findmnt -rno TARGET "${spacedMount}"` })
 check('the spaced bind target is mounted', mountedCheck.stdout.trim() === spacedMount || mountedCheck.stdout.trim().includes('probe'), `${JSON.stringify(mountedCheck.stdout)}`)
-const spacedMountWrite = await confined(`echo written > "${spacedMount}/dsh-wsl-escape.txt" && echo SPACED-MOUNT-OK`, { mode: 'read-only' })
+// The options are read INSIDE the same namespace that fenced them: the sweep
+// remounts namespace-local mounts, so a findmnt from OUTSIDE this process sees
+// the original `rw` — the previous check ran out there and could only ever have
+// matched `errors=remount-ro` inside the ext4 options string, which made it an
+// assertion that could not fail.
+const spacedMountWrite = await confined(
+  `echo written > "${spacedMount}/dsh-wsl-escape.txt" && echo SPACED-MOUNT-OK; echo "OPTIONS:$(findmnt -rno OPTIONS "${spacedMount}" | head -1)"`,
+  { mode: 'read-only' },
+)
 check('a write into a spaced mount target is denied under its REAL path',
   !spacedMountWrite.result.stdout.includes('SPACED-MOUNT-OK') && DENIAL_SIGNATURES.some((signature) => spacedMountWrite.result.stderr.includes(signature)),
   `${spacedMountWrite.result.exitCode} ${spacedMountWrite.result.stderr}`)
-const spacedMountState = await runWslShell({ distro, linuxCwd: '/', command: `findmnt -rno OPTIONS "${spacedMount}" | head -1` })
-check('the spaced mount target was remounted read-only', spacedMountState.stdout.includes('ro'), spacedMountState.stdout)
+const spacedOptions = /OPTIONS:(.*)/.exec(spacedMountWrite.result.stdout)?.[1]?.trim() ?? ''
+check('the spaced mount target was remounted read-only inside the fence',
+  /^ro(,|$)/.test(spacedOptions),
+  `options=${JSON.stringify(spacedOptions)} stdout=${JSON.stringify(spacedMountWrite.result.stdout.slice(-200))}`)
 await runWslShell({ distro, linuxCwd: '/', command: `sudo -n umount "${spacedMount}" && rm -rf "${spacedMount}"` })
 
 console.log('\nread-only')
@@ -217,6 +342,9 @@ check('a PID namespace is entered',
 const pidns = await confined('echo PID=$$; ps -e --no-headers 2>/dev/null | wc -l', { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
 console.log(`        ${pidns.result.stdout.trim().replace(/\n/g, ' | ')}`)
 
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${probeRoot} ${home}/dsh-wsl-forbidden.txt /tmp/dsh-wsl-tmp.txt` })
+// Every fixture this suite creates is removed again, and quoted: two of them
+// carry spaces and ERE metacharacters — which is the point of the sections
+// above — so an unquoted rm would either miss them or be re-parsed.
+await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${shellQuote(probeRoot)} ${shellQuote(spacedRoot)} ${shellQuote(metaRoot)} ${shellQuote(`${home}/dsh-wsl-forbidden.txt`)} /tmp/dsh-wsl-tmp.txt` })
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1
