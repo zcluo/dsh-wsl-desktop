@@ -25,9 +25,10 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { joinWslUnc } from '../lib/wsl/paths.js'
 import { blankLiterals } from './source-text.mjs'
@@ -65,6 +66,8 @@ let outsideFixtureLinux = ''
 const WSL_TIMEOUT_MS = 30_000
 
 let failures = 0
+/** Checks that could not run here; the suite's exit code reports them (see the tail). */
+let skipped = 0
 
 /**
  * Record one assertion.
@@ -75,6 +78,47 @@ let failures = 0
 function check(label, ok, detail) {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
+}
+
+/**
+ * The target key a WRITE hands the fence: fs-local's own resolution walk, mirrored
+ * from `resolveLocalTarget` (fs-local/src/fsio.ts:161-210).
+ *
+ * `checkedTarget` re-resolves the target and passes THAT key to `isUnderHost`, and
+ * that key is not `canonicalHostPath`: the fence's canonicalizer is
+ * `realpathSync.native` of the WHOLE path with an identity fallback, so a target
+ * whose tail does not exist — every target in this section — comes back as its own
+ * spelling whatever the share can resolve. Using it as "the write's key" is what
+ * made the R=1 overlap claim unsound. This walk instead realpaths the nearest
+ * EXISTING ancestor and re-appends the missing suffix, which is why the key follows
+ * the link on a share that resolves it and stops at the root on a blind one.
+ *
+ * The mirror is deliberate and bounded: the suite cannot import fs-local's function
+ * (the installed generation does not export it), and this key is the subject of the
+ * pins below. Only the ENOENT path is mirrored — fs-local's extra Windows repair for
+ * a parent segment that is a regular FILE is unreachable from these fixtures.
+ * @param {string} displayPath - the absolute host spelling of the target.
+ * @returns {Promise<string>} the key the write would hand the fence.
+ */
+async function writeTargetKey(displayPath) {
+  try {
+    return await realpath(displayPath)
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  const missing = [basename(displayPath)]
+  let ancestor = dirname(displayPath)
+  for (;;) {
+    try {
+      return join(await realpath(ancestor), ...missing)
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      const parent = dirname(ancestor)
+      if (parent === ancestor) return displayPath
+      missing.unshift(basename(ancestor))
+      ancestor = parent
+    }
+  }
 }
 
 // The user probe is on the critical path of EVERY suite that touches a
@@ -269,6 +313,44 @@ check('a path above the root is NOT contained',
 // `escape` points OUTSIDE the root, `inside-link` INSIDE it, `dangling`
 // nowhere, and `file-link` at a file outside (the exempt final component).
 // ---------------------------------------------------------------------------
+// The component the canonicalizer cannot see through
+//
+// The comparisons above decide on SPELLINGS, and the fence's canonicalizer is
+// `realpathSync.native` (`canonicalHostPath`). On this share that call is BLIND to
+// a Linux symlink: measured, it reports ENOENT for the link entry while `lstat`
+// reports EISDIR and `readdir` lists the entry, and `stat` (which follows) reports
+// ENOENT too — the entry is invisible to every call that resolves a path. The
+// harness resolves targets with the same call (`resolveLocalTarget`,
+// fs-local/src/fsio.ts:161-210), so a target spelled THROUGH such a link keeps the
+// lexical spelling as its key, the comparison above authorizes it, and the
+// publication that follows resolves it anyway: its first step is
+// `mkdir(directory, {recursive:true})` (fs-local/src/fsio.ts:598), which CREATES
+// the missing level AT THE LINK'S TARGET — outside the writable root — and then
+// fails. verify-9p.mjs measures both halves of that on every run, and the HAZARD it
+// used to record is now the assertion it carries.
+//
+// The rule under test — the one the fence implements: a target is authorized only
+// when every component strictly between the writable root and the target's OWN
+// NAME either does not exist on the share (`lstat` ENOENT/ENOTDIR) or
+// canonicalizes; a component that EXISTS but does not canonicalize refuses the
+// target. The target's own name is deliberately EXEMPT: a final-component link is
+// measured safe (the publication's rename replaces the link entry inside the root
+// and the link's target file is untouched) and it works today, so refusing it would
+// refuse a working legitimate write — and a rule that refuses legitimate same-root
+// writes is worse than the gap it closes.
+//
+// TWO ARMS, and the pins below are written for both. What the fence answers depends
+// on what its canonicalizer can DO with the link, so an unconditional expectation
+// would redden a machine whose share resolves links — the class this repo refuses
+// elsewhere (the case-variant pin above is `=== foldsCase` for the same reason).
+// The blind arm is the share fixture below: Linux symlinks, created and removed
+// through the distribution because the Windows side can do neither (measured EPERM /
+// ENOENT / EISDIR / ENOTEMPTY). The resolving arm is an NTFS directory junction,
+// which `realpathSync.native` RESOLVES (measured), needs no privilege, and which
+// this suite removes without following it (measured). The WORLD-INDEPENDENT pin is
+// the WRITE KEY — the key a write hands the fence, produced by fs-local's own
+// resolution walk (`writeTargetKey`) — which containment refuses on either arm.
+// ---------------------------------------------------------------------------
 console.log('\ncomponents the canonicalizer cannot resolve')
 linkFixtureLinux = fixtureLinux
 outsideFixtureLinux = `${fixtureLinux}-outside`
@@ -295,8 +377,8 @@ const listed = linkProblem === '' ? readdirSync(root) : []
 const missingLinks = linkNames.filter((name) => !listed.includes(name))
 const linkFixtureReady = linkProblem === '' && missingLinks.length === 0
 // The precondition is a FAIL, not a skip: a link that was never created answers
-// ENOENT to every call below, so the traversal assertions would pass while
-// testing nothing — the vacuous-pin class (D2) this suite exists to remove.
+// ENOENT to every call below, so the traversal assertions would pass while testing
+// nothing — the vacuous-pin class (D2) this suite exists to remove.
 check('the link fixture exists, so the traversal pins are about a real link',
   linkFixtureReady,
   linkProblem || `readdir(${root}) did not list ${missingLinks.join(', ')}`)
@@ -305,67 +387,65 @@ if (linkFixtureReady) {
   const canonicalRoot = canonicalHostPath(root)
   /** A host spelling below the fixture root, built from Linux components. */
   const below = (...parts) => joinWslUnc(distro, [fixtureLinux, ...parts].join('/'))
-  // The raw spelling the fence sees, and the one its own canonicalization would
-  // produce for a write: `checkedTarget` hands `isUnderHost` the target key that
-  // `resolveLocalTarget` returns, and for these targets that key IS this spelling
-  // — the resolution walk stops at the fixture root, which is the first ancestor
-  // that canonicalizes (measured).
-  const escapeTarget = below('escape', 'missing', 'file.txt')
-  // Whether the canonicalizer can see through the fixture link, measured once: the
-  // refusal expectations below are its BLIND arm, and the check after the next one
-  // pins the coincidence that makes them the same string.
-  let realpathBlind = false
-  try {
-    realpathSync.native(below('escape'))
-  } catch {
-    realpathBlind = true
+  /** Whether the canonicalizer can see through one fixture entry — measured, not assumed. */
+  const blindTo = (path) => {
+    try {
+      realpathSync.native(path)
+      return false
+    } catch {
+      return true
+    }
   }
+  const escapeBlind = blindTo(below('escape'))
+  const insideBlind = blindTo(below('inside-link'))
+  const escapeTarget = below('escape', 'missing', 'file.txt')
+  const escapeWriteKey = await writeTargetKey(escapeTarget)
   // SIX refusal checks, FIVE distinct behaviours while the canonicalizer is blind:
-  // the check below evaluates the key a WRITE hands the fence, which on this share
-  // is the same string as the raw spelling the first check evaluates — that overlap
-  // is pinned explicitly rather than left for a reader to discover.
-  check('a target whose ancestor is a link to OUTSIDE the root is refused',
-    await isUnderHost(escapeTarget, canonicalRoot) === false,
-    `${escapeTarget} vs ${canonicalRoot}`)
-  check('the write target its own canonicalization cannot place is refused',
-    await isUnderHost(canonicalHostPath(escapeTarget), canonicalRoot) === false,
-    `${canonicalHostPath(escapeTarget)} vs ${canonicalRoot}`)
-  // The overlap, as a relation instead of a caveat: with a blind canonicalizer
-  // `canonicalHostPath` returns its input, so the raw spelling and the write's key
-  // are one string; on a share that RESOLVES the link they differ — and there the
-  // check above is the one that still refuses (containment fails on the link's
-  // target), which is why that check, not this one, is the world-independent pin.
-  check('the canonicalized key equals the raw spelling exactly when the canonicalizer is blind',
-    (canonicalHostPath(escapeTarget) === escapeTarget) === realpathBlind,
-    `canonicalHostPath -> ${canonicalHostPath(escapeTarget)}; raw ${escapeTarget}; blind ${realpathBlind}`)
-  check('a target whose own PARENT is the link is refused (the mkdir level)',
-    await isUnderHost(below('escape', 'file.txt'), canonicalRoot) === false,
+  // the write-key check and the raw-spelling check evaluate ONE string there (the
+  // walk stops at the fixture root), and the relation that says so is pinned right
+  // below instead of being left for a reader to discover.
+  check('the fence refuses a spelling whose ancestor is a link it cannot see through',
+    await isUnderHost(escapeTarget, canonicalRoot) === !escapeBlind,
+    `${escapeTarget} vs ${canonicalRoot}; blind to the link: ${escapeBlind}`)
+  check('the WRITE KEY the fence is actually handed is refused',
+    await isUnderHost(escapeWriteKey, canonicalRoot) === false,
+    `write key ${escapeWriteKey} vs ${canonicalRoot}`)
+  // The overlap, as a measured relation rather than an assumption: the walk realpaths
+  // the nearest EXISTING ancestor, so on a blind share it stops at the fixture root
+  // and the key IS the raw spelling, while on a share that resolves the link it is
+  // the link's target. (Measured here for the blind arm; the resolving arm is the
+  // same walk with realpath succeeding, and it is PINNED against a junction below.)
+  check('the write key equals the raw spelling exactly when the canonicalizer is blind to the link',
+    (escapeWriteKey === escapeTarget) === escapeBlind,
+    `write key ${escapeWriteKey}; raw ${escapeTarget}; blind ${escapeBlind}`)
+  check('a target whose own PARENT is the link is refused exactly when the link is unseen',
+    await isUnderHost(below('escape', 'file.txt'), canonicalRoot) === !escapeBlind,
     below('escape', 'file.txt'))
-  // The cost of the rule, measured rather than argued: the canonicalizer cannot
-  // tell an inside-pointing link from an outside-pointing one, so the rule
-  // refuses both. What it costs is nothing that works: a write through EITHER
-  // link cannot publish on this share at all (measured — `mkdir(directory,
-  // {recursive:true})` reports ENOENT for a path through a link, and the write
-  // never reaches its rename), so the refusal replaces a confusing ENOENT that
-  // leaves a stray directory behind with a refusal BEFORE anything is created.
-  check('a link that points INSIDE the root is refused too (the canonicalizer cannot tell them apart)',
-    await isUnderHost(below('inside-link', 'missing', 'file.txt'), canonicalRoot) === false,
+  // The cost of the rule, measured rather than argued: the canonicalizer cannot tell
+  // an inside-pointing link from an outside-pointing one, so on a blind share the rule
+  // refuses both. What it costs is nothing that works: a write through EITHER link
+  // cannot publish on this share at all (measured — mkdir(directory, {recursive:true})
+  // reports ENOENT for a path through a link, and the write never reaches its rename),
+  // so the refusal replaces a confusing ENOENT that leaves a stray directory behind
+  // with a refusal BEFORE anything is created.
+  check('a link that points INSIDE the root is refused exactly when the link is unseen (the cost)',
+    await isUnderHost(below('inside-link', 'missing', 'file.txt'), canonicalRoot) === !insideBlind,
     below('inside-link', 'missing', 'file.txt'))
   // Unconditional on any share: a dangling link is a component that exists and
   // resolves nowhere, whether or not the share follows links.
   check('a dangling link refuses the target on any share',
     await isUnderHost(below('dangling', 'missing', 'file.txt'), canonicalRoot) === false,
     below('dangling', 'missing', 'file.txt'))
-  // The rule is not a property of one spelling: the wsl$ alias reaches the same
-  // share, so a link below the root must refuse it too. This spelling is NOT
-  // lexically under the root, so the answer comes from the identity walk — which
-  // is exactly where the alias spelling is authorized today.
+  // The rule is not a property of one spelling: the wsl$ alias reaches the same share,
+  // so a link below the root must refuse it too. This spelling is NOT lexically under
+  // the root, so the answer comes from the identity walk — which is exactly where the
+  // alias spelling is authorized today.
   const aliasEscape = escapeTarget.replace('wsl.localhost', 'wsl$')
-  check('the wsl$ alias spelling of the same target is refused too',
-    await isUnderHost(aliasEscape, canonicalRoot) === false,
+  check('the wsl$ alias spelling is refused exactly when the canonicalizer is blind',
+    await isUnderHost(aliasEscape, canonicalRoot) === !escapeBlind,
     `${aliasEscape} vs ${canonicalRoot}`)
-  // The controls: the rule must not touch what it is not about. Each of these is
-  // a write the fence authorizes today, and must keep authorizing.
+  // The controls: the rule must not touch what it is not about. Each of these is a
+  // write the fence authorizes today, and must keep authorizing.
   check('control: a missing component under a REAL directory is still authorized',
     await isUnderHost(below('realdir', 'missing', 'file.txt'), canonicalRoot) === true,
     below('realdir', 'missing', 'file.txt'))
@@ -376,8 +456,8 @@ if (linkFixtureReady) {
     await isUnderHost(below('realdir'), canonicalRoot) === true,
     below('realdir'))
   // The exemption, both shapes: the target's OWN name may be a link, because the
-  // publication's rename replaces the entry inside the root (measured: the
-  // link's target file is untouched, and the entry becomes a regular file).
+  // publication's rename replaces the entry inside the root (measured: the link's
+  // target file is untouched, and the entry becomes a regular file).
   check('control: a final-component FILE link is still authorized',
     await isUnderHost(below('file-link'), canonicalRoot) === true,
     below('file-link'))
@@ -388,7 +468,82 @@ if (linkFixtureReady) {
     existsSync(`${outsideHost}\\inside.txt`),
     `${outsideHost}\\inside.txt`)
 } else {
+  skipped += 1
   console.log('  SKIP  the traversal assertions (no link fixture; see the FAIL above)')
+}
+
+// ---------------------------------------------------------------------------
+// The resolving arm: a canonicalizer that DOES see through the link
+//
+// The expectations above are the blind arm, so this suite must not turn them into
+// constants — that would redden a machine whose share resolves links, the "healthy
+// machine" class this repo refuses. The other arm is buildable here: an NTFS
+// directory junction is a reparse point `realpathSync.native` RESOLVES (measured),
+// it needs no privilege (`mklink /J`), and `rmSync` on the junction itself removes
+// the link without touching its target (measured) — so the arm is pinned instead of
+// argued. Nothing here needs the distribution.
+// ---------------------------------------------------------------------------
+console.log('\nthe resolving arm (an NTFS junction the canonicalizer follows)')
+const junctionBase = join(tmpdir(), `dsh-fence-junction-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
+const junctionRoot = join(junctionBase, 'root')
+const junctionOutside = join(junctionBase, 'outside')
+const junctionEntry = join(junctionRoot, 'escape')
+/**
+ * Remove the junction fixture, and never throw while doing it.
+ *
+ * The junction goes FIRST and NON-recursively: `rmSync(junction)` deletes the reparse
+ * point itself and leaves its target alone (measured), where a recursive remove would
+ * have to be trusted not to follow it.
+ */
+function removeJunctionFixture() {
+  try {
+    rmSync(junctionEntry)
+  } catch { /* absent is fine */ }
+  try {
+    rmSync(junctionBase, { recursive: true, force: true })
+  } catch (error) {
+    console.error(`verify-fs-fence: the junction fixture could not be removed: ${junctionBase} (${error?.code ?? error?.message ?? String(error)})`)
+  }
+}
+process.on('exit', removeJunctionFixture)
+let junctionProblem = ''
+try {
+  mkdirSync(junctionRoot, { recursive: true })
+  mkdirSync(junctionOutside, { recursive: true })
+  execFileSync('cmd.exe', ['/c', 'mklink', '/J', junctionEntry, junctionOutside], { timeout: WSL_TIMEOUT_MS, stdio: 'pipe' })
+} catch (error) {
+  junctionProblem = `${error?.code ?? error?.status ?? 'error'}: ${String(error?.message ?? error).slice(0, 120)}`
+}
+const junctionResolves = (() => {
+  try {
+    realpathSync.native(junctionEntry)
+    return true
+  } catch {
+    return false
+  }
+})()
+const junctionReady = junctionProblem === '' && junctionResolves
+// A FAIL, not a skip: the arm's whole point is that the expectations above are not
+// constants, so a fixture that was never built would assert nothing.
+check('the junction fixture exists and the canonicalizer RESOLVES it (the arm the pins above must not redden)',
+  junctionReady,
+  junctionProblem || `realpath(${junctionEntry}) did not resolve — an NTFS junction needs no privilege, so a machine this arm cannot run on is not a machine it may pass silently`)
+
+if (junctionReady) {
+  const junctionRaw = join(junctionEntry, 'missing', 'file.txt')
+  const junctionWriteKey = await writeTargetKey(junctionRaw)
+  check('the fence refuses the WRITE KEY there too — containment, not blindness',
+    await isUnderHost(junctionWriteKey, junctionRoot) === false,
+    `write key ${junctionWriteKey} vs ${junctionRoot}`)
+  // This is the check that would have been red on a resolving machine had the
+  // expectations above been constants: the SPELLING is genuinely contained once the
+  // canonicalizer sees through the link, and the write is refused by the KEY.
+  check('the raw spelling is contained there (the blind-arm expectations are not constants)',
+    await isUnderHost(junctionRaw, junctionRoot) === true,
+    `${junctionRaw} vs ${junctionRoot}`)
+  check('the write key and the raw spelling differ exactly when the canonicalizer resolves the link',
+    (junctionWriteKey === junctionRaw) === !junctionResolves,
+    `write key ${junctionWriteKey}; raw ${junctionRaw}; resolves ${junctionResolves}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -398,11 +553,10 @@ if (linkFixtureReady) {
 // canonicalizer cannot resolve cannot publish, so refusing it costs nothing that
 // works" — is a claim about fs-local's publication sequence, and it used to live
 // only in a throwaway probe. It is STRUCTURAL, not incidental: the sequence calls
-// `mkdir(directory, {recursive:true})` FIRST and that call sits OUTSIDE the
-// try/catch that guards the staging work (fs-local/src/fsio.ts:597-649), so when it
-// fails the failure propagates before a staging directory, a temp file or a rename
-// exists. That is why the escape this rule closes left a stray directory and
-// nothing else.
+// `mkdir(directory, {recursive:true})` FIRST and that call sits OUTSIDE every
+// try/catch that could catch it (fs-local/src/fsio.ts:597-649), so when it fails the
+// failure propagates before a staging directory, a temp file or a rename exists.
+// That is why the escape this rule closes left a stray directory and nothing else.
 //
 // Pinned STRUCTURALLY because the behavioural pin cannot run offline: nothing in
 // this checkout can invoke fs-local's own `writeFileAtomic` (it is not exported by
@@ -412,11 +566,10 @@ if (linkFixtureReady) {
 // with `--checkout=` / `DSH_CHECKOUT`). Comments and string bodies are blanked
 // first, so a doc comment that names the call cannot satisfy the pin.
 //
-// The mutation that reddens it: move that `mkdir(directory, …)` call inside the
-// guarded try (or wrap it in a try of its own) — a failure would then be caught and
-// the publication would continue past the link. Proven by running this suite with
-// DSH_CHECKOUT pointed at a mutated COPY of the file, so the harness checkout
-// itself is never touched.
+// The mutations that redden it, all run against COPIES so the checkout is never
+// touched: move that call inside the guarded try; wrap it in a try of its own; or
+// open a try BEFORE it (with the catch after it) — the last one is why the window
+// the pin inspects starts at the FUNCTION and not at the `const directory` line.
 // ---------------------------------------------------------------------------
 console.log('\nthe cost claim: the publication aborts before anything else')
 const publicationSource = join(checkout, 'packages', 'fs', 'fs-local', 'src', 'fsio.ts')
@@ -427,24 +580,39 @@ try {
   publicationCode = null
 }
 if (publicationCode === null) {
-  // A missing development checkout is reported, not failed, the way
-  // verify-client-ui treats an absent harness checkout for its icon cross-check:
-  // the fence's own pins above do not depend on it. The reason names the way out.
+  // A missing development checkout is REPORTED and the suite's exit code says so: a
+  // green aggregate must not hide a pin that never ran (see the tail). A FAIL would
+  // be wrong the other way — the sibling suites treat this same missing artifact as
+  // exit 2, not as a red machine.
+  skipped += 1
   console.log(`  SKIP  the publication sequence is pinned structurally — ${publicationSource} not readable (set DSH_CHECKOUT, or place the harness checkout beside this repo)`)
 } else {
+  const functionStart = publicationCode.indexOf('export async function writeFileAtomic(')
   const anchor = publicationCode.indexOf('const directory = dirname(absolutePath)')
-  const from = anchor === -1 ? 0 : anchor
-  const createDirectory = publicationCode.indexOf('mkdir(directory, { recursive: true })', from)
-  const guarded = publicationCode.indexOf('try {', from)
-  const between = anchor === -1 || createDirectory === -1 ? '' : publicationCode.slice(anchor, createDirectory)
-  check('the publication creates the target directory BEFORE the try that guards its staging work',
-    anchor !== -1 && createDirectory !== -1 && guarded !== -1
-      && createDirectory < guarded && !/\btry\b|\bcatch\b/.test(between),
-    `anchor=${anchor} mkdir=${createDirectory} try=${guarded} between=${JSON.stringify(between.slice(-90))} (${publicationSource})`)
+  const createDirectory = publicationCode.indexOf('mkdir(directory, { recursive: true })', functionStart === -1 ? 0 : functionStart)
+  // Everything between the function's opening and the call: a try/catch ANYWHERE in
+  // there can catch the call's failure whatever order the statements are in. (A
+  // window measured from the `const directory` line alone misses the shape a reviewer
+  // named — a try opened BEFORE that line with its catch after the call: the guard
+  // precedes the anchor, the staging try is still later, and the failure is swallowed
+  // while the directory has already been created at the link's target.)
+  const beforeCreate = functionStart === -1 || createDirectory === -1 ? '' : publicationCode.slice(functionStart, createDirectory)
+  const guarded = publicationCode.indexOf('try {', createDirectory === -1 ? 0 : createDirectory)
+  check('the publication creates the target directory BEFORE any try that could catch its failure',
+    functionStart !== -1 && anchor !== -1 && createDirectory !== -1 && guarded !== -1
+      && anchor < createDirectory && createDirectory < guarded
+      && !/\btry\b|\bcatch\b/.test(beforeCreate),
+    `function=${functionStart} anchor=${anchor} mkdir=${createDirectory} try=${guarded} before=${JSON.stringify(beforeCreate.slice(-90))} (${publicationSource})`)
+  // Bounded to the guarded region itself — from that try to the function's closing
+  // brace — and not to the whole file: what it establishes is that the sequence this
+  // try guards IS the staging one. It does NOT establish that no other code path can
+  // reach those calls.
+  const guardedEnd = guarded === -1 ? -1 : publicationCode.indexOf('\n}\n', guarded)
+  const guardedBody = guarded === -1 || guardedEnd === -1 ? '' : publicationCode.slice(guarded, guardedEnd)
   check('the sequence that try guards is the staging one (staging dir, then a rename onto the target)',
-    publicationCode.includes('mkdir(stagingDir, { mode: 0o700 })')
-      && publicationCode.includes('await rename(tempPath, absolutePath)'),
-    publicationSource)
+    guardedBody.includes('mkdir(stagingDir, { mode: 0o700 })')
+      && guardedBody.includes('await rename(tempPath, absolutePath)'),
+    `guarded region ${guardedBody.length} chars at ${guarded} (${publicationSource})`)
 }
 
 // The reason containment runs in the HOST namespace: in the Linux namespace
@@ -589,5 +757,12 @@ console.log('\nthe hole the fence closes')
 const mntC = 'C:\\'
 check('a drive root is not contained by a WSL workspace', await isUnderHost(mntC, canonicalHostPath(workspaceRoot)) === false)
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+// A skip is a check that did not run, and reporting it as a pass would make the
+// suite's green meaningless exactly when the checkout is wrong (the sibling suites'
+// ruling, applied here): it gets its own exit code (2), which `verify-all` shows as
+// SKIP — instead of a green suite with a pin silently absent, and instead of a red
+// machine that merely has no harness checkout.
+if (failures > 0) console.log(`\n${failures} CHECK(S) FAILED${skipped === 0 ? '' : `, ${skipped} CHECK(S) SKIPPED`}`)
+else if (skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+else console.log('\nALL CHECKS PASSED')
+process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0
