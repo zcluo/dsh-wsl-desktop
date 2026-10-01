@@ -10,7 +10,12 @@
  * The fence is probed again with a VALID token and a foreign Host — the case the
  * security audit found missing. A development token replaces the
  * browser-authentication arm only, never the Host/Origin arm, so the rebinding
- * refusal must still stand for a token holder.
+ * refusal must still stand for a token holder. That pair is the ONLY
+ * behavioural cover for the handler's fence call: the offline checks in
+ * verify-modules.mjs execute the pure rule or read lib/index.js as text, and no
+ * offline caller can run the handler at all. To reproduce their RED without a
+ * host, drive this suite against scripts/mock-route-host.mjs — its header
+ * carries the two commands.
  *
  * Requires the installed plugin behind a running host (`developerTools: true`,
  * which `scripts/sync.ps1` stages). Run: node scripts/verify-route.mjs [baseUrl]
@@ -165,8 +170,10 @@ check('a caller holding the token reaches the acceptance surface',
 // posted a VALID token with a foreign Host, which is how the route came to skip
 // both arms for a token holder. 403 AND a bodyless refusal: a JSON envelope
 // would be the method-level refusal (dispatchAdmission), a different decision.
+// The two probes below are the ONLY behavioural cover for the handler's fence
+// call — the offline checks either execute the pure rule or read the source.
 const foreignHost = await post({ method: 'listDistros', params: {} }, { token, host: 'attacker.example' })
-check('a token holder with a foreign Host is still refused (a token does not replace the fence)',
+check('LIVE, the only behavioural cover for the fence seam: a token holder with a foreign Host is still refused (a token does not replace the fence)',
   foreignHost.status === 403 && foreignHost.json === null,
   `${foreignHost.status} ${foreignHost.text.slice(0, 120)}`)
 // The control for that probe: the same forged-Host transport and the same
@@ -174,7 +181,7 @@ check('a token holder with a foreign Host is still refused (a token does not rep
 // the Host VALUE, not the raw client.
 const servedAuthority = new URL(baseUrl).host
 const trustedHost = await post({ method: 'listDistros', params: {} }, { token, host: servedAuthority })
-check('the same token against the served authority is admitted',
+check('LIVE, behavioural control for that probe: the same token against the served authority is admitted',
   trustedHost.status === 200 && trustedHost.json?.ok === true,
   `${trustedHost.status} ${trustedHost.text.slice(0, 120)}`)
 const wrongToken = await post({ method: 'listDistros', params: {} }, { token: 'nope' })
