@@ -13,6 +13,7 @@
  * Run: node scripts/verify-fs-fence.mjs
  */
 
+import { statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { joinWslUnc } from '../lib/wsl/paths.js'
 import { canonicalHostPath, isLexicallyUnderHost, isUnderHost, writableHostRootsFor } from '../lib/wsl/fence.js'
@@ -62,7 +63,53 @@ const inside = joinWslUnc(distro, `${home}/proj/src/main.py`)
 
 check('the workspace root itself is contained', isLexicallyUnderHost(root, root))
 check('a path below the root is contained', isLexicallyUnderHost(inside, root))
-check('comparison is case-insensitive', isLexicallyUnderHost(inside.toUpperCase(), root))
+// The pin that used to sit here ("comparison is case-insensitive") asserted the
+// fold was INTENDED for the whole string. Half of it is: the UNC host and the
+// distribution segment are Windows spellings, and Windows folds them. The Linux
+// portion is not - the share resolves it with Linux semantics (README, "Measured
+// fence facts": /TMP -> ENOENT, so PROJ and proj are different directories) - and
+// folding it authorized a sibling of the workspace root, which the inherited
+// publication then CREATED with mkdir({recursive:true}) after the check passed.
+// The DEFAULT is unchanged, so the old pin's assertion is still true for callers
+// that do not ask for case sensitivity; it is kept, relabelled to say which half
+// it is about, and the case-sensitive half is pinned beside it.
+check('the default comparison is case-insensitive (the old pin, still true by default)',
+  isLexicallyUnderHost(inside.toUpperCase(), root) === true)
+check('the default keeps the Windows behaviour for existing callers',
+  isLexicallyUnderHost(joinWslUnc(distro, `${home}/PROJ/x`), joinWslUnc(distro, `${home}/proj`)) === true)
+check('a case-variant sibling of the root is NOT contained (case-sensitive share)',
+  isLexicallyUnderHost(joinWslUnc(distro, `${home}/PROJ/x`), joinWslUnc(distro, `${home}/proj`), { caseSensitive: true }) === false)
+check('an upper-cased Linux portion of a contained path is NOT contained',
+  isLexicallyUnderHost(inside.toUpperCase(), root, { caseSensitive: true }) === false)
+check('the distro segment stays case-insensitive even when the path is not',
+  isLexicallyUnderHost(joinWslUnc(distro.toUpperCase(), `${home}/proj/src`), joinWslUnc(distro, `${home}/proj`), { caseSensitive: true }) === true)
+// parseWslUnc synthesizes the Linux path "/" for a share root, and no character of
+// `\\wsl.localhost\<distro>` spells it: subtracting that length from the string
+// eats the last character of the DISTRIBUTION name instead of the absent Linux
+// portion, so the share root itself stops being recognized as contained.
+check('a share root folds whole (the synthesized Linux path "/" is not in the string)',
+  isLexicallyUnderHost(joinWslUnc(distro.toUpperCase(), '/'), joinWslUnc(distro, '/'), { caseSensitive: true }) === true)
+check('a Windows drive path folds whole (parseWslUnc returns null; the host is case-insensitive)',
+  isLexicallyUnderHost('C:\\Users\\X\\PROJ\\a', 'C:\\users\\x\\proj', { caseSensitive: true }) === true)
+// The WIRING, not just the pure function: isUnderHost must ask for the
+// case-sensitive comparison. The fixture root above does not exist on this
+// machine (README F4), and a missing root short-circuits to false for ANY
+// implementation - so this check uses the distribution's /tmp, which exists.
+// The expected answer is the SHARE's own answer: a case-variant sibling is
+// contained exactly when the share folds the two spellings onto one object (F1).
+// On a folding share the identity walk answers, which is the fallback working.
+const foldsCase = (() => {
+  try {
+    const upper = statSync(joinWslUnc(distro, '/TMP'), { bigint: true })
+    const lower = statSync(joinWslUnc(distro, '/tmp'), { bigint: true })
+    return upper.dev === lower.dev && upper.ino === lower.ino
+  } catch {
+    return false
+  }
+})()
+check('the full check answers a case-variant sibling the way the share does',
+  await isUnderHost(joinWslUnc(distro, '/TMP/dsh-fence-probe.txt'), canonicalHostPath(joinWslUnc(distro, '/tmp'))) === foldsCase,
+  `share folds /TMP onto /tmp: ${foldsCase}`)
 check('a sibling prefix is NOT contained (separator boundary)',
   isLexicallyUnderHost(joinWslUnc(distro, `${home}/proj-secret/x`), root) === false)
 check('a path above the root is NOT contained',
