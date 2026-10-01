@@ -6,7 +6,12 @@
  * machine, not of the plugin: resolve them, and let an operator override either
  * one. Nothing here is a secret — the token file the host mints is never read.
  *
- * Overrides: `DSH_WSL_DISTRO`, `DSH_WSL_USER`, `DSH_WSL_HOME`.
+ * A suite that compares TWO shares needs a second distribution, which is also a
+ * property of the machine: `resolveOtherDistro` asks the machine for one, so no
+ * suite has to carry the author's distro names.
+ *
+ * Overrides: `DSH_WSL_DISTRO`, `DSH_WSL_USER`, `DSH_WSL_HOME`,
+ * `DSH_WSL_OTHER_DISTRO`.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -79,4 +84,41 @@ export function resolveLinuxUser(distro = resolveDistro()) {
 export function resolveLinuxHome(distro) {
   if (process.env.DSH_WSL_HOME !== undefined) return process.env.DSH_WSL_HOME
   return `/home/${resolveLinuxUser(distro)}`
+}
+
+/**
+ * Every distribution this machine has installed.
+ *
+ * `wsl.exe -l -q` is the only offline source of that list, and it writes
+ * UTF-16LE; a host build answering UTF-8 would leave no NUL byte, so the
+ * encoding is read from the bytes rather than assumed (a garbled name would
+ * resolve to a distribution that does not exist, which is the failure this
+ * function exists to prevent).
+ * @returns {string[]} installed distribution names, in registry order.
+ */
+export function listDistros() {
+  let raw
+  try {
+    raw = execFileSync('wsl.exe', ['-l', '-q'], { timeout: PROBE_TIMEOUT_MS })
+  } catch (error) {
+    throw new Error(`cannot list the WSL distributions (${error?.code ?? error?.status ?? 'failed'}). `
+      + 'Wake WSL once ("wsl.exe -- true"), or set DSH_WSL_DISTRO / DSH_WSL_OTHER_DISTRO.')
+  }
+  const text = raw.includes(0) ? raw.toString('utf16le') : raw.toString('utf8')
+  return text.split(/\r?\n/).map((name) => name.trim()).filter((name) => name.length > 0)
+}
+
+/**
+ * A distribution OTHER than the selected one — the second share a
+ * cross-distribution assertion compares against.
+ *
+ * The caller must be able to tell "there is none" from a name, so this returns
+ * undefined rather than inventing one: a caller that cannot find a second share
+ * has to say so, not assert against nothing.
+ * @param {string} [distro] - the selected distribution, excluded from the choice.
+ * @returns {string|undefined} another installed distribution's name, or undefined when there is none.
+ */
+export function resolveOtherDistro(distro = resolveDistro()) {
+  if (process.env.DSH_WSL_OTHER_DISTRO !== undefined) return process.env.DSH_WSL_OTHER_DISTRO
+  return listDistros().find((name) => name.toLowerCase() !== distro.toLowerCase())
 }
