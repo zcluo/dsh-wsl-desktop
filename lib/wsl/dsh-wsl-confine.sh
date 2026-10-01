@@ -24,8 +24,13 @@
 # The drop identity is checked against the INVOKING user (SUDO_USER): the
 # sudoers grant is argument-wildcarded, and an unchecked --uid would let the
 # session user aim it at uid 0 — the fence is a WRITE boundary, so uid 0 inside
-# it still reads every root-only file. Root's own direct invocation has no
-# SUDO_USER and skips the check.
+# it still reads every root-only file. An empty or unset SUDO_USER is REFUSED,
+# not skipped (fail-closed; root's own direct invocation passes SUDO_USER=root
+# explicitly). The gate is a boundary only where the deployment's sudoers does
+# NOT grant SETENV: a caller who may set environment variables can forge
+# SUDO_USER - and SUDO_UID is forgeable through the same route, so a cross-check
+# buys nothing - and the gate then accepts the forged identity, dropping the
+# fence to the forged uid: a root-READ primitive, not unconfined root.
 #
 # This script runs as root and calls twelve tools by bare name (getent, cut, sed,
 # tr, mount, findmnt, grep, mountpoint, setpriv, env, bash, unshare). sudo's
@@ -120,15 +125,32 @@ done
 [[ -z "$workspace" || ( "$workspace" != /tmp && "$workspace" != /tmp/* ) ]] || { echo 'dsh-wsl-sandbox: setup failed: --workspace must not be /tmp or below it (the private tmpfs would cover it)' >&2; exit 97; }
 ((${#ARGS[@]} >= 1)) || { echo 'dsh-wsl-confine: no command' >&2; exit 2; }
 
-# Identity gate: the caller may only drop to the user sudo says is invoking.
-if [[ -n "${SUDO_USER:-}" ]]; then
-  CALLER_RECORD=$(getent passwd "$SUDO_USER" || true)
-  CALLER_UID=$(printf '%s' "$CALLER_RECORD" | cut -d: -f3)
-  CALLER_GID=$(printf '%s' "$CALLER_RECORD" | cut -d: -f4)
-  if [[ -z "$CALLER_UID" || "$uid" != "$CALLER_UID" || "$gid" != "$CALLER_GID" ]]; then
-    echo "dsh-wsl-confine: identity mismatch (refusing --uid/--gid for ${SUDO_USER})" >&2
-    exit 2
-  fi
+# Identity gate: the caller may only drop to the user sudo says is invoking, and the
+# gate is FAIL-CLOSED on the variable itself - an empty or unset SUDO_USER REFUSES.
+# The old shape was `if [[ -n "${SUDO_USER:-}" ]]; then ... fi`, so "no value" meant
+# "skip the check", and the caller controls this variable: measured on a copy of the
+# shipped helper, `sudo -n SUDO_USER= <this file> --uid 0 --gid 0 --home /root --cwd /
+# -- '...'` ran the command as uid 0 inside the fence with /etc/shadow readable, and
+# `sudo -n env -u SUDO_USER` did the same. Refusing costs the one case the old comment
+# allowed - root's own direct invocation, which has no SUDO_USER - and that invocation
+# can pass SUDO_USER=root explicitly instead.
+#
+# What this gate CANNOT be: a boundary against a caller who may set environment
+# variables. `sudo SUDO_USER=root <this file> --uid 0 --gid 0 ...` is ACCEPTED - the
+# variable is the only identity the gate has, and SUDO_UID is forgeable through the
+# same SETENV route, so a cross-check buys nothing. The gate is therefore sound only
+# where the deployment's sudoers does not grant SETENV (no ALL match, no command-line
+# assignment form). Where SETENV is granted it stops unintentional misuse, not
+# forgery, and the fence drops to the FORGED uid: a root-READ primitive (the fence is
+# a WRITE boundary, so uid 0 inside it still reads every root-only file), not
+# unconfined root.
+[[ -n "${SUDO_USER:-}" ]] || { echo 'dsh-wsl-confine: cannot determine the invoking user (SUDO_USER is empty or unset; pass SUDO_USER=root for a direct root invocation)' >&2; exit 2; }
+CALLER_RECORD=$(getent passwd "$SUDO_USER" || true)
+CALLER_UID=$(printf '%s' "$CALLER_RECORD" | cut -d: -f3)
+CALLER_GID=$(printf '%s' "$CALLER_RECORD" | cut -d: -f4)
+if [[ -z "$CALLER_UID" || "$uid" != "$CALLER_UID" || "$gid" != "$CALLER_GID" ]]; then
+  echo "dsh-wsl-confine: identity mismatch (refusing --uid/--gid for ${SUDO_USER})" >&2
+  exit 2
 fi
 
 # These pre-flight refusals carry the SAME setup-failure marker the fence's own

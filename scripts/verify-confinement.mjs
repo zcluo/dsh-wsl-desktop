@@ -244,6 +244,21 @@ check('the exemption grep consumes the pre-built pattern, anchored at both ends'
 check('the drop identity is checked against the invoking user',
   helperSource.includes('getent passwd') && helperSource.includes('identity mismatch'),
   'the sudoers grant is argument-wildcarded; an unchecked --uid lets the session user run the helper as uid 0 (a root-read primitive)')
+// That gate was wrapped in `if [[ -n "${SUDO_USER:-}" ]]; then ... fi`, so an EMPTY
+// or unset SUDO_USER skipped it entirely - and the caller controls the variable.
+// Measured on a copy of the shipped helper: `sudo -n SUDO_USER= <copy> --uid 0 --gid 0
+// --home /root --cwd / -- 'cat /etc/shadow'` ran as uid 0 with /etc/shadow readable,
+// and `sudo -n env -u SUDO_USER` did the same. The same route with SUDO_USER=root is
+// accepted too; that one is NOT closable in the script (SUDO_UID is forgeable through
+// the same SETENV route, so a cross-check buys nothing) and is documented instead. The
+// empty case is a fail-open guard whose absence-of-value path is "allow" - the class
+// this file keeps closing. Judged on the comment-stripped view: the refusal must be
+// CODE, not prose that mentions it.
+check('an empty or unset SUDO_USER is refused rather than skipping the identity gate',
+  helperCode.includes('cannot determine the invoking user')
+    && helperCode.indexOf('cannot determine the invoking user') < helperCode.indexOf('identity mismatch')
+    && !/\[\[\s*-n\s+"\$\{SUDO_USER:-\}"\s*\]\]\s*;\s*then/.test(helperCode),
+  'the variable is caller-controlled and "no value" used to mean "skip the check": an empty or unset SUDO_USER must refuse (exit 2) ahead of the comparison, and the `[[ -n "${SUDO_USER:-}" ]]; then` wrapper must not come back')
 {
   const mnt = windowsToMntPath(helperPathFile)
   if (mnt === null) {
