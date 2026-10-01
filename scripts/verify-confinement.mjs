@@ -131,12 +131,67 @@ check('the pin precedes the identity gate',
     && helperSource.indexOf('getent passwd') !== -1
     && helperSource.indexOf(pinnedPathLine) < helperSource.indexOf('getent passwd'),
   'the gate trusts getent/cut output for the --uid/--gid comparison, so a pin placed after it has not pinned it')
+// The pin above closes the PATH route into the helper's own startup. A
+// caller-supplied BASH_ENV is the same class one step EARLIER, and it is worse:
+// bash sources that file before the script's first line, as root, so nothing in
+// this file — the pin included — has run yet. Measured on bash 5.2.37: `bash
+// script`, a `#!/bin/bash` shebang under exec and `bash -c` all source it,
+// while `bash -p script`, a `#!/bin/bash -p` shebang and `bash -p -c` do not.
+// Privileged mode also stops the import of functions from the environment
+// (measured: a forged `getent` function satisfied the identity gate without it).
+// The shebang is pinned as LINE 1 rather than matched anywhere in the file: a
+// `#!/bin/bash -p` line further down is not a shebang, so a scan-the-text check
+// would pass on exactly the unfixed file this exists to reject.
+const shebang = helperLines[0] ?? ''
+check('the helper runs its own bash in privileged mode, so BASH_ENV is not sourced',
+  shebang === '#!/bin/bash -p',
+  `line 1 is ${JSON.stringify(shebang)} — without -p a caller-supplied BASH_ENV file is sourced as root BEFORE line 1`)
+// -p stops THIS shell from processing BASH_ENV; it does not remove the variable from
+// the environment, and every descendant inherits it. The drop-side `bash -lc
+// "$DROP_COMMAND"` is not privileged and does process it (measured: it sourced the
+// caller's file as the session user, inside the fence), and while the fence body was
+// still a plain `bash -c` it sourced it as root BEFORE the fence was established
+// (measured). The removal therefore has to sit on the ONE invocation every root-phase
+// descendant hangs off — the exec tail's `env`, ahead of the fence body it launches.
+// A comment-stripped view: the ordering assertion below is about what the file
+// EXECUTES. A comment that merely mentions `bash -c` (this file carries several,
+// including the one above this check) sorted before the unset and made the check
+// fail on a correctly fixed helper - prose is not the invocation.
+const helperCode = helperLines.filter((line) => !line.trimStart().startsWith('#')).join('\n')
+const execTailAt = helperCode.indexOf('exec unshare')
+const execTail = execTailAt === -1 ? '' : helperCode.slice(execTailAt)
+// Presence FIRST: indexOf returns -1 for a missing unset and -1 sorts before
+// every real index, so the ordering test alone would pass on a helper that never
+// removes the variable — the state this exists to reject. The anchor is `$FENCE`
+// rather than the string `bash -c`: the fence body's own invocation is spelled
+// `bash -p -c` (see the check below), so the older spelling would have measured
+// nothing there, and `$FENCE` is the script the fence body is handed either way.
+check('the root-phase fence body is launched with BASH_ENV removed',
+  execTail.indexOf('env -u BASH_ENV') !== -1
+    && execTail.indexOf('env -u BASH_ENV') < execTail.indexOf('$FENCE'),
+  'the fence body is a `bash -c` that processes BASH_ENV (measured), so the variable must be dropped on the exec tail BEFORE it launches that shell; an unset that only guards the helper\'s own shell leaves it in the environment for the descendant')
+// -p is a property of the SHELL, not of the helper: the fence body is a separate
+// `bash -c`, and a non-privileged bash imports functions from the environment
+// (measured: `bash -p` -> `env` -> `bash -c` imports a caller's `mount()`, and
+// `env -u BASH_ENV` does not remove it). Those functions ARE the fence: a
+// coordinated `mount`/`findmnt`/`mountpoint` override made the sweep report a
+// confined system while `/mnt/c` stayed writable (measured, a silent bypass), and
+// faking `mount()` alone only failed closed at the postcondition by luck. Pin the
+// fence body's OWN invocation: a `-p` anywhere else in the file (the shebang is a
+// different line) does not make it privileged.
+check('the root-phase fence body runs in privileged mode, so caller functions cannot be imported',
+  /bash -p -c "\$FENCE" dsh-wsl-confine/.test(helperCode),
+  'the fence body is a separate bash; without -p on THIS invocation an environment-provided function overrides the mount/findmnt/mountpoint the fence is built from, and a coordinated override voids the fence silently')
 check('the helper has no missing-semicolon brace groups', !/exit 2 \}/.test(helperSource), 'found `exit 2 }` — the brace group stays open and bash aborts at EOF')
 check('the fence receives its parameters as environment variables',
   helperSource.includes('DROP_UID="$uid"') && helperSource.includes('--reuid="$DROP_UID"'),
   'params must cross into `bash -c` via env(1); bare KEY=VALUE words are positional parameters, and $UID is a bash built-in')
+// The exec tail's env(1) now carries an option (-u BASH_ENV) before its
+// assignments, so the pin allows options and still requires env(1) itself to be the
+// thing the DROP_* assignments follow — the property this check exists for is
+// unchanged: bare KEY=VALUE words after the script name are positional parameters.
 check('the exec tail passes env before the fence script',
-  /env \\\n\s+DROP_UID=/.test(helperSource) && !/bash -c "\$FENCE" \\\n\s+dsh-wsl-confine \\\n\s+UID=/.test(helperSource), null)
+  /env(?: -u [A-Za-z_][A-Za-z0-9_]*)* \\\n\s+DROP_UID=/.test(helperSource) && !/bash -c "\$FENCE" \\\n\s+dsh-wsl-confine \\\n\s+UID=/.test(helperSource), null)
 check('the helper escapes ERE metacharacters before building the exemption pattern',
   helperSource.includes('[][\\\\^$.*+?(){}|]') && helperSource.includes("]/\\\\&/g'"),
   'the allow-list is DATA: unescaped, a workspace path containing ( ) | or [ becomes regex syntax — the real workspace is swept read-only, or a `|` grants an exemption to a path that was never allowed')

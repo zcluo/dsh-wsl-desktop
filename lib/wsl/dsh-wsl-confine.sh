@@ -1,4 +1,7 @@
-#!/bin/bash
+#!/bin/bash -p
+# Privileged mode (-p): this script runs as root via sudo, and without -p bash would
+# source a caller-supplied BASH_ENV file BEFORE our first line, as root. The
+# startup-defence note below carries the measurement (bash 5.2.37).
 # dsh-wsl-confine v1.2 — DSH WSL confinement helper.
 #
 # Root-owned fence executor: the ONLY thing this helper does is apply the
@@ -45,18 +48,29 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-# NOT closed here, and not closable by the pin above: a caller-supplied BASH_ENV is
-# sourced by bash BEFORE line 1, as root (measured: `sudo -n BASH_ENV=<file> <this
-# file> --version` runs <file> as uid 0). Privileged mode does not process BASH_ENV
-# (`bash -p script`, and `#!/bin/bash -p` under exec, both skip it) - but the fence
-# body is launched with `bash -c` below, which DOES process it, and -p on this script
-# would not remove the variable from the environment. TWO edits in THIS file close
-# it: the shebang becomes `#!/bin/bash -p`, and `unset BASH_ENV` goes before the exec
-# tail (which removes it for every descendant, the fence body and the drop-side
-# `bash -lc` included). Measured together on a copy: nothing sourced, and a real
-# confined command still completes. NOT applied here on purpose - a -p shebang
-# changes a root helper's startup and needs its own verification. Severity: this is
-# unconfined root code execution BEFORE the fence, which exceeds the
+# CLOSED here: a caller-supplied BASH_ENV was sourced by bash BEFORE line 1, as root
+# (measured: `sudo -n BASH_ENV=<file> <this file> --version` ran <file> as uid 0), so
+# the caller got unconfined root code execution ahead of every control below - the pin
+# included, which is why the pin could not close it. THREE edits in THIS file close it.
+# (1) The shebang is `#!/bin/bash -p`. Privileged mode does not process BASH_ENV
+# (measured on bash 5.2.37: `bash -p script`, a `#!/bin/bash -p` shebang under exec and
+# `bash -p -c` all skip it, while plain `bash script`, a `#!/bin/bash` shebang and
+# `bash -c` source it), and it also stops importing functions from the environment into
+# THIS shell. (2) -p does not REMOVE the variable, and every descendant inherits it -
+# the drop-side `bash -lc "$DROP_COMMAND"` is NOT privileged and does process it
+# (measured: it sourced the caller's file as the session user, inside the fence) - so
+# the exec tail drops it with `env -u BASH_ENV`: one removal on the one invocation
+# every root-phase descendant hangs off. (3) That same fence body is launched
+# with `-p`: privileged mode is a property of the SHELL, so (1) protected this shell
+# only, and a caller-exported FUNCTION named `mount`, `findmnt` or `mountpoint` was
+# imported by the fence body and overrode the tools the fence is built from
+# (measured: with all three supplied the fence reported success while /mnt/c stayed
+# writable - a silent bypass; with only `mount()` supplied it failed closed at the
+# postcondition by luck; and a caller `set()` function disabled the fence body's own
+# `set -euo pipefail`, its first line). Measured together on a copy with
+# BASH_ENV armed: nothing sourced, `--version` still answers, and a real confined
+# command returns its normal result, byte-identical to the pre-change helper's output.
+# Severity: this is unconfined root code execution BEFORE the fence, which exceeds the
 # root-inside-the-fence read access the pin above closes - but only for a deployment
 # whose sudo grant is NARROW (this helper alone); an account holding NOPASSWD: ALL
 # already has that ceiling.
@@ -182,8 +196,23 @@ exec setpriv --no-new-privs --reuid="$DROP_UID" --regid="$DROP_GID" --init-group
 PID_FLAG=''
 [[ "$pidns" = 1 ]] && PID_FLAG='--pid --fork'
 
-exec unshare --mount --propagation private $PID_FLAG env \
+# -p stops OUR bash from processing BASH_ENV, but it does NOT remove the variable from
+# the environment, and every descendant inherits it. The drop-side `bash -lc
+# "$DROP_COMMAND"` is NOT privileged and does process it (measured: it sourced the
+# caller's file as the session user, inside the fence). Drop it HERE, on the one
+# invocation every root-phase descendant hangs off, so no descendant can be made to
+# source a caller's file.
+#
+# -p on THIS file's bash also stops the import of functions from the environment
+# into THIS shell only. The fence body is a separate `bash -c`, so without -p there a
+# caller-exported BASH_FUNC_* function overrides the very tools the fence is built
+# from (measured: a coordinated mount/findmnt/mountpoint override made the sweep
+# report a confined system while /mnt/c stayed writable - a silent bypass). It is
+# therefore launched with -p as well: the same privileged-mode rule that skips
+# BASH_ENV skips the function import, so a coordinated override becomes a no-op
+# instead of a fence that lies.
+exec unshare --mount --propagation private $PID_FLAG env -u BASH_ENV \
   DROP_UID="$uid" DROP_GID="$gid" DROP_HOME="$home" DROP_USER="${SUDO_USER:-root}" \
   DROP_CWD="$cwd" DROP_WORKSPACE="$workspace" DROP_COMMAND="${ARGS[*]}" \
   DROP_EXEMPT="$EXEMPT_PATTERN" \
-  bash -c "$FENCE" dsh-wsl-confine
+  bash -p -c "$FENCE" dsh-wsl-confine
