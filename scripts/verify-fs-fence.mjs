@@ -24,15 +24,26 @@
  * Run: node scripts/verify-fs-fence.mjs
  */
 
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { joinWslUnc } from '../lib/wsl/paths.js'
+import { blankLiterals } from './source-text.mjs'
 import { canonicalHostPath, isLexicallyUnderHost, isUnderHost, writableHostRootsFor } from '../lib/wsl/fence.js'
 import { resolveDistro, resolveLinuxUser, resolveOtherDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 
 const distro = resolveDistro()
+const here = dirname(fileURLToPath(import.meta.url))
+const pluginRoot = join(here, '..')
+/** `--checkout=` / `DSH_CHECKOUT` override the harness checkout's default sibling location. */
+const flag = (name, fallback) => {
+  const hit = process.argv.find((argument) => argument.startsWith(`--${name}=`))
+  return hit === undefined ? fallback : hit.slice(name.length + 3)
+}
+const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? join(pluginRoot, '..', 'deepseek-harness'))
 // Fixture paths derive from the environment, never from a hardcoded identity
 // (the same rule every other suite follows). The fixture ROOT is derived from
 // the distribution rather than from the Linux home: a fixture under the home
@@ -300,12 +311,33 @@ if (linkFixtureReady) {
   // — the resolution walk stops at the fixture root, which is the first ancestor
   // that canonicalizes (measured).
   const escapeTarget = below('escape', 'missing', 'file.txt')
+  // Whether the canonicalizer can see through the fixture link, measured once: the
+  // refusal expectations below are its BLIND arm, and the check after the next one
+  // pins the coincidence that makes them the same string.
+  let realpathBlind = false
+  try {
+    realpathSync.native(below('escape'))
+  } catch {
+    realpathBlind = true
+  }
+  // SIX refusal checks, FIVE distinct behaviours while the canonicalizer is blind:
+  // the check below evaluates the key a WRITE hands the fence, which on this share
+  // is the same string as the raw spelling the first check evaluates — that overlap
+  // is pinned explicitly rather than left for a reader to discover.
   check('a target whose ancestor is a link to OUTSIDE the root is refused',
     await isUnderHost(escapeTarget, canonicalRoot) === false,
     `${escapeTarget} vs ${canonicalRoot}`)
   check('the write target its own canonicalization cannot place is refused',
     await isUnderHost(canonicalHostPath(escapeTarget), canonicalRoot) === false,
     `${canonicalHostPath(escapeTarget)} vs ${canonicalRoot}`)
+  // The overlap, as a relation instead of a caveat: with a blind canonicalizer
+  // `canonicalHostPath` returns its input, so the raw spelling and the write's key
+  // are one string; on a share that RESOLVES the link they differ — and there the
+  // check above is the one that still refuses (containment fails on the link's
+  // target), which is why that check, not this one, is the world-independent pin.
+  check('the canonicalized key equals the raw spelling exactly when the canonicalizer is blind',
+    (canonicalHostPath(escapeTarget) === escapeTarget) === realpathBlind,
+    `canonicalHostPath -> ${canonicalHostPath(escapeTarget)}; raw ${escapeTarget}; blind ${realpathBlind}`)
   check('a target whose own PARENT is the link is refused (the mkdir level)',
     await isUnderHost(below('escape', 'file.txt'), canonicalRoot) === false,
     below('escape', 'file.txt'))
@@ -357,6 +389,62 @@ if (linkFixtureReady) {
     `${outsideHost}\\inside.txt`)
 } else {
   console.log('  SKIP  the traversal assertions (no link fixture; see the FAIL above)')
+}
+
+// ---------------------------------------------------------------------------
+// Why the refusal costs nothing: the publication's first step is UNGUARDED
+//
+// The zero-cost half of the rule above — "a write through a component the
+// canonicalizer cannot resolve cannot publish, so refusing it costs nothing that
+// works" — is a claim about fs-local's publication sequence, and it used to live
+// only in a throwaway probe. It is STRUCTURAL, not incidental: the sequence calls
+// `mkdir(directory, {recursive:true})` FIRST and that call sits OUTSIDE the
+// try/catch that guards the staging work (fs-local/src/fsio.ts:597-649), so when it
+// fails the failure propagates before a staging directory, a temp file or a rename
+// exists. That is why the escape this rule closes left a stray directory and
+// nothing else.
+//
+// Pinned STRUCTURALLY because the behavioural pin cannot run offline: nothing in
+// this checkout can invoke fs-local's own `writeFileAtomic` (it is not exported by
+// the installed generation). The subject is the harness checkout's source — the
+// authored sequence the running build is generated from — located the way
+// verify-client-ui locates the same checkout (a sibling of this repo, overridable
+// with `--checkout=` / `DSH_CHECKOUT`). Comments and string bodies are blanked
+// first, so a doc comment that names the call cannot satisfy the pin.
+//
+// The mutation that reddens it: move that `mkdir(directory, …)` call inside the
+// guarded try (or wrap it in a try of its own) — a failure would then be caught and
+// the publication would continue past the link. Proven by running this suite with
+// DSH_CHECKOUT pointed at a mutated COPY of the file, so the harness checkout
+// itself is never touched.
+// ---------------------------------------------------------------------------
+console.log('\nthe cost claim: the publication aborts before anything else')
+const publicationSource = join(checkout, 'packages', 'fs', 'fs-local', 'src', 'fsio.ts')
+let publicationCode = null
+try {
+  publicationCode = blankLiterals(readFileSync(publicationSource, 'utf8'))
+} catch {
+  publicationCode = null
+}
+if (publicationCode === null) {
+  // A missing development checkout is reported, not failed, the way
+  // verify-client-ui treats an absent harness checkout for its icon cross-check:
+  // the fence's own pins above do not depend on it. The reason names the way out.
+  console.log(`  SKIP  the publication sequence is pinned structurally — ${publicationSource} not readable (set DSH_CHECKOUT, or place the harness checkout beside this repo)`)
+} else {
+  const anchor = publicationCode.indexOf('const directory = dirname(absolutePath)')
+  const from = anchor === -1 ? 0 : anchor
+  const createDirectory = publicationCode.indexOf('mkdir(directory, { recursive: true })', from)
+  const guarded = publicationCode.indexOf('try {', from)
+  const between = anchor === -1 || createDirectory === -1 ? '' : publicationCode.slice(anchor, createDirectory)
+  check('the publication creates the target directory BEFORE the try that guards its staging work',
+    anchor !== -1 && createDirectory !== -1 && guarded !== -1
+      && createDirectory < guarded && !/\btry\b|\bcatch\b/.test(between),
+    `anchor=${anchor} mkdir=${createDirectory} try=${guarded} between=${JSON.stringify(between.slice(-90))} (${publicationSource})`)
+  check('the sequence that try guards is the staging one (staging dir, then a rename onto the target)',
+    publicationCode.includes('mkdir(stagingDir, { mode: 0o700 })')
+      && publicationCode.includes('await rename(tempPath, absolutePath)'),
+    publicationSource)
 }
 
 // The reason containment runs in the HOST namespace: in the Linux namespace

@@ -166,6 +166,10 @@ const facts = []
  * Linux symlink the canonicalizer cannot resolve, which created a directory
  * outside the writable root — is closed by the fence's rule and asserted below,
  * and a reporting path no check can redden is the class this plan removes.
+ * Where a FUTURE hazard goes: re-add the `{ hazard: true }` option this file
+ * carried until commit cc23c91 (`git show cc23c91^:scripts/verify-9p.mjs`) — a
+ * measured answer the fence does NOT cover must not sit among the FACTs — and put
+ * the fence's own answer to it in `scripts/verify-fs-fence.mjs`.
  * @param {string} label - what was measured.
  * @param {string} value - the measured answer.
  */
