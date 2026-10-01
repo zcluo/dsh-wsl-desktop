@@ -176,18 +176,32 @@ check('signalling returns the group it reached', signalled === jobPgrp, `signall
 await terminal.write('echo ALIVE-$((5*5))\n')
 check('the shell survives the interrupt', await until(() => output.includes('ALIVE-25')), JSON.stringify(output.slice(-200)))
 
-// --- the pin: no timer may stand in for that condition again ---------------------
+// --- the pin: a TRIPWIRE against the idiom that was removed, not the property -----
 //
-// The fixed wait was removed because it was MEASURED to fail; this rejects the idiom at
-// the same site so it cannot return silently. The site is the span from the job's write
-// to the signal call, read from this file's own text with the comment and string bodies
-// blanked — so a comment naming the idiom neither satisfies nor trips the pin.
+// The fixed wait was removed because it was MEASURED to fail, and this pin is the ONLY
+// guard against its return: with the fixed wait restored at this site and everything else
+// kept (mutation M1, on an idle machine), every behavioural check above still PASSED — the
+// ALIVE check included — so nothing else here backstops it.
 //
-// What it does NOT establish: that no other duration-based wait exists anywhere (a poll
-// gap inside ownsTerminal is a different thing and is not rejected), and it is
-// spelling-bound — the region is delimited by two calls, so a rename has to move with it.
-// The behavioural half is the check above: a fixed wait under load signals the shell's
-// group, which `signalled === jobPgrp` now rejects.
+// What it catches, exactly: two spellings inside the span from the job's write to the
+// signal call — `until(() => false, <ms>)` and `setTimeout(` — read from this file's own
+// text with comment and string bodies blanked, so a comment naming the idiom neither
+// satisfies nor trips it.
+//
+// What it does NOT establish, stated because a pin that implies completeness is worse than
+// one that admits its scope: this is a TRIPWIRE, not the property. A local `pause(1500)`
+// helper, a busy-wait, an indirection (`until(() => neverTrue(), 1500)`), a re-anchored
+// span (an extra `terminal.write('')` before the condition call, or `ownsTerminal(..., 1)`)
+// all leave it green while the wait is a duration again. It is also spelling-bound: the
+// span is delimited by two calls, so a rename has to move with it, and a poll gap inside
+// ownsTerminal is deliberately not that idiom.
+//
+// What WOULD establish the property is the behavioural half above, and only under load:
+// the signal reaches the job's own group BECAUSE the suite waited for that group, so
+// `signalled === jobPgrp` reddens when the wait is a guess on a busy machine — and stays
+// green on an idle one either way, which is exactly why M1 needs this tripwire. An editor
+// who wants a real guard has to make the condition itself the assertion, not extend the
+// regex.
 {
   const blanked = blankLiterals(await readFile(fileURLToPath(import.meta.url), 'utf8'))
   const signalAt = blanked.indexOf('terminal.signalForeground(')
