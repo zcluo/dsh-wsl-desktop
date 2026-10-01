@@ -243,22 +243,63 @@ check('the exemption grep consumes the pre-built pattern, anchored at both ends'
   'the fence must not hand-build a pattern from a path; the shipped `/sys$")$"` tail was a bash parse error (closing paren outside the string plus a `$"` locale-quote)')
 check('the drop identity is checked against the invoking user',
   helperSource.includes('getent passwd') && helperSource.includes('identity mismatch'),
-  'the sudoers grant is argument-wildcarded; an unchecked --uid lets the session user run the helper as uid 0 (a root-read primitive)')
+  'the sudoers grant is argument-wildcarded; an unchecked --uid lets the session user run the helper as uid 0, and root inside the fence is not a reader - it can remount the fence read-write (measured), so that is root WRITE')
 // That gate was wrapped in `if [[ -n "${SUDO_USER:-}" ]]; then ... fi`, so an EMPTY
 // or unset SUDO_USER skipped it entirely - and the caller controls the variable.
 // Measured on a copy of the shipped helper: `sudo -n SUDO_USER= <copy> --uid 0 --gid 0
 // --home /root --cwd / -- 'cat /etc/shadow'` ran as uid 0 with /etc/shadow readable,
 // and `sudo -n env -u SUDO_USER` did the same. The same route with SUDO_USER=root is
 // accepted too; that one is NOT closable in the script (SUDO_UID is forgeable through
-// the same SETENV route, so a cross-check buys nothing) and is documented instead. The
-// empty case is a fail-open guard whose absence-of-value path is "allow" - the class
-// this file keeps closing. Judged on the comment-stripped view: the refusal must be
-// CODE, not prose that mentions it.
+// the same SETENV route, so a cross-check buys nothing) and is documented instead.
+//
+// SEMANTIC, not textual. An earlier version of this pin required only the refusal
+// message, its order and one exact wrapper spelling, and two mutations kept it GREEN
+// while re-opening the hole: `[[ -v SUDO_USER ]]` (existence only, so an EMPTY value
+// passed) and that guard plus a re-wrapped CALLER_UID comparison. The assertions are
+// therefore about the CONDITION and the comparison's reachability: the condition must
+// test the VALUE through the `:-` default form (which is what makes empty and unset
+// one case) and its failure branch must exit 2, no conditional may sit between the
+// refusal and the comparison, and the comparison must be a top-level statement (an
+// indented one is inside something that can skip it). Judged on the comment-stripped
+// view: the refusal must be CODE, not prose that mentions it.
+const gateLines = helperCode.split('\n')
+const guardAt = gateLines.findIndex((line) => line.includes('cannot determine the invoking user'))
+const compareAt = gateLines.findIndex((line) => line.includes('"$uid" != "$CALLER_UID"'))
 check('an empty or unset SUDO_USER is refused rather than skipping the identity gate',
-  helperCode.includes('cannot determine the invoking user')
-    && helperCode.indexOf('cannot determine the invoking user') < helperCode.indexOf('identity mismatch')
-    && !/\[\[\s*-n\s+"\$\{SUDO_USER:-\}"\s*\]\]\s*;\s*then/.test(helperCode),
-  'the variable is caller-controlled and "no value" used to mean "skip the check": an empty or unset SUDO_USER must refuse (exit 2) ahead of the comparison, and the `[[ -n "${SUDO_USER:-}" ]]; then` wrapper must not come back')
+  guardAt !== -1 && compareAt !== -1 && guardAt < compareAt
+    && /\[\[\s*(?:-n|-z)\s+"\$\{SUDO_USER:-\}"\s*\]\]\s*(?:\|\||&&)\s*\{[^}]*exit 2;\s*\}/.test(gateLines[guardAt])
+    && !/\bif\b/.test(gateLines.slice(guardAt, compareAt).join('\n'))
+    && !/^\s/.test(gateLines[compareAt]),
+  'the guard must refuse on the VALUE (empty or unset) ahead of the comparison, and the comparison must be reachable unconditionally: `[[ -v SUDO_USER ]]` (existence only) or a wrapped comparison re-opens the hole this closes')
+// The structural pin can only read text; these RUN the shipped helper, which is an
+// assertion no spelling can satisfy. Unprivileged and deterministic: the refusal
+// precedes every privileged step, so no grant is needed (the same pattern as the
+// control-character refusal below). Both spellings, because bash treats them
+// differently and the hole was exactly that difference: `[[ -v SUDO_USER ]]` passes
+// the EMPTY one (falling through to the identity comparison, which answers with a
+// different message) and a re-wrapped comparison skips the refusal entirely. Both
+// mutations were measured to redden these two checks.
+{
+  const mnt = windowsToMntPath(helperPathFile)
+  if (mnt === null) {
+    console.log('  SKIP  the shipped helper refuses an empty/unset SUDO_USER (helper not on a drive path)')
+  } else {
+    for (const [label, prefix] of [['empty', 'SUDO_USER= '], ['unset', 'env -u SUDO_USER ']]) {
+      const refusal = await runWslShell({
+        distro,
+        linuxCwd: '/',
+        command: `${prefix}bash ${shellQuote(mnt)} --uid 0 --gid 0 --home /root --cwd / -- 'echo GATE-SKIPPED'; echo EXIT=$?`,
+        loginShell: false,
+        timeoutMs: 60_000,
+      })
+      check(`the shipped helper refuses an ${label} SUDO_USER before any privileged work`,
+        refusal.stdout.includes('EXIT=2')
+          && refusal.stderr.includes('cannot determine the invoking user')
+          && !refusal.stdout.includes('GATE-SKIPPED'),
+        `stdout=${JSON.stringify(refusal.stdout.slice(-200))} stderr=${JSON.stringify(refusal.stderr.slice(-200))}`)
+    }
+  }
+}
 {
   const mnt = windowsToMntPath(helperPathFile)
   if (mnt === null) {

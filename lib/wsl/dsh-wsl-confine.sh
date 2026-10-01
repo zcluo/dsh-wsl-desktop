@@ -23,14 +23,18 @@
 # AFTER the setpriv drop (with NO_NEW_PRIVS) — root never evaluates caller text.
 # The drop identity is checked against the INVOKING user (SUDO_USER): the
 # sudoers grant is argument-wildcarded, and an unchecked --uid would let the
-# session user aim it at uid 0 — the fence is a WRITE boundary, so uid 0 inside
-# it still reads every root-only file. An empty or unset SUDO_USER is REFUSED,
-# not skipped (fail-closed; root's own direct invocation passes SUDO_USER=root
-# explicitly). The gate is a boundary only where the deployment's sudoers does
+# session user aim it at uid 0. Root inside the fence is NOT a reader: the
+# read-only state is a per-mount bind remount in a private namespace, so uid 0
+# can remount it read-write - measured: `mount -o remount,rw /` and
+# `mount -o remount,rw /mnt/c` both succeed and a write to a root-only path
+# lands. An empty or unset SUDO_USER is REFUSED, not skipped (fail-closed;
+# root's own direct invocation passes SUDO_USER=root explicitly). The gate is a
+# boundary only where the deployment's sudoers does
 # NOT grant SETENV: a caller who may set environment variables can forge
 # SUDO_USER - and SUDO_UID is forgeable through the same route, so a cross-check
 # buys nothing - and the gate then accepts the forged identity, dropping the
-# fence to the forged uid: a root-READ primitive, not unconfined root.
+# fence to the forged uid: root WRITE on the distribution's filesystem and on
+# /mnt/c, with only the namespace and NO_NEW_PRIVS left standing.
 #
 # This script runs as root and calls twelve tools by bare name (getent, cut, sed,
 # tr, mount, findmnt, grep, mountpoint, setpriv, env, bash, unshare). sudo's
@@ -76,9 +80,12 @@ export PATH
 # BASH_ENV armed: nothing sourced, `--version` still answers, and a real confined
 # command returns its normal result, byte-identical to the pre-change helper's output.
 # Severity: this is unconfined root code execution BEFORE the fence, which exceeds the
-# root-inside-the-fence read access the pin above closes - but only for a deployment
-# whose sudo grant is NARROW (this helper alone); an account holding NOPASSWD: ALL
-# already has that ceiling.
+# root-inside-the-fence access the pin above closes (and root there is not a reader
+# either - see the identity-gate note below). Its REACHABILITY is the sudoers policy's:
+# a strictly NARROW rule does NOT imply SETENV, and an EXPORTED BASH_ENV is stripped by
+# sudo's env_reset (measured), so the route needs the command-line-assignment spelling,
+# which SETENV permits and an ALL match implies. The helper-side fix is unconditional on
+# purpose: it must not depend on the deployment's sudoers either way.
 
 set -euo pipefail
 VERSION='dsh-wsl-confine v1.2'
@@ -141,9 +148,12 @@ done
 # same SETENV route, so a cross-check buys nothing. The gate is therefore sound only
 # where the deployment's sudoers does not grant SETENV (no ALL match, no command-line
 # assignment form). Where SETENV is granted it stops unintentional misuse, not
-# forgery, and the fence drops to the FORGED uid: a root-READ primitive (the fence is
-# a WRITE boundary, so uid 0 inside it still reads every root-only file), not
-# unconfined root.
+# forgery, and the fence drops to the FORGED uid: root WRITE, not a read
+# primitive - the read-only state is a per-mount bind remount in this private
+# namespace, so the forged uid 0 can remount `/` and `/mnt/c` read-write
+# (measured: both remounts succeed and a write to a root-only path lands) and
+# write to the distribution's filesystem and to the Windows filesystem. The
+# namespace and NO_NEW_PRIVS still apply; the file fence does not.
 [[ -n "${SUDO_USER:-}" ]] || { echo 'dsh-wsl-confine: cannot determine the invoking user (SUDO_USER is empty or unset; pass SUDO_USER=root for a direct root invocation)' >&2; exit 2; }
 CALLER_RECORD=$(getent passwd "$SUDO_USER" || true)
 CALLER_UID=$(printf '%s' "$CALLER_RECORD" | cut -d: -f3)
