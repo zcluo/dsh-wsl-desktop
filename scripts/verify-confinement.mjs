@@ -20,6 +20,7 @@ import {
   RUNNER_SUDO_UNSHARE,
   SETUP_FAILURE_EXIT,
   SETUP_FAILURE_MARKER,
+  assertWorkspaceSpelling,
   buildConfinedCommand,
   detectRunner,
   resetConfinementCache,
@@ -84,6 +85,30 @@ check('the exec tail passes env before the fence script',
 check('the helper escapes ERE metacharacters before building the exemption pattern',
   helperSource.includes('[][\\\\^$.*+?(){}|]') && helperSource.includes("]/\\\\&/g'"),
   'the allow-list is DATA: unescaped, a workspace path containing ( ) | or [ becomes regex syntax — the real workspace is swept read-only, or a `|` grants an exemption to a path that was never allowed')
+// The escape set protects METACHARACTERS; it never protected the SEPARATOR. The
+// builder joins its entries line-wise and turns every LF into '|', so an LF inside
+// the workspace value was indistinguishable from an entry boundary:
+// '/home/u/proj/x<LF>/mnt/c' became an alternation that exempted /mnt/c from BOTH
+// the read-only sweep and the writability postcondition — the fence reported
+// success while the Windows filesystem stayed writable. A separator cannot be
+// escaped (it IS the join), so the value must not be able to carry one: the refusal
+// has to come BEFORE the builder, and the JS producer refuses the same spellings.
+// (NUL-delimiting the pipeline would make the builder lossless by itself, but sed -z
+// is GNU sed only — BusyBox sed 1.36 rejects it, and Alpine 3.20 is a distribution
+// docs/DISTRO-SUPPORT.md lists as supported, so that form would break the fence for
+// every confined command there. Measured, not assumed: alpine:3.20 -> "sed:
+// unrecognized option: z", debian:12 -> GNU sed 4.9, -z accepted.)
+check('the helper refuses control characters in --workspace',
+  helperSource.includes('--workspace must not contain control characters'),
+  'the exemption pattern is built from this value; the JS producer refuses the same spellings, and the helper must not depend on its caller for its own syntax safety')
+check('the refusal precedes the pattern builder',
+  // The presence test comes FIRST: indexOf returns -1 for a missing marker, and -1
+  // sorts before every real index — without this the check would pass on a helper
+  // that carries no refusal at all, which is exactly the state it exists to reject.
+  helperSource.includes('--workspace must not contain control characters')
+    && helperSource.indexOf('--workspace must not contain control characters') < helperSource.indexOf('KEEP_ENTRIES=('),
+  'the value becomes pattern syntax at the builder, so a refusal placed after it would judge a pattern that was already built; a missing builder marker makes the comparison fail too')
+
 // The detector accepts ONE version, so the two must be bumped together: bumping
 // the helper alone makes detectRunner refuse it, which falls back to the direct
 // runner and SKIPS the drift gate below — a silent mismatch. Pin them equal.
@@ -118,12 +143,71 @@ check('the drop identity is checked against the invoking user',
     check('the helper parses under bash -n', parse.stdout.includes('PARSE-OK'), parse.stderr)
   }
 }
+// A REAL invocation of the shipped helper, unprivileged and without sudo: the
+// argument validation runs before anything privileged, so the refusal is
+// deterministic and needs no grant. The LF is materialized INSIDE the
+// distribution by printf, so the value crosses wsl.exe as plain text.
+{
+  const mnt = windowsToMntPath(helperPathFile)
+  if (mnt === null) {
+    console.log('  SKIP  the shipped helper refuses a control character in --workspace (helper not on a drive path)')
+  } else {
+    const refusal = await runWslShell({
+      distro,
+      linuxCwd: '/',
+      command: `ws=$(printf '/home/u/proj/x\\n/mnt/c'); bash ${shellQuote(mnt)} --uid 1000 --gid 1000 --home /home/u --cwd / --workspace "$ws" -- true; echo EXIT=$?`,
+      loginShell: false,
+      timeoutMs: 60_000,
+    })
+    check('the shipped helper exits 2 on a control character in --workspace',
+      refusal.stdout.includes('EXIT=2') && refusal.stderr.includes('control characters'),
+      `stdout=${JSON.stringify(refusal.stdout.slice(-200))} stderr=${JSON.stringify(refusal.stderr.slice(-200))}`)
+  }
+}
 const helperIdentity = { uid: '1000', gid: '1000', home: '/home/tester', name: 'tester' }
 const helperReadOnly = buildConfinedCommand({ command: 'true', linuxCwd: '/ws', mode: 'read-only', runner: RUNNER_HELPER, workspaceLinuxRoot: '/ws', identity: helperIdentity })
 check('read-only never grants the helper a writable workspace', !helperReadOnly.includes('--workspace'), helperReadOnly)
 const helperWrite = buildConfinedCommand({ command: 'true', linuxCwd: '/ws', mode: 'workspace-write', runner: RUNNER_HELPER, workspaceLinuxRoot: '/ws', identity: helperIdentity })
 check('workspace-write routes through the helper with the workspace bound',
   helperWrite.includes('--workspace') && helperWrite.includes(HELPER_PATH), helperWrite)
+
+// The producer refuses the spelling BEFORE either runner turns the value into a
+// pattern, and the helper branch and the in-process branch are separate code
+// paths — so both are asserted. The metacharacter workspace must still be
+// ACCEPTED: the guard refuses control characters, and the escape set (not a
+// refusal) is what keeps a legitimate path inert.
+// A ReferenceError is NOT a refusal: it means the symbol under test is missing
+// (or renamed), which must fail the suite rather than read as "refused" — a
+// catch-everything helper turns its own four checks green before the guard
+// exists. Only a deliberate throw counts.
+const rejects = (fn) => {
+  try { fn(); return false } catch (error) {
+    if (error instanceof ReferenceError || error instanceof TypeError) throw error
+    return true
+  }
+}
+const controlWorkspace = '/ws\n/mnt/c'
+const buildWith = (root, runner) => () => buildConfinedCommand({
+  command: 'true', linuxCwd: root, mode: 'workspace-write', workspaceLinuxRoot: root, identity: helperIdentity, runner,
+})
+check('a control character in the workspace is refused before either builder runs',
+  rejects(buildWith(controlWorkspace, RUNNER_HELPER)) === true
+    && rejects(buildWith(controlWorkspace, RUNNER_SUDO_UNSHARE)) === true
+    && rejects(buildWith('/home/u/My Project (v2)|probe', RUNNER_HELPER)) === false
+    && rejects(buildWith('/home/u/My Project (v2)|probe', RUNNER_SUDO_UNSHARE)) === false,
+  'the value becomes exemption syntax on both paths; a space, a paren and a pipe are legitimate path characters and are escaped, never refused')
+check('a workspace containing a newline is refused, not turned into alternation',
+  rejects(() => assertWorkspaceSpelling('/home/u/proj/x\n/mnt/c')) === true,
+  'the exemption pattern is built from this value, and an LF was an entry separator')
+check('a workspace containing a carriage return is refused',
+  rejects(() => assertWorkspaceSpelling('/home/u/proj/x\r/mnt/c')) === true,
+  'the guard covers every control character, not only the one that was exploitable')
+check('a workspace containing a NUL is refused',
+  rejects(() => assertWorkspaceSpelling('/home/u/proj/x\u0000/mnt/c')) === true,
+  'a NUL cannot reach a shell variable, but the producer must not accept a spelling the fence can never carry')
+check('an ordinary workspace with a space and a paren is still accepted',
+  rejects(() => assertWorkspaceSpelling('/home/u/My Project (v2)')) === false,
+  'the guard refuses control characters, not path characters')
 
 // The private /tmp tmpfs is mounted AFTER the workspace bind, so a workspace at
 // or below /tmp is covered by it: the bind disappears and `cd` into it fails,

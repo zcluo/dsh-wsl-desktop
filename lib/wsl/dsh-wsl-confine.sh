@@ -45,6 +45,17 @@ done
 [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] || { echo 'dsh-wsl-confine: uid/gid must be numeric' >&2; exit 2; }
 [[ -n "$cwd" && "$cwd" = /* && -n "$home" && "$home" = /* ]] || { echo 'dsh-wsl-confine: --cwd/--home must be absolute Linux paths' >&2; exit 2; }
 [[ -z "$workspace" || "$workspace" = /* ]] || { echo 'dsh-wsl-confine: --workspace must be absolute' >&2; exit 2; }
+# The exemption pattern is built from the workspace value, so a control character
+# in it was fence SYNTAX: the builder printed one entry per line and turned every
+# LF into '|', which made '/home/u/proj/x<LF>/mnt/c' an alternation that exempted
+# /mnt/c from BOTH the read-only sweep and the writability postcondition — the
+# fence reported success while the Windows filesystem stayed writable. Refuse the
+# spelling here as well: the JS side refuses it too, and the helper must not
+# depend on its caller for its own pattern syntax. The class is the whole C0 range
+# plus DEL — the one lib/wsl/confinement.js applies in assertWorkspaceSpelling() —
+# so the two fences agree on what a workspace may be. LF is the member that
+# mattered; a NUL cannot reach a shell variable at all.
+[[ "$workspace" != *[[:cntrl:]]* ]] || { echo 'dsh-wsl-confine: --workspace must not contain control characters' >&2; exit 2; }
 # The fence mounts a private tmpfs over /tmp AFTER binding the workspace, so a
 # workspace at or below /tmp would be covered by it: the bind disappears, "cd
 # /tmp/proj" fails, and with the workspace exactly /tmp the writes would land in
@@ -86,6 +97,17 @@ command -v findmnt >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: fin
 # which is the exact hole this fence exists to close. The escape set is the one
 # lib/wsl/confinement.js applies in escapeEre(), and the exempt entries are the
 # union it builds from KERNEL_SURFACES — the two fences must agree.
+#
+# The SEPARATOR is the one hole the escape set cannot close: the entries are joined
+# line-wise, so an LF inside the workspace value was indistinguishable from an entry
+# boundary — '/home/u/proj/x<LF>/mnt/c' exempted /mnt/c from both the sweep and the
+# postcondition. That is closed ABOVE, not here: the refusal before this builder
+# makes a control character in the value impossible, so no separator can be injected.
+# (Delimiting the pipeline with NULs instead — printf '%s\0' | sed -z | tr '\0' '|' —
+# would make the builder lossless by itself, but that is GNU sed only: BusyBox sed
+# 1.36 rejects -z, and Alpine 3.20 is a distribution docs/DISTRO-SUPPORT.md lists as
+# supported. The builder would fail there for EVERY confined command, so the lossless
+# form is not portable and the refusal above is what the fence relies on.)
 KEEP_ENTRIES=(/tmp /dev /dev/pts /dev/mqueue /proc /sys)
 [[ -z "$workspace" ]] || KEEP_ENTRIES+=("$workspace")
 EXEMPT_PATTERN=$(printf '%s\n' "${KEEP_ENTRIES[@]}" | sed 's/[][\\^$.*+?(){}|]/\\&/g' | tr '\n' '|')
