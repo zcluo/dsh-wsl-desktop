@@ -138,9 +138,24 @@ const settled = new Promise((resolve) => {
 data.on('close', () => {
   for (const [id, waiter] of waiters) {
     waiters.delete(id)
-    waiter({ ok: false, error: 'the bridge exited before answering' })
+    waiter(suiteFailure('the bridge exited before answering'))
   }
 })
+
+/**
+ * The reply-shaped failure this suite reports when the bridge gave no answer.
+ *
+ * Marked as the SUITE's, not the bridge's, and that marker is load-bearing: the
+ * timeout spelling below EMBEDS the stderr tail, which carries the bridge's own
+ * reply lines verbatim — so a check matching that text alone can pass on a
+ * demultiplexing failure, i.e. on the answer never arriving. Nothing the bridge
+ * sends can carry this field.
+ * @param {string} error - the failure text.
+ * @returns {object} a reply-shaped object that cannot pass for the bridge's.
+ */
+function suiteFailure(error) {
+  return { ok: false, error, synthesized: true }
+}
 
 /**
  * Send one RAW control line and await the bridge's answer to it.
@@ -161,7 +176,7 @@ async function controlRequestLine(line, id) {
         // Removed before resolving: a late reply must find no waiter, or it
         // would be mispaired with a later request.
         waiters.delete(id)
-        resolve({ ok: false, error: `control timeout; stderr=${err.slice(-300)}` })
+        resolve(suiteFailure(`control timeout; stderr=${err.slice(-300)}`))
       }, 15_000)
       waiters.set(id, (reply) => {
         clearTimeout(timer)
@@ -173,10 +188,10 @@ async function controlRequestLine(line, id) {
   const before = replies.length
   control.stdin.write(`${line}\n`)
   const answered = await until(() => replies.length > before || data.exitCode !== null, 15_000)
-  if (!answered) return { ok: false, error: `control timeout; stderr=${err.slice(-300)}` }
+  if (!answered) return suiteFailure(`control timeout; stderr=${err.slice(-300)}`)
   // A bridge that exited without answering leaves nothing at that index; the
   // failure text has to say so rather than pass for a reply.
-  return replies[before] ?? { ok: false, error: 'the bridge exited before answering' }
+  return replies[before] ?? suiteFailure('the bridge exited before answering')
 }
 
 /** Send one control request and await its id-matched reply. */
@@ -245,10 +260,14 @@ for (const entry of malformed) {
   // (JSON.parse would read it as Infinity, JSON.stringify would write null).
   const line = entry.echo ? entry.line.replace('{"op"', `{"id":"${id}","op"`) : entry.line
   const reply = await controlRequestLine(line, entry.echo ? id : undefined)
-  // `ok === false` alone would pass on this suite's OWN failure text, so the
-  // answer must be identifiable as the bridge's: an id-matched reply when the line
-  // could carry an id, the bridge's own words when it could not.
-  const answered = reply.ok === false && (entry.echo ? reply.id === id : entry.expect.test(String(reply.error)))
+  // The answer must be identifiable as the BRIDGE's, and `ok === false` alone is
+  // not enough: this suite's own failure text is also ok:false, and its timeout
+  // spelling embeds the stderr tail — which carries the bridge's replies verbatim
+  // — so a regex over that text alone passes on a demultiplexing failure, i.e. on
+  // the answer never arriving. `synthesized` is the field nothing the bridge sends
+  // carries; the echoed id, or the bridge's own words, is the positive evidence.
+  const answered = reply.ok === false && reply.synthesized === undefined
+    && (entry.echo ? reply.id === id : entry.expect.test(String(reply.error)))
   check(`a malformed control line is answered, not fatal: ${entry.what}`, answered, reply)
   check(`the bridge survives it: ${entry.what}`, data.exitCode === null, `exit=${String(data.exitCode)}`)
 }
