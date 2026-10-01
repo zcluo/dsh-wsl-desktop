@@ -589,20 +589,47 @@ if (publicationCode === null) {
 } else {
   const functionStart = publicationCode.indexOf('export async function writeFileAtomic(')
   const anchor = publicationCode.indexOf('const directory = dirname(absolutePath)')
-  const createDirectory = publicationCode.indexOf('mkdir(directory, { recursive: true })', functionStart === -1 ? 0 : functionStart)
-  // Everything between the function's opening and the call: a try/catch ANYWHERE in
-  // there can catch the call's failure whatever order the statements are in. (A
-  // window measured from the `const directory` line alone misses the shape a reviewer
-  // named — a try opened BEFORE that line with its catch after the call: the guard
-  // precedes the anchor, the staging try is still later, and the failure is swallowed
-  // while the directory has already been created at the link's target.)
+  const callText = 'mkdir(directory, { recursive: true })'
+  const createDirectory = publicationCode.indexOf(callText, functionStart === -1 ? 0 : functionStart)
+  const callEnd = createDirectory === -1 ? -1 : createDirectory + callText.length
+  // The call must be a BARE AWAITED STATEMENT, and four spans are checked for a guard
+  // that could swallow its failure:
+  //   * `head` — the token immediately before the call must be `await`. A promise
+  //     created OUTSIDE a guard and awaited INSIDE one (`const p = mkdir(…)` followed
+  //     by `try { await p } catch {}`) is created by a call whose `head` is `=`, and
+  //     no window measured from the call's own line can see the swallow.
+  //   * `tail` — nothing but blank (or a `;`) may follow the call on its line, so a
+  //     `.catch(() => {})` / `.then(undefined, …)` chain is rejected even though it
+  //     contains no try/catch token at all. Comments and string bodies are blanked, so
+  //     a trailing comment reads as blank and is allowed.
+  //   * `beforeCreate` — no try/catch anywhere between the function's opening and the
+  //     call, whatever order the statements are in. (A window measured from the
+  //     `const directory` line alone misses a try opened BEFORE that line with its
+  //     catch after the call: the guard precedes the anchor, the staging try is still
+  //     later, and the failure is swallowed while the directory has already been
+  //     created at the link's target.)
+  //   * `toNextTry` — no try/catch between the call and the next `try {` either: that
+  //     immediate span is where a deferred await's guard sits.
+  // What this does NOT establish: that the call is the real `mkdir` (a shadowed
+  // binding would be a different defect), or that the caller does not swallow the
+  // function's own rejection. Both are outside a structural pin.
+  const head = createDirectory === -1 ? '' : publicationCode.slice(Math.max(0, createDirectory - 8), createDirectory)
+  const lineEnd = callEnd === -1 ? -1 : publicationCode.indexOf('\n', callEnd)
+  const tail = lineEnd === -1 ? null : publicationCode.slice(callEnd, lineEnd)
   const beforeCreate = functionStart === -1 || createDirectory === -1 ? '' : publicationCode.slice(functionStart, createDirectory)
-  const guarded = publicationCode.indexOf('try {', createDirectory === -1 ? 0 : createDirectory)
-  check('the publication creates the target directory BEFORE any try that could catch its failure',
-    functionStart !== -1 && anchor !== -1 && createDirectory !== -1 && guarded !== -1
-      && anchor < createDirectory && createDirectory < guarded
-      && !/\btry\b|\bcatch\b/.test(beforeCreate),
-    `function=${functionStart} anchor=${anchor} mkdir=${createDirectory} try=${guarded} before=${JSON.stringify(beforeCreate.slice(-90))} (${publicationSource})`)
+  const guarded = publicationCode.indexOf('try {', callEnd === -1 ? 0 : callEnd)
+  const toNextTry = callEnd === -1 || guarded === -1 ? '' : publicationCode.slice(callEnd, guarded)
+  check('the publication creates the target directory as a bare awaited step no guard can catch',
+    functionStart !== -1 && anchor !== -1 && createDirectory !== -1 && callEnd !== -1 && guarded !== -1
+      && anchor < createDirectory && callEnd < guarded
+      && /await\s+$/.test(head)
+      && tail !== null && /^[;\s]*$/.test(tail)
+      && !/\btry\b|\bcatch\b/.test(beforeCreate)
+      && !/\btry\b|\bcatch\b/.test(toNextTry),
+    `function=${functionStart} anchor=${anchor} mkdir=${createDirectory} callEnd=${callEnd} try=${guarded}`
+      + ` head=${JSON.stringify(head)} tail=${JSON.stringify(tail)}`
+      + ` before=${JSON.stringify(beforeCreate.slice(-60))} toNextTry=${JSON.stringify(toNextTry.slice(-60))}`
+      + ` (${publicationSource})`)
   // Bounded to the guarded region itself — from that try to the function's closing
   // brace — and not to the whole file: what it establishes is that the sequence this
   // try guards IS the staging one. It does NOT establish that no other code path can
