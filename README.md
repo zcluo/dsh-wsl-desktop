@@ -342,6 +342,44 @@ F5 isUnderHost(foreign target, root)                 UNMEASURED - pass a second 
 
 **更正（Task 9）**：F3 的相撞不只是「记录在案」——它是**活的漏洞**，现已由围栏堵住。词法快路是唯一携带发行版的比较，它失败之后（正是跨发行版目标的情形）身份行走会按**目标自己的共享**重新 stat 每一级祖先，于是外来目标的祖先与本地根的 `(dev,ino)` 相比。发行版 `/tmp` 是 `workspace-write` **总是**授予的可写根（`writableHostRootsFor`），而两个共享为它报告同一元组——实测 `isUnderHost('\\wsl.localhost\debian-dev\tmp\x', '\\wsl.localhost\debian\tmp') === true`：一个被判定为「界内」的跨发行版写。修复把行走绑定到发行版（与 `contains()` 同一规则：**两侧都**解析成 WSL UNC 且发行版不同即拒绝，发行版段按 Windows 拼写大小写不敏感），修复后该调用为 `false`。规则刻意保持**窄**：盘符路径不带发行版，盘符目标与盘符根保持原有的身份裁决（套件对两个方向都有钉子），且实测盘符与共享两个命名空间不可能相撞（Windows 临时目录的 dev 是 NTFS 卷序列号 3764601112，每个 9P 共享报 0）。`verify-fs-fence.mjs` 新增两条钉子：共享身份的根下的跨发行版目标必须被拒（这条**只能**在行走没有跑到时通过——跑到就等于授权，所以它是「行走未被触达」的证明），以及同一发行版的大小写变体拼写（`wsl$` + 大写发行版）必须仍被包含（绑定不能反过来拒掉合法目标）。
 
+### verify-9p 记录的三条共享事实（Task 10）
+
+Task 1 的 `probe-fence-facts.mjs` 是**一次性测量**：它把答案记进上面的表，但它不进聚合器。围栏真正依赖的三条共享事实——符号链接、跨发行版身份、大小写——现在也由 `scripts/verify-9p.mjs` 测量，而它**在 `verify-all.mjs` 的 `STANDALONE` 列表里**：离线全量每次都会跑它，所以这三条事实每次全量都会被重新测一遍。
+
+**分工：一件事只有一个主人。** `verify-9p.mjs` 记录**共享怎么答**（`FACT` 行，不是断言）；**围栏怎么答**钉在 `scripts/verify-fs-fence.mjs`——大小写那条按共享自己的答案自适应断言（`isUnderHost(大小写变体) === foldsCase`），跨发行版那条断言共享身份的根下外来目标必须被拒。在画像探针里再断言一遍共享的答案，会在**答法不同但健康**的机器上变红，与「永远不会失败的检查」是同一类缺陷。
+
+**但事实行不能是「打印一句就完」**：每条事实旁边先断言两件让它成为测量的事——**主体存在**、**对照答话**（探针自己建的链接出现在共享列表里、链接自己的目标可读、`/lib` 在共享列表里、`/tmp` 存在）。没有这两条，一个从不存在的路径来的 ENOENT 会被读成「共享拒绝了链接」——正是本计划要清除的空洞钉子（D2）。这三条断言的可证伪性用变异体证明（改错链接名 / 对照文件改错名 / 把创建换成共享**确实**会解析的 rename 原语）：每个变异体都**只**红掉它自己那条，退出码 1。
+
+实测（2026-10-01，主发行版 `debian`，第二个发行版 `debian-dev`）：
+
+```powershell
+node scripts/verify-9p.mjs
+```
+
+```
+  FACT    realpath(/lib), a merged-/usr symlink — ENOENT -> the link is NOT followed (control /usr/lib resolves (\\wsl.localhost\debian\usr\lib))
+  FACT    realpath / read of the link (the file behind it exists) — realpath ENOENT; read ENOENT -> the link is exposed but NOT followed
+  FACT    a rename whose destination traverses the link — LANDS at the link's target (the fence authorizes the destination spelling; the provider never reaches this primitive — the mkdir below aborts first, fs-local/src/fsio.ts:598)
+  HAZARD  mkdir through the link, at a spelling the fence authorizes — isUnderHost(...) === true; mkdir reported EINVAL and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\dsh-link-dir exists: true
+  FACT    cross-share identity <share root> — debian (0,2) vs debian-dev (0,2) -> COLLIDES - the identity comparison cannot tell the two shares apart
+  FACT    cross-share identity /tmp — debian (0,1) vs debian-dev (0,1) -> COLLIDES - the identity comparison cannot tell the two shares apart
+  FACT    cross-share identity /home — debian (0,16386) vs debian-dev (0,16386) -> COLLIDES - the identity comparison cannot tell the two shares apart
+  FACT    case-variant path /TMP (control: /tmp exists) — ENOENT -> CASE-SENSITIVE (Linux semantics)
+
+THE 9P PROFILE MATCHES WHAT THE PROVIDER ASSUMES
+8 share fact(s) recorded above — NOT assertions: the fence's answers to them are pinned in verify-fs-fence.mjs
+RECORDED HAZARD THE FENCE DOES NOT COVER: mkdir through the link, at a spelling the fence authorizes — isUnderHost(...) === true; mkdir reported EINVAL and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\dsh-link-dir exists: true
+```
+
+**F2 的完整答案：共享对符号链接到底做了什么。** Task 1 的 F2 只测了 `realpath`。同一个探针现在在夹具根里用 `ln -s` 自己建链接（目标在夹具根**之外**，两个目录都归探针所有、用完即删），于是每条答案都有一个**确定是链接**的主体：
+
+- `realpath` / `stat` / `read` / `readdir` / 普通创建（`open` 不带 `O_EXCL`）**都不穿过链接**（ENOENT）——这就是围栏假设的那一半。
+- `rename`（目标在链接下）与 `mkdir`（在链接下建新目录）**由服务端解析**：rename 真的落在链接目标处；mkdir 客户端报 `EINVAL`，**目录却建在链接目标处**。
+- 末级是符号链接是**安全**的：rename 替换的是根内的链接项本身（实测链接目标文件内容不变），独占创建报 `EEXIST`。
+- Windows 侧连链接项本身都删不掉：`unlink` → ENOENT、`rm` → EISDIR、含链接的目录 `rm -r` → ENOTEMPTY。所以夹具必须用 `wsl.exe ... rm -rf` 清理，并为此挂了 `exit`/`SIGINT`/`SIGTERM` 处理器（Windows 侧删不掉的东西不能留给用户）——这不是洁癖，是这条事实的直接后果。
+
+**HAZARD（已记录，未修；不在本套件的断言里）**：`fs-local` 的发布序列是 `mkdir(directory, {recursive:true})` → 建暂存目录 → `open(temp,'wx')` → `rename`（`fs-local/src/fsio.ts:598-649`）。写一个「可写根内、但路径中间是共享上已有的符号链接」的目标时：围栏的 `canonicalHostPath` 与 `resolveLocalTarget` 都用 `realpathSync.native`，它**看不见**这个链接（F2），于是词法比较授权该拼写；随后第 598 行那个 `mkdir` 把**缺失的那一级目录建在链接目标处**——可写根之外——客户端报错、写本身失败。**没有任何文件内容落到根外**（暂存目录、独占创建、带链接源的 rename 都因不穿过而失败），影响是越界**建目录**加残留，不是越界写文件；而且需要可写根里**先存在**一个指向界外的符号链接。记录在此而不在本套件里变红：这不是「共享的画像与提供方假设不符」，而是围栏看不见的一个缺口，它该有自己的任务。
+
 ## 许可证
 
 本项目基于 [MIT 协议](LICENSE) 发布。
