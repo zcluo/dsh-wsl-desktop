@@ -7,6 +7,13 @@
  * commands inside a distribution, so the probe writes a file and the suite
  * asserts the file was never created.
  *
+ * The probe is sent in TWO shapes — naming a distribution and naming none —
+ * because `resolveLocation` (lib/index.js:127-135) resolves them in DIFFERENT
+ * worlds (the name it carries, or the Lxss default). Each shape's absence is read
+ * in the world that shape resolves to, and each has its own admitted control
+ * proving that world is observable, so the check and the probe cannot disagree
+ * about which world they are talking about.
+ *
  * The fence is probed again with a VALID token and a foreign Host — the case the
  * security audit found missing. A development token replaces the
  * browser-authentication arm only, never the Host/Origin arm, so the rebinding
@@ -49,6 +56,27 @@ let failures = 0
 function check(label, ok, detail) {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
+}
+
+/**
+ * Wait, briefly, for a share to report a path.
+ *
+ * The command has already finished when the POST returns — the handler awaits the
+ * Linux exit — so the write is durable BEFORE this runs; what can lag is the
+ * host-side view of the share. A single immediate `existsSync` can therefore read a
+ * real escape as absent (a detector that cannot detect) and a control's own write as
+ * missing. The SAME window reads both directions, and the controls are what calibrate
+ * it: a control that cannot see its OWN write within the window reddens, so a green
+ * control is evidence that the window sufficed for a write of that shape.
+ * @param {string} path - a host path under a share root.
+ * @returns {Promise<boolean>} whether it appeared within the window.
+ */
+async function witnessed(path) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (existsSync(path)) return true
+    await new Promise((resolve) => { setTimeout(resolve, 250) })
+  }
+  return false
 }
 
 /**
@@ -153,51 +181,103 @@ check('the host half uses the same header name', DEV_TOKEN_HEADER === HOST_TOKEN
 // it can now only remove this process's own path — and the ABSENCE is asserted before the POST
 // as well, so the check after it is a change this run made, not an absence that was already
 // there. `existsSync` under the share root is the only channel the fence check has, so the
-// positive control further down proves that channel can see this write at all.
+// admitted controls further down prove that channel can see a write in EACH world it reads.
+//
+// TWO WORLDS, BECAUSE THE REQUEST CHOOSES ONE. An unnamed `cwd` is resolved through
+// `defaultDistro()` (lib/index.js:133) — the Lxss default, measured debian-dev on this machine —
+// while a named one is resolved through the name it carries. The refused probe used to carry no
+// `distro`, so an escape wrote into the Lxss default's /tmp while every check read
+// `\\wsl.localhost\<resolveDistro()>` (debian here): the row reported "the command it carried did
+// not run" about a world the command never aimed at. Both shapes are therefore sent, and each
+// shape's file is read in the world THAT shape resolves to.
+const token = await ensureDevToken()
+// The world an UNNAMED probe resolves to is asked of the route itself: `defaultDistro` calls the
+// same function `resolveLocation` falls back to, so this reads the running handler's own answer
+// rather than a second guess at it. A null answer cannot be waved through — the default-world
+// checks would then read a share nothing writes to — so it carries its own check.
+const defaultAnswer = await post({ method: 'defaultDistro', params: {} }, { token })
+const defaultDistroName = typeof defaultAnswer.json?.value?.distro === 'string' ? defaultAnswer.json.value.distro : null
+check('the route reports the default world an unnamed probe resolves to (the checks below read it)',
+  defaultDistroName !== null, `${defaultAnswer.status} ${defaultAnswer.text.slice(0, 120)}`)
+// When the route cannot report a default world, the default-world paths fall back to the selected
+// share so the probes below still run and cannot crash the suite on a UNC name that does not
+// exist. The row above is RED in that run, so the fallback can never produce a green result — it
+// only keeps a failed probe-report a labelled FAIL instead of a stack trace.
+const defaultShareRoot = defaultDistroName === null ? shareRoot : `\\\\wsl.localhost\\${defaultDistroName}`
 const probeFile = `/tmp/dsh-wsl-fence-probe-${process.pid}.txt`
 rmSync(`${shareRoot}${probeFile}`, { force: true })
-// The removal is on the line AFTER the spelling ON PURPOSE: verify-all-skip's section H scans
+const probeDefaultFile = `/tmp/dsh-wsl-fence-default-${process.pid}.txt`
+rmSync(`${defaultShareRoot}${probeDefaultFile}`, { force: true })
+// Each removal is on the line AFTER its spelling ON PURPOSE: verify-all-skip's section H scans
 // for exactly this shape (a `dsh-` name under a fixed root, spelled without a pid, created or
-// removed within one line of where it is spelled) and accepts this one only because of the pid.
-// Putting an intermediate const between the spelling and the removal would move this file
-// outside the scan's window, and a dropped suffix would then be undetectable.
+// removed within one line of where it is spelled) and accepts these only because of the pid.
+// Putting an intermediate const between a spelling and its removal would move that file outside
+// the scan's window, and a dropped suffix would then be undetectable.
 const probeHostPath = `${shareRoot}${probeFile}`
+const probeDefaultHostPath = `${defaultShareRoot}${probeDefaultFile}`
 const probeAbsentBefore = !existsSync(probeHostPath)
-check('the escape probe starts from an absent path, so its absence below is a change this run made',
-  probeAbsentBefore, `path=${probeHostPath} exists=${!probeAbsentBefore}`)
+const probeDefaultAbsentBefore = !existsSync(probeDefaultHostPath)
+check('both escape probes start from an absent path, so their absence below is a change this run made',
+  probeAbsentBefore && probeDefaultAbsentBefore,
+  `named=${probeHostPath} exists=${!probeAbsentBefore}; default=${probeDefaultHostPath} exists=${!probeDefaultAbsentBefore}`)
 
 console.log('\ntransport fence (live host)')
-const unauthenticated = await post({ method: 'execInWsl', params: { cwd: '/tmp', command: `echo BYPASSED > ${probeFile}` } }, {
+const unauthenticated = await post({ method: 'execInWsl', params: { cwd: '/tmp', command: `echo BYPASSED > ${probeDefaultFile}` } }, {
   contentType: 'text/plain',
 })
 check('an unauthenticated text/plain POST is refused', unauthenticated.status === 401, unauthenticated.status)
-const escaped = existsSync(probeHostPath)
-check('and the command it carried did not run',
+const unauthenticatedNamed = await post({ method: 'execInWsl', params: { distro, cwd: '/tmp', command: `echo BYPASSED > ${probeFile}` } }, {
+  contentType: 'text/plain',
+})
+check('the same refusal when the probe NAMES a distribution (the fence is not the distro resolution)',
+  unauthenticatedNamed.status === 401, unauthenticatedNamed.status)
+const escapedDefault = await witnessed(probeDefaultHostPath)
+check('and the UNNAMED probe did not run, read in the world it resolves to (the route default)',
+  escapedDefault === false && probeDefaultAbsentBefore,
+  `probe file exists: ${escapedDefault} (absent before the POST: ${probeDefaultAbsentBefore}); world=${String(defaultDistroName)}; path=${probeDefaultHostPath}`)
+const escaped = await witnessed(probeHostPath)
+check('and the NAMED probe did not run, read in the world it names',
   escaped === false && probeAbsentBefore,
-  `probe file exists: ${escaped} (absent before the POST: ${probeAbsentBefore}); path=${probeHostPath}`)
+  `probe file exists: ${escaped} (absent before the POST: ${probeAbsentBefore}); world=${distro}; path=${probeHostPath}`)
 rmSync(probeHostPath, { force: true })
+rmSync(probeDefaultHostPath, { force: true })
 
 const unauthenticatedJson = await post({ method: 'listDistros', params: {} })
 check('the fence covers the read-only methods too', unauthenticatedJson.status === 401, unauthenticatedJson.status)
 
 console.log('\ndevelopment surface')
-const token = await ensureDevToken()
 const authorized = await post({ method: 'listDistros', params: {} }, { token })
 check('a caller holding the token reaches the acceptance surface',
   authorized.status === 200 && authorized.json?.ok === true, `${authorized.status} ${authorized.text.slice(0, 120)}`)
-// POSITIVE CONTROL for the transport-fence pair above, and what makes that pair evidence rather
+// POSITIVE CONTROLS for the transport-fence pair above, and what makes that pair evidence rather
 // than a blind spot: "the file is absent" only means "the command did not run" if the SAME write
 // is observable through the SAME measurement when it DOES run. An admitted caller (developer
-// token, served authority) sends the same shape, and the file must appear under the share root.
+// token, served authority) sends the same shape, and the file must appear under the share root
+// of the world that shape resolves to. There is one control PER WORLD, and that is the pin: a
+// later edit that reads a check in a world its own probe does not resolve to makes that world's
+// control fail, because the control's write goes to the world the params resolve to.
 const controlFile = `/tmp/dsh-wsl-fence-control-${process.pid}.txt`
 const controlHostPath = `${shareRoot}${controlFile}`
 rmSync(controlHostPath, { force: true })
 const admitted = await post({ method: 'execInWsl', params: { distro, cwd: '/tmp', command: `echo ADMITTED > ${controlFile}` } }, { token })
-const controlLanded = existsSync(controlHostPath)
-check('LIVE, positive control: an ADMITTED caller writing the same shape DOES land where the fence check looks',
+const controlLanded = await witnessed(controlHostPath)
+check('LIVE, positive control for the NAMED probe: an ADMITTED caller writing that shape DOES land where the named check reads',
   admitted.status === 200 && controlLanded,
-  `${admitted.status} exists=${controlLanded} path=${controlHostPath} ${admitted.text.slice(0, 120)}`)
+  `${admitted.status} exists=${controlLanded} world=${distro} path=${controlHostPath} ${admitted.text.slice(0, 120)}`)
 rmSync(controlHostPath, { force: true })
+// The control for the UNNAMED world: the SAME params shape as the refused unnamed probe (no
+// `distro`), admitted. The route therefore resolves it through defaultDistro() exactly as an
+// escape would, and the unnamed check above reads the share this write lands in — the property
+// the old single control could not establish, because it named the distro explicitly.
+const controlDefaultFile = `/tmp/dsh-wsl-fence-control-default-${process.pid}.txt`
+const controlDefaultHostPath = `${defaultShareRoot}${controlDefaultFile}`
+rmSync(controlDefaultHostPath, { force: true })
+const admittedDefault = await post({ method: 'execInWsl', params: { cwd: '/tmp', command: `echo ADMITTED > ${controlDefaultFile}` } }, { token })
+const controlDefaultLanded = await witnessed(controlDefaultHostPath)
+check('LIVE, positive control for the UNNAMED probe: an ADMITTED caller with NO distro lands in the route default, where the unnamed check reads',
+  admittedDefault.status === 200 && controlDefaultLanded,
+  `${admittedDefault.status} exists=${controlDefaultLanded} world=${String(defaultDistroName)} path=${controlDefaultHostPath} ${admittedDefault.text.slice(0, 120)}`)
+rmSync(controlDefaultHostPath, { force: true })
 // The token is a credential for the browser-authentication arm ONLY. No case
 // posted a VALID token with a foreign Host, which is how the route came to skip
 // both arms for a token holder. 403 AND a bodyless refusal: a JSON envelope
