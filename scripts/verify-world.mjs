@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
-import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, resolveLoginShell, defaultWorkspaceUnc, probeEvidence, hostExecutable, planWsl, buildWslExecArgv, decodeWslOutput } from '../lib/wsl/world.js'
+import { LoginShellUnresolvedError, listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, resolveLoginShell, defaultWorkspaceUnc, probeEvidence, hostExecutable, planWsl, buildWslExecArgv, decodeWslOutput } from '../lib/wsl/world.js'
 import {
   parseWslUnc,
   joinWslUnc,
@@ -321,6 +321,23 @@ async function settle(work) {
     return { error: error instanceof Error ? error.message : String(error) }
   }
 }
+/**
+ * Run one scripted probe and return the THROWN OBJECT, or the value.
+ *
+ * `settle` above reports a message, which is all a row needs to show that a failure
+ * happened. A row whose claim IS the type of that failure needs the object: `instanceof`
+ * cannot be read off a string, and "a plain Error is not enough" is a claim about the
+ * object alone.
+ * @param {() => Promise<object>} work - the probe to run.
+ * @returns {Promise<{ value?: object, thrown?: unknown }>} the value, or the throwable.
+ */
+async function rejection(work) {
+  try {
+    return { value: await work() }
+  } catch (thrown) {
+    return { thrown }
+  }
+}
 const pathRetry = scriptedRunner([timedOutProbe, { exitCode: 0, stdout: 'dir\n', stderr: '', timedOut: false }])
 const pathFacts = await settle(() => checkLinuxPath(distro, '/', { run: pathRetry.run }))
 check('checkLinuxPath repeats a timed-out probe exactly once and answers from the repeat',
@@ -457,8 +474,10 @@ check('a timed-out login-shell probe is refused even when its truncated stream l
   truncatedStall.calls.length === 2 && typeof truncatedFacts.error === 'string',
   { calls: truncatedStall.calls.length, outcome: truncatedFacts })
 // The control: a probe that RAN and exited 0 with an empty field IS the documented fallback
-// (a user whose passwd field 7 is empty, or a distribution without getent). Without this row
-// the fix could "pass" by refusing every empty answer, breaking the promised fallback.
+// (a user whose passwd field 7 is empty). "Or a distribution without getent" used to be named
+// here and is NOT this case: an absent getent never reached this branch as an empty FIELD, it
+// arrived as `cut`'s exit 0 over an empty stream (see the finding-2 rows below). Without this
+// row the fix could "pass" by refusing every empty answer, breaking the promised fallback.
 const ranEmpty = scriptedRunner([{ exitCode: 0, stdout: '\n', stderr: '', timedOut: false }])
 const ranEmptyFacts = await settle(() => resolveLoginShell(distro, undefined, { run: ranEmpty.run }))
 check('the control: a probe that RAN and exited 0 with an empty field still falls back to /bin/bash, in one attempt',
@@ -476,6 +495,82 @@ check('a login-shell probe that exited non-zero is refused with its evidence, no
   && typeof failedLoginShellFacts.error === 'string'
   && failedLoginShellFacts.error.includes('Wsl/Service/WSL_E_DISTRO_NOT_FOUND'),
   { calls: failedLoginShell.calls.length, outcome: failedLoginShellFacts })
+// Finding 1 (round 5). Round 4 made the stall loud and threw a PLAIN Error; the caller's own
+// comment, six lines above the first call, is why that is wrong: the terminal controller
+// catches `SubprocessExecutableNotFoundError` to SKIP a candidate and continue down its shell
+// list, and the controller's default candidates include three Windows shell names
+// (pwsh/powershell/cmd) that each ask THIS question. A plain Error therefore aborted the whole
+// discovery — every distro lost its shell dropdown — while the answer it replaced (the old
+// /bin/bash from a probe that never ran) is the silent wrong answer round 4 removed. Both
+// constraints hold at once ONLY if the failure has a type the caller can act on, which is what
+// these rows and the source pin below pin.
+const loginShellClass = scriptedRunner([timedOutProbe, timedOutProbe])
+const loginShellClassOutcome = await rejection(() => resolveLoginShell(distro, undefined, { run: loginShellClass.run }))
+const loginShellThrown = loginShellClassOutcome.thrown
+check('a stalled login-shell probe rejects with the exported structured class, carrying the probe evidence',
+  loginShellClass.calls.length === 2
+  && loginShellThrown instanceof LoginShellUnresolvedError
+  && loginShellThrown.name === 'LoginShellUnresolvedError'
+  && loginShellThrown.message.includes('探针超时')
+  && loginShellThrown.message.includes(distro),
+  { calls: loginShellClass.calls.length,
+    error: loginShellThrown instanceof Error ? `${loginShellThrown.name}: ${loginShellThrown.message}` : String(loginShellThrown) })
+// SKIP, not abort — the consequence, executed. The host half cannot be imported in this
+// checkout (its @deepseek-ai/* imports do not resolve, which is why verify-modules SKIPs it),
+// so the chain is split and each link is pinned where it CAN be: this row runs the caller's
+// decision over the class the rejection actually carries, and the source pin below asserts
+// that subprocess.js tests exactly this class and rethrows
+// `SubprocessExecutableNotFoundError` — which shells.ts:51-57 catches to return `undefined`
+// for that candidate. The third candidate ANSWERS, so the row also disproves an abort: an
+// abort would take the healthy candidate down with the stalled two.
+const candidateOutcomes = scriptedRunner([
+  timedOutProbe, timedOutProbe,
+  timedOutProbe, timedOutProbe,
+  { exitCode: 0, stdout: '/bin/zsh\n', stderr: '', timedOut: false },
+])
+const skippedCandidates = []
+const discoveredShells = []
+let discoveryAbort = ''
+for (const candidate of ['pwsh', 'cmd', 'zsh']) {
+  try {
+    discoveredShells.push(await resolveLoginShell(distro, undefined, { run: candidateOutcomes.run }))
+  } catch (error) {
+    if (error instanceof LoginShellUnresolvedError) { skippedCandidates.push(candidate); continue }
+    // Recorded rather than rethrown: an abort is the defect this row exists to
+    // catch, and an uncaught throw here would kill the rows after it instead.
+    discoveryAbort = `${candidate}: ${error instanceof Error ? error.message : String(error)}`
+    break
+  }
+}
+check('two stalled candidates are SKIPPED, not aborted: the list continues and the answering candidate still arrives',
+  discoveryAbort === ''
+  && candidateOutcomes.calls.length === 5
+  && skippedCandidates.join(',') === 'pwsh,cmd'
+  && discoveredShells.join(',') === '/bin/zsh',
+  { aborted: discoveryAbort, attempts: candidateOutcomes.calls.length, skipped: skippedCandidates, discovered: discoveredShells })
+// Finding 2 (round 5): "a distribution without getent" was named as part of the /bin/bash
+// fallback, and it is a silent wrong answer of the SAME class as the stall, one layer down.
+// Measured in the distribution by driving the probe's OWN command string (recorded by the
+// injected runner above) with `getent` shadowed by a function that cannot run: under POSIX sh
+// the masked pipeline exits 0 with empty output, so the fallback answered /bin/bash for a probe
+// that never ran. The command now carries getent's own status, so this asserts shell semantics
+// rather than a spelling — and the control below proves the healthy case was not refused.
+const loginShellProbeCommand = loginShellRetry.calls[0]?.command ?? ''
+const shadowedGetent = `getent() { printf 'bash: getent: command not found\\n' >&2; return 127; }; ${loginShellProbeCommand}`
+const absentGetent = await settle(() => runWslShell({ distro, linuxCwd: '/', command: shadowedGetent, loginShell: false, timeoutMs: 60_000 }))
+check("with getent unable to run, the login-shell probe command reports failure instead of cut's exit 0",
+  loginShellProbeCommand.includes('getent')
+  && typeof absentGetent.exitCode === 'number' && absentGetent.exitCode !== 0,
+  { command: loginShellProbeCommand, exitCode: absentGetent.exitCode, stdout: absentGetent.stdout, stderr: absentGetent.stderr })
+const absentGetentRunner = scriptedRunner([{ exitCode: absentGetent.exitCode, stdout: absentGetent.stdout, stderr: absentGetent.stderr, timedOut: false }])
+const absentGetentFacts = await settle(() => resolveLoginShell(distro, undefined, { run: absentGetentRunner.run }))
+check('a getent that could not run is refused, not answered /bin/bash',
+  absentGetentRunner.calls.length === 1 && typeof absentGetentFacts.error === 'string',
+  { calls: absentGetentRunner.calls.length, outcome: absentGetentFacts })
+const healthyLoginShellProbe = await settle(() => runWslShell({ distro, linuxCwd: '/', command: loginShellProbeCommand, loginShell: false, timeoutMs: 60_000 }))
+check("the control: the same command with the distribution's own getent still answers a login shell",
+  healthyLoginShellProbe.exitCode === 0 && String(healthyLoginShellProbe.stdout).trim().startsWith('/'),
+  healthyLoginShellProbe)
 console.log('\nthe selftest default workspace (the default PATH has to be exercised, not assumed)')
 // Finding 2. `resolveDistroHome(undefined, ...)` cannot run at all: wsl.exe cannot
 // be handed an undefined distribution name, so the expression the selftest default
@@ -636,6 +731,28 @@ check('subprocess.js threads it into the executable-lookup probe',
 const loginShellCalls = (subprocessCode.match(/resolveLoginShell\(plan\.distro, this\.config\.username, \{ wslPath: this\.config\.wslPath \}\)/g) ?? []).length
 check('subprocess.js threads it into both resolveLoginShell calls',
   loginShellCalls >= 2, { loginShellCalls })
+// ... and the lookup's FAILURE has to be skippable, which is the finding-1 half that only the
+// host half can carry: subprocess.js is what turns `LoginShellUnresolvedError` into
+// `SubprocessExecutableNotFoundError`. It cannot be imported here (the same @deepseek-ai/*
+// imports the row above documents), so the translation is a SOURCE pin — the technique these
+// rows already use — while the class it tests and the consequence of skipping are behavioural
+// rows driven through the injected runner above. The ORDER is asserted, not just the presence:
+// a `cause`-carrying rethrow placed before the guard would translate every transport failure,
+// and the COUNT is asserted so the deliberate asymmetry with spawnTerminal is a decision the
+// next edit has to re-make rather than an accident (spawnTerminal has no candidate list to
+// skip down, so it reports the probe's failure as itself).
+const windowsFallbackAt = subprocessCode.indexOf('WINDOWS_SHELLS.has(base)')
+const loginShellGuardAt = subprocessCode.indexOf('error instanceof LoginShellUnresolvedError')
+const loginShellTranslateAt = subprocessCode.indexOf('new SubprocessExecutableNotFoundError(error.message, { cause: error })')
+const siblingLookupThrowAt = subprocessCode.indexOf('new SubprocessExecutableNotFoundError(``)')
+check('subprocess.js translates an unresolved login shell — and only there — into the class the terminal controller SKIPS on',
+  windowsFallbackAt >= 0
+  && loginShellGuardAt > windowsFallbackAt
+  && loginShellTranslateAt > loginShellGuardAt
+  && siblingLookupThrowAt > loginShellTranslateAt
+  && (subprocessCode.match(/cause: error/g) ?? []).length === 1,
+  { windowsFallbackAt, loginShellGuardAt, loginShellTranslateAt, siblingLookupThrowAt,
+    window: subprocessCode.slice(Math.max(0, windowsFallbackAt - 40), windowsFallbackAt + 500) })
 // The executable lookup is the FOURTH probe the documented sentence names (README.md:132 /
 // README.en.md:132 — 探针超时 60s + 超时后一次透明重试), and it is output-parsed: its empty
 // answer is read below as "no such executable", a class the terminal controller catches to

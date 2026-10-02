@@ -12,11 +12,20 @@
  * `resolveDistroHome`),
  * `lib/wsl/confinement.js` inside `resolveIdentity`, `detectRunner` and the NO_NEW_PRIVS
  * probe, and `lib/wsl/pty.js` inside the bridge-runtime probe. The suites that run their OWN
- * `wsl.exe` probes had no such runner: `scripts/verify-confinement.mjs` carries 36 of them
- * (19 `probe(...)` sites, 15 `confined(...)` sites and the 2 fixture probes — and the
- * SUDO_USER site sits in a loop, so a run makes more than 36 spawns), and ONE stalled probe
- * reddened checks that were measuring something else entirely — the class that made
- * `verify-confinement-skip.mjs` report a count mutation the suite had performed correctly.
+ * `wsl.exe` probes had no such runner: `scripts/verify-confinement.mjs` reaches 35 `wsl.exe`
+ * spawn statements, and ONE stalled probe reddened checks that were measuring something else
+ * entirely — the class that made `verify-confinement-skip.mjs` report a count mutation the
+ * suite had performed correctly.
+ *
+ * The count is RECOUNTABLE rather than remembered, because it was already wrong once: count the
+ * two call forms in `scripts/verify-confinement.mjs`, one spawn per line — `await probe(`
+ * (20 lines) and `await confined(` (15 lines), 35 together. Two traps, both of which the
+ * number that stood here fell into, so a re-count must not fall into them either: the
+ * `confined()` wrapper's own `probe(...)` call is ONE OF THE 20 (the 15 call sites reach that
+ * same line, so counting the wrapper as a sixteenth site double-counts all of them), and the two
+ * fixture probes (FIXTURE_SETUP at :1168, FIXTURE_CLEANUP at :1262) are likewise two more of the
+ * same 20, not a third category. The SUDO_USER site sits in a loop, so one run issues more than
+ * 35 spawns.
  *
  * THE TRIGGER IS NOT THE SAME IN ALL THREE, AND THIS RUNNER TAKES THE NARROWEST: `timedOut`
  * ALONE. `world.js`'s three probes (`probeWithRetry`, world.js:546) and `confinement.js`'s
