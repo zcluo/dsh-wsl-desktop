@@ -172,7 +172,15 @@ check('the job owns the terminal before the interrupt',
   announced && owned.owned,
   `announced=${String(announced)} jobPgrp=${String(jobPgrp)} idlePgrp=${String(foreground?.processGroupId)} lastForeground=${String(owned.last)}`)
 const signalled = await terminal.signalForeground('SIGINT')
-check('signalling returns the group it reached', signalled === jobPgrp, `signalled=${String(signalled)} jobPgrp=${String(jobPgrp)}`)
+// The row requires the group the JOB ANNOUNCED, so a job that never announced one
+// cannot satisfy it. Without that half the row measured nothing: pty.js answers 0 when
+// the bridge's reply carries no pgrp (a dead or absent foreground group, or a signal
+// name its table rejects), and 0 is also what `announcedPgrp()` returns before the job
+// has spoken — so `signalled === jobPgrp` read `0 === 0` and printed PASS. Measured
+// through the production handle: signalForeground on a name the bridge does not carry
+// returns 0, and the pair satisfies the unguarded form.
+check('signalling returns the group the job announced',
+  jobPgrp > 0 && signalled === jobPgrp, `signalled=${String(signalled)} jobPgrp=${String(jobPgrp)}`)
 await terminal.write('echo ALIVE-$((5*5))\n')
 check('the shell survives the interrupt', await until(() => output.includes('ALIVE-25')), JSON.stringify(output.slice(-200)))
 
