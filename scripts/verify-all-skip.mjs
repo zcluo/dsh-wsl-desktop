@@ -17,16 +17,22 @@
  * LOAD-BEARING rather than assumed — ONE declaration, two runs of the same
  * conditional fixture, one dormant and one skipped.
  *
+ * What this pin does NOT do is decide, by searching a real suite's source for a shape,
+ * whether that suite can skip. That question belongs to the aggregate, which asks it of
+ * the suite's own exit-code expression; a shape found anywhere in a file is not the same
+ * statement — a sibling suite carried a ternary for a CHILD process's exit code while
+ * its own tail could not be 2, and a shape search called it a suite that skips. Section F
+ * pins that rule's decisions on fixtures, through the aggregate's behaviour.
+ *
  * Run: node scripts/verify-all-skip.mjs
  */
 
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { detailText } from './detail.mjs'
-import { blankLiterals } from './source-text.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const aggregateSource = readFileSync(join(here, 'verify-all.mjs'), 'utf8')
@@ -89,6 +95,34 @@ const FIXTURES = {
     'process.exit(forced ? 2 : 0)',
     '',
   ].join('\n'),
+  'fixture-decoy.mjs': [
+    '// The shape a sibling suite carried in its working tree, verbatim in kind: a',
+    "// ternary that computes a CHILD process's expected code, while this suite's OWN",
+    '// exit code cannot be 2. A detector that searches the file for the shape declares',
+    '// this suite able to skip; a detector that reads its exit expression cannot.',
+    'const child = []',
+    'const failures = 0',
+    'const expectedCode = child.length > 0 ? 2 : 0',
+    "console.log('  PASS  the fixture check', expectedCode)",
+    'process.exitCode = failures === 0 ? 0 : 1',
+    '',
+  ].join('\n'),
+  'fixture-suffixed.mjs': [
+    '// The exit code comes from a NAME that ends in a digit. It is still a name, not a',
+    '// number, and a rule that counts digits inside identifiers reads it as one.',
+    'const exitCode2 = 0',
+    "console.log('  PASS  the fixture check')",
+    'process.exit(exitCode2)',
+    '',
+  ].join('\n'),
+  'fixture-computed.mjs': [
+    '// The exit code is computed away from the call, so no reader of the source can say',
+    '// what it is: it must not be reported as a suite that cannot skip.',
+    'const code = 0',
+    "console.log('  PASS  the fixture check')",
+    'process.exit(code)',
+    '',
+  ].join('\n'),
 }
 for (const [name, source] of Object.entries(FIXTURES)) writeFileSync(join(scratch, name), source)
 // The copies import it by that name, from their own directory (the scratch one).
@@ -98,8 +132,6 @@ writeFileSync(join(scratch, 'source-text.mjs'), sourceTextSource)
 const STANDALONE_ANCHOR = /const STANDALONE = \[[\s\S]*?\n\]/
 /** The aggregate's declaration table, same shape. */
 const DECLARED_ANCHOR = /const DECLARED_SKIPS = \[[\s\S]*?\n\]/
-/** A suite's exit-2 path: the tail's ternary, or an outright process.exit(2). */
-const EXIT_2_PATH = /process\.exit\(\s*2\s*\)|\?\s*2\s*:\s*0/
 
 const anchorsPresent = STANDALONE_ANCHOR.test(aggregateSource) && DECLARED_ANCHOR.test(aggregateSource)
 check('the aggregate still spells the two tables this pin rewrites (STANDALONE and DECLARED_SKIPS)',
@@ -224,8 +256,9 @@ console.log('\n=== D. a declaration the run does not exercise ===')
   check('dead declaration: the aggregate exits 1 before running any suite',
     deadRun.code === 1 && !deadRun.out.includes('the fixture check'),
     `exit ${String(deadRun.code)}; the run ends:\n${deadRun.out.slice(-1200)}`)
-  check('dead declaration: the message names the suite and says the declaration is stale, with the remedy',
-    deadRun.out.includes('fixture-pass.mjs') && /STALE|stale/.test(deadRun.out) && /no exit-2 path/.test(deadRun.out),
+  check('dead declaration: the message names the suite, says the declaration is stale, and names what the suite cannot do',
+    deadRun.out.includes('fixture-pass.mjs') && /STALE|stale/.test(deadRun.out)
+    && /no exit-code expression that can be 2/.test(deadRun.out),
     deadRun.out.slice(-1200))
 
   const dormant = buildAggregate('D-dormant.mjs', {
@@ -250,11 +283,17 @@ console.log('\n=== D. a declaration the run does not exercise ===')
 // ---------------------------------------------------------------------------
 // E. The table in the repository itself
 //
-// The declaration table is derived by reading the suites' exit-2 paths, so the two
-// directions that keep it honest are pinned here against the real file: a suite that
-// CAN skip without a declaration is a skip that will one day arrive undeclared, and a
-// declaration for a suite that cannot skip is stale. The aggregate checks the second
-// direction itself, before any suite runs; this covers both, on the real table.
+// STRUCTURE only, and deliberately so. This pin used to decide for itself whether a
+// real suite "can skip", by searching the suite's source for an exit-2 shape — and a
+// shape is not a rule: a sibling suite whose working tree carried
+// `const expectedCode = ... ? 2 : 0` for a CHILD process's exit code, while its own
+// tail was `process.exitCode = failures === 0 ? 0 : 1`, was declared able to skip, and
+// this section demanded a declaration for a suite that cannot skip. Whether a real
+// suite can skip is the aggregate's own question, asked of that suite's OWN exit-code
+// expression on every run — before any suite starts, and again as it reports. What is
+// left for this pin is the structure that scan cannot see, including when this file is
+// run on its own. Section F pins the rule's decisions, on fixtures, through the
+// aggregate's behaviour.
 // ---------------------------------------------------------------------------
 console.log('\n=== E. the declarations in scripts/verify-all.mjs ===')
 {
@@ -262,29 +301,68 @@ console.log('\n=== E. the declarations in scripts/verify-all.mjs ===')
   const declaredBlock = DECLARED_ANCHOR.exec(aggregateSource)?.[0] ?? ''
   const standaloneSuites = [...standaloneBlock.matchAll(/'([^']+\.mjs)'/g)].map((match) => match[1])
   const declaredSuites = [...declaredBlock.matchAll(/suite:\s*'([^']+)'/g)].map((match) => match[1])
-  /**
-   * Whether one suite's own source carries an exit-2 path.
-   *
-   * Read as SHAPE, not as spelling: this pin's own fixture sources SPELL the exit-2
-   * call inside string literals, and so do suites that merely document the convention
-   * — a raw search would call every one of them able to skip.
-   * @param {string} suite - the suite's file name.
-   * @returns {boolean} whether its code can exit 2.
-   */
-  const canSkip = (suite) => {
-    try {
-      return EXIT_2_PATH.test(blankLiterals(readFileSync(join(here, suite), 'utf8')))
-    } catch {
-      return false
-    }
-  }
-  const undeclared = standaloneSuites.filter((suite) => canSkip(suite) && !declaredSuites.includes(suite))
-  check('every suite that CAN skip is declared (an undeclared skip would fail the aggregate the day it happens)',
-    undeclared.length === 0, `not declared: ${undeclared.join(', ') || '(none)'}`)
-  const stale = declaredSuites.filter((suite) => !standaloneSuites.includes(suite) || !canSkip(suite))
-  check('every declared suite is in STANDALONE and carries an exit-2 path',
-    stale.length === 0, `stale: ${stale.join(', ') || '(none)'}`)
-  console.log(`        ${standaloneSuites.length} standalone suite(s), ${standaloneSuites.filter(canSkip).length} with an exit-2 path, ${declaredSuites.length} declared`)
+  const preconditions = [...declaredBlock.matchAll(/precondition:\s*'([^']*)'/g)].map((match) => match[1])
+  check('the table declares at least one suite (an empty table accepts no skip at all)',
+    declaredSuites.length > 0, `declared: ${declaredSuites.join(', ') || '(none)'}`)
+  check('every declared suite names a file of this directory',
+    declaredSuites.every((suite) => existsSync(join(here, suite))),
+    `missing: ${declaredSuites.filter((suite) => !existsSync(join(here, suite))).join(', ') || '(none)'}`)
+  check('every declared suite is in the suite list the aggregate runs',
+    declaredSuites.every((suite) => standaloneSuites.includes(suite)),
+    `not in STANDALONE: ${declaredSuites.filter((suite) => !standaloneSuites.includes(suite)).join(', ') || '(none)'}`)
+  check('every entry carries a precondition, so the skip is justified rather than merely allowed',
+    preconditions.length === declaredSuites.length && preconditions.every((text) => text.trim().length > 30),
+    `${preconditions.length} precondition(s) for ${declaredSuites.length} suite(s); shortest: ${[...preconditions].sort((a, b) => a.length - b.length)[0] ?? '(none)'}`)
+  console.log(`        ${standaloneSuites.length} standalone suite(s), ${declaredSuites.length} declared`)
+}
+
+// ---------------------------------------------------------------------------
+// F. The rule behind "can this suite skip?"
+//
+// The rule reads the suite's OWN exit-code expression — the argument of
+// process.exit(...), or the right-hand side of process.exitCode = ... — rather than a
+// shape found anywhere in the file. These three fixtures pin the decisions that
+// matter, through the aggregate's own behaviour: a declaration for a suite whose own
+// exit code cannot be 2 must be reported STALE, and a declaration the rule cannot
+// READ must not be.
+// ---------------------------------------------------------------------------
+console.log('\n=== F. the rule behind "can this suite skip?" ===')
+{
+  const decoy = buildAggregate('F-decoy.mjs', {
+    suites: ['fixture-decoy.mjs'],
+    declarations: [{ suite: 'fixture-decoy.mjs', precondition: 'the pin declared the decoy fixture' }],
+  })
+  const decoyRun = runAggregate(decoy)
+  check('decoy: a ternary computing a CHILD code is not read as this suite\'s own exit code (the declaration is STALE)',
+    decoyRun.code === 1 && /STALE/.test(decoyRun.out) && decoyRun.out.includes('fixture-decoy.mjs'),
+    `exit ${String(decoyRun.code)}; the run ends:\n${decoyRun.out.slice(-1000)}`)
+
+  const genuine = buildAggregate('F-genuine.mjs', {
+    suites: ['fixture-conditional.mjs'],
+    declarations: [{ suite: 'fixture-conditional.mjs', precondition: 'the pin declared the fixture skip' }],
+  })
+  const genuineRun = runAggregate(genuine)
+  check('genuine: a suite whose OWN exit expression can be 2 is not called stale',
+    genuineRun.code === 0 && !/STALE/.test(genuineRun.out),
+    `exit ${String(genuineRun.code)}; the run ends:\n${genuineRun.out.slice(-1000)}`)
+
+  const suffixed = buildAggregate('F-suffixed.mjs', {
+    suites: ['fixture-suffixed.mjs'],
+    declarations: [{ suite: 'fixture-suffixed.mjs', precondition: 'the pin declared the suffixed fixture' }],
+  })
+  const suffixedRun = runAggregate(suffixed)
+  check('suffixed: a name that ENDS in a digit is still a name, not a number the rule can read',
+    suffixedRun.code === 0 && !/STALE/.test(suffixedRun.out),
+    `exit ${String(suffixedRun.code)}; the run ends:\\n${suffixedRun.out.slice(-1000)}`)
+
+  const computed = buildAggregate('F-computed.mjs', {
+    suites: ['fixture-computed.mjs'],
+    declarations: [{ suite: 'fixture-computed.mjs', precondition: 'the pin declared the computed fixture' }],
+  })
+  const computedRun = runAggregate(computed)
+  check('computed: an exit code the rule cannot read is not reported as a suite that cannot skip',
+    computedRun.code === 0 && !/STALE/.test(computedRun.out),
+    `exit ${String(computedRun.code)}; the run ends:\n${computedRun.out.slice(-1000)}`)
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)

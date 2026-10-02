@@ -64,8 +64,9 @@ const LIVE = ['verify-route.mjs', 'inspect-live-client.mjs', 'verify-post-restar
  * from what they are expected to do on any one machine. Every entry below cites the
  * branch it comes from; a suite whose skip cannot be justified by such a branch is
  * not declared, and its skip fails the run. Adding an entry is a claim about the
- * machine class the suite may skip on, and a suite that CAN skip without an entry is
- * a skip that will one day arrive undeclared (pinned by scripts/verify-all-skip.mjs).
+ * machine class the suite may skip on: a suite that CAN skip without an entry is a
+ * skip that arrives undeclared the day its precondition occurs, and this run fails
+ * then, naming it — which is when the question of declaring it is answerable.
  *
  * A suite with more than one exit-2 branch lists all of them: the aggregate sees one
  * exit code and cannot tell which branch produced it, so an entry that named only
@@ -149,19 +150,126 @@ const declarations = new Map(DECLARED_SKIPS.map((entry) => [entry.suite, entry])
   console.log(`check() contract clean across ${suites.length} suites`)
 }
 
-// Every declaration must still be LIVE. A declared suite whose source carries no
-// exit-2 path can never skip anywhere, so the entry has rotted — a renamed suite, a
-// deleted skip branch — and the skip it was written for would arrive undeclared the
-// moment it came back. That is a property of the REPOSITORY rather than of this
-// machine, and it is the stale-declaration class an operator can always clear
-// (remove the entry, or restore the branch), so it fails here, before any suite runs.
+/**
+ * The expressions that determine one suite's OWN process exit code.
+ *
+ * Only two statements set it: a `process.exit(...)` call, and an assignment to
+ * `process.exitCode`. Reading THOSE — rather than searching the file for an exit-2
+ * shape — is what makes "this suite can skip" a statement about the suite's own exit
+ * code. A `cond ? 2 : 0` that computes a CHILD process's expected code, or a
+ * comparison against 2 anywhere else in the file, is not this suite's exit code:
+ * measured on a sibling suite whose working tree carried
+ * `const expectedCode = ... ? 2 : 0` for a child it spawns, while its own tail was
+ * `process.exitCode = failures === 0 ? 0 : 1` — a shape search called that suite one
+ * that skips, and this scan would have called its declaration stale the day it made
+ * one. The text must be comment- and literal-blanked first, so a suite that merely
+ * NAMES the convention in prose is not read as a suite that performs it.
+ * @param {string} source - the suite's source, blanked.
+ * @returns {string[]} one entry per exit-code expression, in source order.
+ */
+function exitCodeExpressions(source) {
+  const found = []
+  for (const match of source.matchAll(/process\.exit\s*\(/g)) {
+    found.push(callBody(source, match.index + match[0].length - 1))
+  }
+  for (const match of source.matchAll(/process\.exitCode\s*=(?!=)/g)) {
+    found.push(statementTail(source, match.index + match[0].length))
+  }
+  return found
+}
+
+/**
+ * The body of the call whose `(` is at openIndex, up to its matching `)`.
+ * @param {string} source - the source text.
+ * @param {number} openIndex - the index of `(`.
+ * @returns {string} the call's argument text.
+ */
+function callBody(source, openIndex) {
+  let depth = 0
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '(') depth += 1
+    else if (char === ')') {
+      depth -= 1
+      if (depth === 0) return source.slice(openIndex + 1, index)
+    }
+  }
+  return source.slice(openIndex + 1)
+}
+
+/**
+ * The rest of the statement after `process.exitCode =`, up to the `;` or the newline
+ * that closes it. A wrapped expression keeps going while the text so far ends on an
+ * operator, so a ternary written over several lines is read whole.
+ * @param {string} source - the source text.
+ * @param {number} startIndex - the index just after the `=`.
+ * @returns {string} the assigned expression.
+ */
+function statementTail(source, startIndex) {
+  let depth = 0
+  for (let index = startIndex; index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '(' || char === '[' || char === '{') depth += 1
+    else if (char === ')' || char === ']' || char === '}') depth -= 1
+    else if (depth === 0 && char === ';') return source.slice(startIndex, index)
+    else if (depth === 0 && char === '\n') {
+      if (/[?:,|&+*=(<>-]$/.test(source.slice(startIndex, index).trimEnd())) continue
+      return source.slice(startIndex, index)
+    }
+  }
+  return source.slice(startIndex)
+}
+
+/**
+ * A NUMBER in the source, as opposed to a digit inside a name: `exitCode2` is a name,
+ * and reading it as a number would make its suite look like one whose exit code is
+ * spelled out. Neighbouring word and `.` characters are what distinguish the two.
+ */
+const NUMBER_TOKEN = /(?<![\w$.])\d+(?![\w$.])/
+
+/**
+ * Whether one exit-code expression can BE 2.
+ *
+ * Three cases, and the middle one is the point:
+ *  - the whole expression is a number — 2 or not;
+ *  - it holds no NUMBER at all (a name, a call: `process.exit(code)`): its value cannot
+ *    be read from the source, so it is not claimed unable to be 2. The other answer
+ *    would report a declaration stale for a suite that can skip;
+ *  - otherwise the outcomes are spelled out, and it can be 2 exactly when a ternary
+ *    BRANCH is 2: `cond ? 2 : ...`, or `... : 2`. A guard that merely compares with 2
+ *    (`code === 2 ? 1 : 0`) is not a branch, and neither is arithmetic.
+ * @param {string} expression - one exit-code expression.
+ * @returns {boolean} whether it can be 2.
+ */
+function canBeTwo(expression) {
+  const text = expression.trim()
+  if (/^\d+$/.test(text)) return Number(text) === 2
+  if (!NUMBER_TOKEN.test(text)) return true
+  return /[?:]\s*2(?![0-9])/.test(text)
+}
+
+/**
+ * Whether a suite's own source can make its process exit 2 — the state this
+ * aggregate renders as SKIP.
+ * @param {string} source - the suite's source, comment- and literal-blanked.
+ * @returns {boolean} whether some expression that sets its exit code can be 2.
+ */
+function canExitTwo(source) {
+  return exitCodeExpressions(source).some(canBeTwo)
+}
+
+// Every declaration must still be LIVE. A declared suite whose own exit-code
+// expression cannot be 2 can never skip anywhere — however many exit-2 shapes it
+// mentions — so the entry has rotted: a renamed suite, a deleted skip branch, an
+// override that grew a `? 2 : 0` for something else. That is a property of the
+// REPOSITORY rather than of this machine, and it is the stale-declaration class an
+// operator can always clear (remove the entry, or restore the branch), so it fails
+// here, before any suite runs.
 //
 // The other class — a declaration whose precondition simply does not hold on this
 // machine — is NOT a defect and does not fail the run: it is dormant, and the summary
 // reports it (see below).
 {
-  /** A suite's exit-2 path: the tail's ternary, or an outright process.exit(2). */
-  const EXIT_2_PATH = /process\.exit\(\s*2\s*\)|\?\s*2\s*:\s*0/
   const stale = []
   for (const { suite } of DECLARED_SKIPS) {
     if (!suites.includes(suite)) {
@@ -174,11 +282,11 @@ const declarations = new Map(DECLARED_SKIPS.map((entry) => [entry.suite, entry])
     } catch {
       source = null
     }
-    // Read as SHAPE, not as spelling: a suite that merely NAMES the convention in a
-    // comment or a string (several do) has no exit-2 path, and only blanked text can
-    // tell the two apart. blankLiterals is this repository's one owner for that pass.
+    // Blanked first: a suite that merely NAMES the convention in a comment or a string
+    // (several do) must not be read as one that performs it, and blankLiterals is this
+    // repository's one owner for that pass.
     if (source === null) stale.push(`${suite} is not readable as a suite of this directory`)
-    else if (!EXIT_2_PATH.test(blankLiterals(source))) stale.push(`${suite} has no exit-2 path, so it cannot skip`)
+    else if (!canExitTwo(blankLiterals(source))) stale.push(`${suite} has no exit-code expression that can be 2, so it cannot skip`)
   }
   if (stale.length > 0) {
     console.log(`\nFAIL  a declared skip is STALE — the suite it names cannot skip any more: ${stale.join('; ')}`)
