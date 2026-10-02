@@ -836,7 +836,15 @@ console.log('\nspaced mount target outside the workspace (findmnt \\x20 decoding
 // target (unconfined setup, like the suites above), and the confined
 // read-only run must deny a write under its REAL path.
 const spacedMount = `${home}/mnt probe-${runSuffix}`
-await probe({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
+// NOT through `probe`: this chain's FIRST step is `rm -rf` on a path its OWN last step can
+// turn into a live bind mount of `${home}`. The retry's trigger is a timeout, and the stall it
+// exists for is "the command completed, the relay hung" — in which case the repeat re-runs the
+// `rm -rf` against the mount it just made. Measured in a private mount namespace: GNU `rm`
+// does not stop at a mount point (only the final rmdir fails EBUSY), so that repeat deletes the
+// CONTENTS of the session user's home. A repeat is only safe in front of an idempotent command;
+// this one is not. The ceiling is `runWslShell`'s own default, exactly as before the retry was
+// put in front of it.
+await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
 const mountedCheck = await probe({ distro, linuxCwd: '/', command: `findmnt -rno TARGET "${spacedMount}"` })
 check('the spaced bind target is mounted', mountedCheck.stdout.trim() === spacedMount || mountedCheck.stdout.trim().includes('probe'), `${JSON.stringify(mountedCheck.stdout)}`)
 // The options are read INSIDE the same namespace that fenced them: the sweep
