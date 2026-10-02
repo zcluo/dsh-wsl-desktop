@@ -388,6 +388,25 @@ async function untilAsync(predicate, ceilingMs) {
   }
   return await predicate()
 }
+/**
+ * Whether one set of recorded children carries the bridge's announcement of its session.
+ * @param {{stderr: string}[]} records - the recorded children.
+ * @returns {boolean} whether one of them announced.
+ */
+const announcedBy = (records) => records.some((entry) => entry.stderr.includes('"event": "started"') || entry.stderr.includes('"event":"started"'))
+/**
+ * The children an allocation started, from a spawn count taken before it.
+ *
+ * The guard below has to be scoped this way: `fifoChildren` accumulates every child the
+ * SECTION spawned, and by the time scenario C runs, scenarios A and B have each announced
+ * on stderr — so a search over the whole list is satisfied by their records whatever C's
+ * own bridge did, and the row it guards ("a FAILED allocation leaves no FIFO behind")
+ * could pass while the FIFO never existed. The old row measured exactly that.
+ * @param {{stderr: string}[]} records - every recorded child.
+ * @param {number} base - the record count taken before this allocation.
+ * @returns {{stderr: string}[]} this allocation's records.
+ */
+const spawnsSince = (records, base) => records.slice(base)
 /** Allocate one terminal on a fresh interactive shell, through the recording adapter. */
 function allocateFifoTerminal(spawnImpl = fifoAdapter) {
   return spawnWslTerminal({
@@ -437,6 +456,8 @@ const fifoBeforeC = await fifos()
 const injected = []
 let terminalC = null
 let failureC = null
+/** Where scenario C's own children start in the section-wide record. */
+const spawnsBeforeC = fifoChildren.length
 try {
   terminalC = await allocateFifoTerminal((spec) => {
     if (spec.argv.some((arg) => String(arg).includes('exec 3>'))) {
@@ -453,10 +474,26 @@ const fifoC = controlSpawn === undefined ? null : controlSpawn[controlSpawn.leng
 check('the failed allocation is reported as a failure', failureC !== null, { failureC })
 check('the control spawn was attempted with the session FIFO as its argument',
   fifoC !== null && fifoC.startsWith('/tmp/dsh-pty-'), { fifoC })
-// json.dumps writes {"event": "started", ...} with a space after the colon.
-const announcedC = fifoChildren.some((entry) => entry.stderr.includes('"event": "started"') || entry.stderr.includes('"event":"started"'))
-check('the bridge announced the session, so that FIFO existed (the row below is not vacuous)',
-  announcedC === true, { spawns: fifoChildren.length })
+// json.dumps writes {"event": "started", ...} with a space after the colon. Read from
+// C's OWN children: the whole-section search this row used to make is satisfied by A and
+// B, which have already announced, so it could not fail and certified nothing. The
+// whole-section value is kept in the evidence, to show what the old form would have said.
+const cSpawns = spawnsSince(fifoChildren, spawnsBeforeC)
+const announcedC = announcedBy(cSpawns)
+check('the bridge C started announced the session, so that FIFO existed (read from C\'s own children, not from A and B)',
+  announcedC === true, { scoped: announcedC, wholeSection: announcedBy(fifoChildren), spawns: cSpawns.length })
+// The scoping rule itself, on records built here, so it is pinned without a distribution:
+// the row above has to be false when the ONLY silent record is this allocation's own.
+{
+  const records = [
+    { stderr: '{"event": "started", "pid": 1}' },
+    { stderr: '{"event": "started", "pid": 2}' },
+    { stderr: 'the bridge said nothing' },
+  ]
+  check('the announcement is read from this allocation\'s children (the whole-section read is satisfied by A and B)',
+    announcedBy(spawnsSince(records, 2)) === false && announcedBy(spawnsSince(records, 0)) === true,
+    { scoped: announcedBy(spawnsSince(records, 2)), wholeSection: announcedBy(spawnsSince(records, 0)) })
+}
 const fifoGoneC = await untilAsync(async () => (await fifos()).includes(fifoC ?? '/nonexistent') === false, 15_000)
 check('a FAILED allocation leaves no FIFO behind',
   fifoC !== null && fifoGoneC === true,

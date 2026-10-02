@@ -168,7 +168,19 @@ check('a wsl.exe-level failure decodes to readable text, not mojibake',
   JSON.stringify((missingDistro.stdout + missingDistro.stderr).slice(0, 160)))
 
 console.log('\ndirectory facts')
-const listingProbe = home + '/dsh-wsl-listing-probe'
+// Both directory probes are UNIQUE TO THIS PROCESS. They were machine-global
+// (`<home>/dsh-wsl-listing-probe`, `<home>/dsh-wsl-short-probe`), the class
+// verify-9p.mjs and verify-confinement.mjs were fixed for: each run opens with an
+// `rm -rf` and closes with another, so two runs overlapping in time delete each other's
+// fixture — and the check that reddens then is this suite's, on a healthy tree. What the
+// assertions depend on is the PREFIX (a directory under the session home) and the
+// CONTENT (two entries, one-character names), never the full name, so the pid costs them
+// nothing. A fourth instance of this class was found in verify-route.mjs and
+// verify-post-restart.mjs while fixing this one; those are recorded in
+// verify-all-skip.mjs's KNOWN_FIXED_SCRATCH, because they are LIVE suites whose fix
+// cannot be verified without the desktop host.
+const runSuffix = process.pid
+const listingProbe = `${home}/dsh-wsl-listing-probe-${runSuffix}`
 await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + listingProbe + ' && mkdir -p ' + listingProbe + ' && touch ' + listingProbe + '/alpha.txt && mkdir ' + listingProbe + '/beta' })
 const listing = await listLinuxDir(distro, listingProbe)
 check('listing returns the requested path', listing.path === listingProbe, listing.path)
@@ -182,7 +194,7 @@ await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + listingProbe })
 // the payload becomes 'f\ta\0f\tb\0', where every NUL sits on exactly the byte
 // positions UTF-16LE uses, so a majority test accepts it and the framing is
 // destroyed. The listing protocol must not depend on that guess.
-const shortProbe = home + '/dsh-wsl-short-probe'
+const shortProbe = `${home}/dsh-wsl-short-probe-${runSuffix}`
 await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + shortProbe + ' && mkdir -p ' + shortProbe + ' && touch ' + shortProbe + '/a ' + shortProbe + '/b ' + shortProbe + '/c' })
 const shortListing = await listLinuxDir(distro, shortProbe)
 check('a directory of one-character names still lists every entry',

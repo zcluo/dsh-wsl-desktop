@@ -28,10 +28,11 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { blankLiterals } from './source-text.mjs'
 import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -113,6 +114,16 @@ const FIXTURES = {
     'setTimeout(() => {}, 60_000)',
     '',
   ].join('\n'),
+  'fixture-wrapped.mjs': [
+    '// The exit expression WRAPPED after its true branch: the shape a long line takes',
+    '// when an editor breaks it, and the reader has to read it whole to see the 2 in it.',
+    'const failures = 0',
+    'const skipped = 1',
+    "console.log('  SKIP  the fixture check — the wrapped spelling')",
+    'process.exitCode = failures > 0 ? 1',
+    '  : skipped > 0 ? 2 : 0',
+    '',
+  ].join('\n'),
   'fixture-suffixed.mjs': [
     '// The exit code comes from a NAME that ends in a digit. It is still a name, not a',
     '// number, and a rule that counts digits inside identifiers reads it as one.',
@@ -157,7 +168,7 @@ function buildAggregate(name, { suites, declarations, edits = [] }) {
   const withSuites = aggregateSource.replace(STANDALONE_ANCHOR,
     `const STANDALONE = [\n${suites.map((suite) => `  '${suite}',`).join('\n')}\n]`)
   let next = withSuites.replace(DECLARED_ANCHOR,
-    `const DECLARED_SKIPS = [\n${declarations.map((entry) => `  { suite: '${entry.suite}', precondition: ${JSON.stringify(entry.precondition)} },`).join('\n')}\n]`)
+    `const DECLARED_SKIPS = [\n${declarations.map((entry) => `  { suite: '${entry.suite}', branch: ${JSON.stringify(entry.branch ?? ['process.exit'])}, precondition: ${JSON.stringify(entry.precondition)} },`).join('\n')}\n]`)
   // Caller-supplied mutations of the copy. Each must CHANGE the text: a mutation whose
   // anchor moved is stale, and every assertion made against a stale mutant is vacuous, so
   // the sections below check the applied text back before they rely on it.
@@ -305,6 +316,93 @@ console.log('\n=== D. a declaration the run does not exercise ===')
 // run on its own. Section F pins the rule's decisions, on fixtures, through the
 // aggregate's behaviour.
 // ---------------------------------------------------------------------------
+/**
+ * The tokens a precondition and a suite can share: identifiers, paths, flags — not the
+ * prose that every file in this directory carries.
+ */
+const STOPWORDS = new Set(['precondition', 'preconditions', 'declaration', 'declarations', 'suite', 'suites', 'skipped', 'cannot', 'because', 'otherwise'])
+
+/**
+ * What a table's own text names, one entry per token worth comparing.
+ * @param {string} text - a precondition.
+ * @returns {string[]} the tokens, in order, without duplicates.
+ */
+function tokensOf(text) {
+  return [...new Set(text.match(/[A-Za-z0-9_./\\-]{6,}/g) ?? [])]
+    .filter((token) => !STOPWORDS.has(token.toLowerCase()))
+}
+
+/**
+ * Whether one branch citation still resolves in the suite it cites.
+ *
+ * Two arms, because a citation legitimately lives in either place: the BLANKED arm
+ * compares code against code (a citation carrying a literal still matches, because both
+ * sides blank the same way), and the RAW arm covers a citation that lives INSIDE a
+ * literal — the command a suite runs, the marker it greps for. The raw arm can also be
+ * satisfied by prose, which is the limit of a text citation: it proves the entry points
+ * at text the file carries, not that the text is on the exit-2 path.
+ * @param {string} source - the suite's source, raw.
+ * @param {string} citation - the cited text.
+ * @returns {boolean} whether it resolves.
+ */
+function citationResolves(source, citation) {
+  return blankLiterals(source).includes(blankLiterals(citation)) || source.includes(citation)
+}
+
+/**
+ * What is wrong with the declaration table.
+ *
+ * The table's promise is reviewability: an entry names a suite, cites the exit-2 branch
+ * it comes from, and states the machine condition under which that branch may fire. A
+ * static reader cannot judge whether the prose JUSTIFIES the skip — only a human reading
+ * the branch can — so this checks the parts that are checkable, and every one of them can
+ * fail: the entry exists, the suite is one this directory runs, the precondition is long
+ * enough to name a condition and names something the suite itself carries (so a row
+ * copy-pasted from another entry does not pass), no two entries share one text, and every
+ * citation still resolves in the file it cites. The line numbers the table used to carry
+ * were NOT checkable and rotted twice in one review range; the citations below replace
+ * them for the same reason.
+ * @param {string} standaloneBlock - the STANDALONE array literal's text.
+ * @param {string} declaredBlock - the DECLARED_SKIPS array literal's text.
+ * @param {(suite: string) => string | null} readSuite - a suite's source, or null when it cannot be read.
+ * @returns {string[]} one message per problem; empty when the table is sound.
+ */
+function tableProblems(standaloneBlock, declaredBlock, readSuite) {
+  const problems = []
+  const suiteList = [...standaloneBlock.matchAll(/'([^']+\.mjs)'/g)].map((match) => match[1])
+  // One literal matcher for every field, so a citation that carries the OTHER quote
+  // character ("createRequire(join(checkout, 'package.json'))") is read whole.
+  const literal = /(["'])((?:\\.|(?!\1)[^\\])*?)\1/g
+  const declaredSuites = [...declaredBlock.matchAll(/suite:\s*(['"])((?:\\.|(?!\1)[^\\])*?)\1/g)].map((match) => match[2])
+  const preconditions = [...declaredBlock.matchAll(/precondition:\s*(['"])((?:\\.|(?!\1)[^\\])*?)\1/g)].map((match) => match[2])
+  const branches = [...declaredBlock.matchAll(/branch:\s*\[([\s\S]*?)\]/g)].map((match) => [...match[1].matchAll(literal)].map((entry) => entry[2]))
+  if (declaredSuites.length === 0) return ['the table declares no suite, so no skip can ever be accepted']
+  if (preconditions.length !== declaredSuites.length) problems.push(`${declaredSuites.length} suite(s) but ${preconditions.length} precondition(s)`)
+  declaredSuites.forEach((suite, index) => {
+    const precondition = (preconditions[index] ?? '').trim()
+    if (precondition.length <= 30) problems.push(`${suite}: the precondition is too short to name a condition`)
+    const source = readSuite(suite)
+    if (source === null) { problems.push(`${suite}: not readable as a suite of this directory`); return }
+    if (!suiteList.includes(suite)) problems.push(`${suite}: not in the suite list the aggregate runs`)
+    // The precondition must name something THIS suite carries: a row copy-pasted from
+    // another entry, or prose generic enough to fit any suite, is refused here. Length
+    // alone was the old rule, and 31 characters of anything passed it.
+    const tokens = tokensOf(precondition)
+    if (tokens.length > 0 && !tokens.some((token) => source.toLowerCase().includes(token.toLowerCase()))) {
+      problems.push(`${suite}: the precondition names nothing this suite carries (${tokens.slice(0, 4).join(', ')})`)
+    }
+    const citations = branches[index] ?? []
+    if (citations.length === 0) problems.push(`${suite}: declares no branch citation, so the entry cannot be checked against the suite it declares`)
+    for (const citation of citations) {
+      if (citation.trim().length < 4) problems.push(`${suite}: cites ${JSON.stringify(citation)}, which is too short to be branch text`)
+      else if (!citationResolves(source, citation)) problems.push(`${suite}: cites branch text it no longer carries (${citation})`)
+    }
+  })
+  const duplicate = preconditions.find((text, index) => preconditions.indexOf(text) !== index)
+  if (duplicate !== undefined) problems.push(`two entries share one precondition text (${duplicate.slice(0, 40)}…), so the second certifies the first one's condition`)
+  return problems
+}
+
 console.log('\n=== E. the declarations in scripts/verify-all.mjs ===')
 {
   const standaloneBlock = STANDALONE_ANCHOR.exec(aggregateSource)?.[0] ?? ''
@@ -320,10 +418,62 @@ console.log('\n=== E. the declarations in scripts/verify-all.mjs ===')
   check('every declared suite is in the suite list the aggregate runs',
     declaredSuites.every((suite) => standaloneSuites.includes(suite)),
     `not in STANDALONE: ${declaredSuites.filter((suite) => !standaloneSuites.includes(suite)).join(', ') || '(none)'}`)
-  check('every entry carries a precondition, so the skip is justified rather than merely allowed',
-    preconditions.length === declaredSuites.length && preconditions.every((text) => text.trim().length > 30),
-    `${preconditions.length} precondition(s) for ${declaredSuites.length} suite(s); shortest: ${[...preconditions].sort((a, b) => a.length - b.length)[0] ?? '(none)'}`)
+  // This row used to measure the precondition's LENGTH and say the skip was "justified".
+  // A static reader cannot judge justification — only a human reading the branch can — so
+  // the row now measures the part that is checkable (the entry is tied to its suite and to
+  // branch text that file still carries), and E2 pins that each clause can be refused.
+  const readSuiteOf = (suite) => {
+    try { return readFileSync(join(here, suite), 'utf8') } catch { return null }
+  }
+  const tableIssues = tableProblems(standaloneBlock, declaredBlock, readSuiteOf)
+  check('the declaration table is sound: every entry names a suite this directory runs, cites branch text that suite still carries, and carries its own precondition tied to that suite',
+    tableIssues.length === 0, tableIssues.join('; '))
   console.log(`        ${standaloneSuites.length} standalone suite(s), ${declaredSuites.length} declared`)
+}
+
+// ---------------------------------------------------------------------------
+// E2. The shapes the table check REFUSES, on tables built here
+//
+// E1's row is satisfied by the real table, and a checker that accepts everything would
+// satisfy it too. Each case below builds one clause of the promise into a table, so the
+// checker has to refuse it.
+// ---------------------------------------------------------------------------
+console.log('\n=== E2. what the table check refuses ===')
+{
+  const SUITE_NAME = 'fixture-table.mjs'
+  const SOUND_SOURCE = ['const deps = process.env.DSH_WSL_DEPS', 'if (!existsSync(deps)) {', '  skipped += 1', '}', 'process.exitCode = skipped > 0 ? 2 : 0'].join('\n')
+  const SOUND_PRECONDITION = 'the dependency directory DSH_WSL_DEPS names does not exist, so the import cannot run here'
+  const SOUND_BRANCH = "['!existsSync(deps)']"
+  const standalone = ['const STANDALONE = [', `  '${SUITE_NAME}',`, ']'].join('\n')
+  const table = ({ suite = SUITE_NAME, branch = SOUND_BRANCH, precondition = SOUND_PRECONDITION } = {}) => [
+    'const DECLARED_SKIPS = [',
+    `  { suite: '${suite}',${branch === null ? '' : ` branch: ${branch},`} precondition: ${JSON.stringify(precondition)} },`,
+    ']',
+  ].join('\n')
+  const read = (suite) => (suite === SUITE_NAME ? SOUND_SOURCE : null)
+  const problemsOf = (block) => tableProblems(standalone, block, read)
+  check('the checker accepts a sound table (so a refusal below is the clause, not the checker)',
+    problemsOf(table()).length === 0, problemsOf(table()).join('; '))
+  check('it refuses an entry with no branch citation',
+    problemsOf(table({ branch: null })).some((problem) => problem.includes('declares no branch citation')),
+    problemsOf(table({ branch: null })).join('; '))
+  check('it refuses a citation the suite no longer carries',
+    problemsOf(table({ branch: "['publicationCode === null']" })).some((problem) => problem.includes('no longer carries')),
+    problemsOf(table({ branch: "['publicationCode === null']" })).join('; '))
+  check('it refuses a precondition that names nothing the suite carries (length alone no longer passes)',
+    problemsOf(table({ precondition: 'a condition this suite has never mentioned anywhere at all' })).some((problem) => problem.includes('names nothing this suite carries')),
+    problemsOf(table({ precondition: 'a condition this suite has never mentioned anywhere at all' })).join('; '))
+  check('it refuses a declaration for a file that is not one of this directory\'s suites',
+    problemsOf(table({ suite: 'verify-nothing-here.mjs' })).some((problem) => problem.includes('not readable as a suite')),
+    problemsOf(table({ suite: 'verify-nothing-here.mjs' })).join('; '))
+  const duplicated = [
+    'const DECLARED_SKIPS = [',
+    `  { suite: '${SUITE_NAME}', branch: ${SOUND_BRANCH}, precondition: ${JSON.stringify(SOUND_PRECONDITION)} },`,
+    `  { suite: '${SUITE_NAME}', branch: ${SOUND_BRANCH}, precondition: ${JSON.stringify(SOUND_PRECONDITION)} },`,
+    ']',
+  ].join('\n')
+  check('it refuses one precondition text standing for two entries',
+    problemsOf(duplicated).some((problem) => problem.includes('share one precondition text')), problemsOf(duplicated).join('; '))
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +513,18 @@ console.log('\n=== F. the rule behind "can this suite skip?" ===')
   const suffixedRun = runAggregate(suffixed)
   check('suffixed: a name that ENDS in a digit is still a name, not a number the rule can read',
     suffixedRun.code === 0 && !/STALE/.test(suffixedRun.out),
-    `exit ${String(suffixedRun.code)}; the run ends:\\n${suffixedRun.out.slice(-1000)}`)
+    `exit ${String(suffixedRun.code)}; the run ends:\n${suffixedRun.out.slice(-1000)}`)
+
+  // The wrapped spelling, pinned because it is what a future editor writes when the line
+  // grows: the reader must see the 2 in a branch the wrapping moved to its own line.
+  const wrapped = buildAggregate('F-wrapped.mjs', {
+    suites: ['fixture-wrapped.mjs'],
+    declarations: [{ suite: 'fixture-wrapped.mjs', precondition: 'the pin declared the wrapped fixture' }],
+  })
+  const wrappedRun = runAggregate(wrapped)
+  check('wrapped: a skip expression broken after its true branch is still read as this suite\'s own exit code (not STALE)',
+    wrappedRun.code === 0 && !/STALE/.test(wrappedRun.out) && /^\s*SKIP\s+fixture-wrapped\.mjs$/m.test(wrappedRun.out),
+    `exit ${String(wrappedRun.code)}; the run ends:\n${wrappedRun.out.slice(-1000)}`)
 
   const computed = buildAggregate('F-computed.mjs', {
     suites: ['fixture-computed.mjs'],
@@ -421,6 +582,107 @@ console.log('\n=== G. a suite the aggregate itself stops ===')
   check('unstarted: a suite that could not be started is NOT reported as FAIL (exit 1), and says what stopped it',
     run.code === 1 && !/FAIL \(exit 1\)/.test(run.out) && /could not be started/.test(run.out) && /ENOENT/.test(run.out),
     `exit ${String(run.code)}; the run ends:\n${run.out.slice(-900)}`)
+}
+
+// ---------------------------------------------------------------------------
+// H. No suite creates a FIXED machine-global scratch name
+//
+// Four separate fixes have now been needed for one class: a scratch name identical in
+// every process (verify-9p's two probe trees, verify-confinement's five paths and three
+// fixture trees, and verify-world's two directory probes). The failure mode is measured,
+// not hypothetical — two runs overlapping in time destroy each other's fixture, because
+// each run's opening `rm -rf` and each run's cleanup both act on the shared name — and
+// the thing that keeps being missed is the NEXT name, so this section scans the directory
+// for the shape instead of trusting the next author to remember it.
+//
+// The shape, precisely: a `dsh-` name that is (a) under a root (/tmp, /opt, /root, the
+// session home or the host temp directory), (b) spelled WITHOUT a pid, a random component
+// or an mkdtemp prefix, and (c) CREATED OR REMOVED within one line of where it is spelled.
+// (c) is what separates a scratch fixture from a spelling a suite only compares:
+// verify-fs-fence's /tmp/dsh-fence-probe.txt targets are never created, so no concurrent
+// run can take one away. A name created far from its spelling is not caught; the KNOWN
+// table is where such a case is recorded, and every entry in it must still be found.
+// ---------------------------------------------------------------------------
+console.log('\n=== H. fixed machine-global scratch names in scripts/ ===')
+{
+  const ROOT_MARKER = /\/tmp\/|\/opt\/|\/root\/|\$\{home\}\/|home \+ '|tmpdir\(\)|shareRoot/i
+  const UNIQUE = /process\.pid|randomUUID|Math\.random|\bmkdtemp|no-such|[$]\{[^}]*(?:pid|random|token|Suffix|stamp|UUID)[^}]*\}/i
+  const ACT = /\b(?:rm|rmdir|mkdir|mkdtemp|touch|cp|mv|install|rmSync|rmdirSync|mkdirSync|writeFile|writeFileSync|unlinkSync)\b/
+  const NAME = /dsh-[A-Za-z0-9._-]+/
+  /**
+   * The fixed scratch names in one set of sources.
+   * @param {Map<string, string>} sources - file name to its text.
+   * @returns {{file: string, line: number, name: string}[]} one entry per name found.
+   */
+  const fixedScratchNames = (sources) => {
+    const found = []
+    for (const [file, text] of sources) {
+      const lines = text.split('\n')
+      for (const [index, line] of lines.entries()) {
+        const trimmed = line.trim()
+        // Prose cannot create anything, and the comment that DOCUMENTS a fixed name is
+        // exactly where this scan's own subject is described.
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue
+        if (!ROOT_MARKER.test(line) || UNIQUE.test(line)) continue
+        const name = NAME.exec(line)?.[0]
+        if (name === undefined) continue
+        if (!ACT.test(lines.slice(index, index + 2).join('\n'))) continue
+        found.push({ file, line: index + 1, name })
+      }
+    }
+    return found
+  }
+  /**
+   * The fixed scratch names this directory still carries, each with why it is allowed.
+   * Every entry must still be FOUND: an entry whose name is gone is how a table like this
+   * rots, and a name that is not here reddens the row above instead.
+   */
+  const KNOWN_FIXED_SCRATCH = [
+    {
+      file: 'verify-route.mjs',
+      name: 'dsh-wsl-fence-probe.txt',
+      reason: 'a LIVE suite (it needs the running desktop host). The name is the target of the command the fence is expected to REFUSE, and the suite pre-removes it before asserting it is absent — so a concurrent run pre-removing it can turn a real escape into a green. Same fix (a pid suffix); recorded rather than applied because the suite cannot be run here to verify it.',
+    },
+    {
+      file: 'verify-post-restart.mjs',
+      name: 'dsh-wsl-selftest',
+      reason: 'a LIVE suite: a fixed scratch workspace under the session home, created and removed by every run, so two runs destroy each other workspace. Recorded rather than applied: the pid suffix cannot be verified without the host.',
+    },
+    {
+      file: 'verify-post-restart.mjs',
+      name: 'dsh-wsl-win-selftest',
+      reason: 'a LIVE suite: a fixed host-temp directory that is created and NEVER removed — the same class plus a missing cleanup owner. Recorded rather than applied: the fix cannot be verified without the host.',
+    },
+  ]
+  const sources = new Map(readdirSync(here)
+    .filter((name) => name.endsWith('.mjs'))
+    .map((name) => [name, readFileSync(join(here, name), 'utf8')]))
+  const found = fixedScratchNames(sources)
+  const declared = KNOWN_FIXED_SCRATCH.map((entry) => `${entry.file}:${entry.name}`)
+  const undeclared = found.filter((entry) => !declared.includes(`${entry.file}:${entry.name}`))
+  check('no suite creates or removes a FIXED machine-global scratch name (a concurrent run would destroy it), beyond the KNOWN ones',
+    undeclared.length === 0,
+    undeclared.map((entry) => `${entry.file}:${entry.line} ${entry.name}`).join('; '))
+  const stale = declared.filter((key) => !found.map((entry) => `${entry.file}:${entry.name}`).includes(key))
+  check('every KNOWN fixed scratch name is still in the tree (a table that outlives its entries certifies nothing)',
+    stale.length === 0, stale.join('; '))
+  check('the scan read the suites it polices',
+    sources.size >= 20 && [...sources.keys()].includes('verify-world.mjs'),
+    `${sources.size} .mjs file(s) scanned, ${found.length} fixed name(s) found`)
+  // The scan's own decisions, on sources built here: the real directory being clean is
+  // only evidence if this scan can find the shape at all. The names are assembled from a
+  // variable so this file does not carry the literal it is looking for.
+  const FIXTURE_NAME = 'dsh-wsl-' + 'scan-fixture'
+  const built = (lines) => new Map([['fixture.mjs', lines.join('\n')]])
+  const created = built([`const p = home + '/${FIXTURE_NAME}'`, 'await runWslShell({ command: `rm -rf ${p} && mkdir -p ${p}` })'])
+  const perProcess = built([`const p = \`\${home}/${FIXTURE_NAME}-\${process.pid}\``, 'await runWslShell({ command: `rm -rf ${p} && mkdir -p ${p}` })'])
+  const spellingOnly = built([`const foreignProbe = joinWslUnc(otherDistro, '/tmp/${FIXTURE_NAME}')`, 'check(\'a foreign target is not contained\', await isUnderHost(foreignProbe, root) === false)'])
+  check('the scan FINDS a fixed scratch name that is created (the shape this section exists for)',
+    fixedScratchNames(created).length === 1, JSON.stringify(fixedScratchNames(created)))
+  check('the scan accepts the same name once it carries the process id',
+    fixedScratchNames(perProcess).length === 0, JSON.stringify(fixedScratchNames(perProcess)))
+  check('the scan accepts a name the suite only compares (never created)',
+    fixedScratchNames(spellingOnly).length === 0, JSON.stringify(fixedScratchNames(spellingOnly)))
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)

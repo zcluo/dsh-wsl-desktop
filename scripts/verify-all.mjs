@@ -115,11 +115,16 @@ const LIVE = ['verify-route.mjs', 'inspect-live-client.mjs', 'verify-post-restar
  *
  * The list was derived by READING the suites for the branches that set exit 2, not
  * from what they are expected to do on any one machine. Every entry below cites the
- * branch it comes from; a suite whose skip cannot be justified by such a branch is
- * not declared, and its skip fails the run. Adding an entry is a claim about the
- * machine class the suite may skip on: a suite that CAN skip without an entry is a
- * skip that arrives undeclared the day its precondition occurs, and this run fails
- * then, naming it — which is when the question of declaring it is answerable.
+ * branch it comes from — as TEXT, not as a line number, and the stale check below
+ * re-resolves every citation against the file on every run. A line number rots silently:
+ * the pid-suffix commit in this range moved all seven of them at once, and the table went
+ * on pointing at whatever now sat at those numbers. A citation that no longer resolves
+ * fails the run before any suite starts, naming the text it could not find; a suite whose
+ * skip cannot be justified by such a branch is not declared, and its skip fails the run.
+ * Adding an entry is a claim about the machine class the suite may skip on: a suite that
+ * CAN skip without an entry is a skip that arrives undeclared the day its precondition
+ * occurs, and this run fails then, naming it — which is when the question of declaring it
+ * is answerable.
  *
  * A suite with more than one exit-2 branch lists all of them: the aggregate sees one
  * exit code and cannot tell which branch produced it, so an entry that named only
@@ -135,60 +140,67 @@ const LIVE = ['verify-route.mjs', 'inspect-live-client.mjs', 'verify-post-restar
  */
 const DECLARED_SKIPS = [
   {
-    // verify-modules.mjs:95 — the branch tests `!existsSync(DSH_WSL_DEPS ?? <plugin root>/node_modules)`,
+    // verify-modules.mjs — the branch tests `!existsSync(DSH_WSL_DEPS ?? <plugin root>/node_modules)`,
     // which is true when the plugin root carries no node_modules AND when an override names a
     // directory that is not there. Either way lib/index.js cannot be imported, which is the
     // suite's motivating check.
     suite: 'verify-modules.mjs',
+    branch: ['!existsSync(deps)'],
     precondition: 'the dependency directory the suite resolves (DSH_WSL_DEPS when it names one, otherwise the plugin root node_modules) does not exist, so lib/index.js cannot be imported here',
   },
   {
-    // verify-package.mjs:184 — the branch tests `!(status === 0 && a version in stdout)`, so it
+    // verify-package.mjs — the branch tests `!(status === 0 && a version in stdout)`, so it
     // fires for an npm that cannot be spawned, one that exits non-zero, and one that answers
     // without a version.
     suite: 'verify-package.mjs',
+    branch: ['!npmUsable'],
     precondition: 'npm --version cannot be spawned, exits non-zero, or answers without a version, so the packed artifact cannot be produced or inspected here',
   },
   {
-    // verify-fs-fence.mjs:562 — the branch tests `publicationCode === null`, which a missing
+    // verify-fs-fence.mjs — the branch tests `publicationCode === null`, which a missing
     // checkout AND an existing checkout without packages/fs/fs-local/src/fsio.ts both produce;
-    // :683 tests `!otherReachable`, true with no second distribution installed, an empty
+    // and `!otherReachable`, true with no second distribution installed, an empty
     // DSH_WSL_OTHER_DISTRO, one naming this distribution, a resolver that threw, or a resolved
-    // share that does not exist. (Its third exit-2 print, at :452, sits behind the FAIL at :358,
+    // share that does not exist. (Its third exit-2 print sits behind the link-fixture FAIL,
     // so a run that reaches it exits 1: not a skip-only branch.)
     suite: 'verify-fs-fence.mjs',
+    branch: ['publicationCode === null', '!otherReachable'],
     precondition: 'the checkout file packages/fs/fs-local/src/fsio.ts cannot be read (no checkout, or one without it), or there is no second WSL distribution share to compare against (none installed, the override names none or names this one, the resolver failed, or the resolved share does not exist)',
   },
   {
-    // verify-9p.mjs:555 — the branch tests `linkProblem !== ''`, set by any throw while the
+    // verify-9p.mjs — the branch tests `linkProblem !== ''`, set by any throw while the
     // fixture is built through wsl.exe (a cold VM start, a timeout, an unwritable share);
-    // :720 tests `otherDistro === ''`, the same resolver conditions as the entry above.
+    // and `otherDistro === ''`, the same resolver conditions as the entry above.
     suite: 'verify-9p.mjs',
+    branch: ["linkProblem !== ''", "otherDistro === ''"],
     precondition: 'the probe could not build its own symlink fixture through wsl.exe, or there is no second WSL distribution share to compare against (none installed, the override names none or names this one, or its share does not exist)',
   },
   {
     // verify-confinement.mjs — every branch has its OWN precondition, and the entry names all of
-    // them: :454/482/545/560/699 test `windowsToMntPath(helperPathFile) === null` (the checkout
-    // has no /mnt spelling); :518 tests that OR `unshare -r id -u` answering something other
-    // than 0 (no unprivileged user namespace); :981 tests `FIXTURE_SOURCE_MNT === null`, which is
-    // about the HOST TEMP directory, not the checkout; :990 the fixture setup not answering
-    // fixtures-ok; :1041 the grant probe not answering the expected version.
+    // them: `windowsToMntPath(helperPathFile) === null` (the checkout
+    // has no /mnt spelling); that OR `unshare -r id -u` answering something other
+    // than 0 (no unprivileged user namespace); `FIXTURE_SOURCE_MNT === null`, which is
+    // about the HOST TEMP directory, not the checkout; the fixture setup not answering
+    // fixtures-ok; and the grant probe not answering the expected version.
     suite: 'verify-confinement.mjs',
+    branch: ['windowsToMntPath(helperPathFile)', 'mnt === null', 'unshare -r id -u', 'FIXTURE_SOURCE_MNT === null', 'fixtures-ok', 'grantProbe ==='],
     precondition: 'the checkout has no mountable drive path for the shipped helper, the distribution has no unprivileged user namespace, the host temp directory has no /mnt spelling, the fixtures could not be built in the distribution, or the sudoers grant does not cover them',
   },
   {
-    // verify-client-ui.mjs:146 — the branch tests `iconSource === null` after the read is caught,
+    // verify-client-ui.mjs — the branch tests `iconSource === null` after the read is caught,
     // which a missing checkout AND an existing checkout that does not carry
     // packages/client/ui-primitives/src/icons/index.tsx both produce. Measured with --checkout
     // pointed at a directory holding only a package.json: 30 check(s) passed, 1 skipped, exit 2.
     suite: 'verify-client-ui.mjs',
+    branch: ['iconSource === null'],
     precondition: 'the shipped icon source (packages/client/ui-primitives/src/icons/index.tsx) is not readable — no checkout, or one that does not carry that file — so the trigger geometry cannot be checked against the artwork',
   },
   {
-    // verify-client-dom.mjs:56 — the branch is the catch around
+    // verify-client-dom.mjs — the branch is the catch around
     // `createRequire(join(checkout, 'package.json'))('jsdom')`, which throws for a missing
     // checkout AND for an existing one without the dependency.
     suite: 'verify-client-dom.mjs',
+    branch: ["createRequire(join(checkout, 'package.json'))"],
     precondition: 'there is no harness checkout to resolve jsdom from, or jsdom is not installed in one, so the browser half cannot be run in a real DOM',
   },
 ]
@@ -269,9 +281,41 @@ function callBody(source, openIndex) {
 }
 
 /**
+ * Whether a ternary is still open in the text read so far.
+ *
+ * A depth-0 `?` counts unless it is optional chaining (`?.`) or half of a nullish
+ * coalescing (`??`), and a depth-0 `:` answers one. A `?` or `:` inside brackets,
+ * parentheses or braces belongs to something nested and is skipped. A `?` inside a REGEX
+ * literal is counted as a ternary: blankLiterals does not parse regexes, and the direction
+ * that errs in is the safe one — a longer expression can only add outcomes.
+ * @param {string} text - one statement's text so far.
+ * @returns {boolean} whether an unanswered `?` remains.
+ */
+function ternaryOpen(text) {
+  let depth = 0
+  let open = 0
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '(' || char === '[' || char === '{') depth += 1
+    else if (char === ')' || char === ']' || char === '}') depth -= 1
+    else if (depth !== 0) continue
+    else if (char === '?' && text[index + 1] !== '.' && text[index - 1] !== '?') open += 1
+    else if (char === ':' && open > 0) open -= 1
+  }
+  return open > 0
+}
+
+/**
  * The rest of the statement after `process.exitCode =`, up to the `;` or the newline
- * that closes it. A wrapped expression keeps going while the text so far ends on an
- * operator, so a ternary written over several lines is read whole.
+ * that closes it.
+ *
+ * A wrapped expression keeps going past a newline in TWO cases, both measured spellings
+ * rather than guesses: the text so far ends on an operator (a ternary broken after its
+ * `?`), or a depth-0 `?` is still unanswered (a ternary broken after its TRUE branch —
+ * `process.exitCode = failures > 0 ? 1` / `  : skipped > 0 ? 2 : 0`). The second case
+ * was missing, and it is the one an editor produces when a line grows: the reader stopped
+ * at the first newline, saw `failures > 0 ? 1`, concluded this suite's exit code could
+ * not be 2, and failed the whole aggregate with a STALE declaration on a healthy tree.
  * @param {string} source - the source text.
  * @param {number} startIndex - the index just after the `=`.
  * @returns {string} the assigned expression.
@@ -284,8 +328,9 @@ function statementTail(source, startIndex) {
     else if (char === ')' || char === ']' || char === '}') depth -= 1
     else if (depth === 0 && char === ';') return source.slice(startIndex, index)
     else if (depth === 0 && char === '\n') {
-      if (/[?:,|&+*=(<>-]$/.test(source.slice(startIndex, index).trimEnd())) continue
-      return source.slice(startIndex, index)
+      const soFar = source.slice(startIndex, index)
+      if (/[?:,|&+*=(<>-]$/.test(soFar.trimEnd()) || ternaryOpen(soFar)) continue
+      return soFar
     }
   }
   return source.slice(startIndex)
@@ -329,6 +374,24 @@ function canExitTwo(source) {
   return exitCodeExpressions(source).some(canBeTwo)
 }
 
+/**
+ * Whether one branch citation still resolves in the suite it cites.
+ *
+ * Two arms, because a citation legitimately lives in either place: the BLANKED arm
+ * compares code against code, blanking both sides so a citation that carries a string
+ * literal still matches (a citation of a command the suite runs lives inside a literal,
+ * and blanking the file removes that body), and the RAW arm covers exactly that case.
+ * The raw arm can also be satisfied by prose, which is the honest limit of a text
+ * citation: it proves the entry points at text the file carries, not that the text sits
+ * on the exit-2 path.
+ * @param {string} source - the suite's source, raw.
+ * @param {string} citation - the cited text.
+ * @returns {boolean} whether it resolves.
+ */
+function citationResolves(source, citation) {
+  return blankLiterals(source).includes(blankLiterals(citation)) || source.includes(citation)
+}
+
 // Every declaration must still be LIVE. A declared suite whose own exit-code
 // expression cannot be 2 can never skip anywhere — however many exit-2 shapes it
 // mentions — so the entry has rotted: a renamed suite, a deleted skip branch, an
@@ -342,7 +405,7 @@ function canExitTwo(source) {
 // reports it (see below).
 {
   const stale = []
-  for (const { suite } of DECLARED_SKIPS) {
+  for (const { suite, branch } of DECLARED_SKIPS) {
     if (!suites.includes(suite)) {
       stale.push(`${suite} is not in the suite list, so the declaration can never apply`)
       continue
@@ -357,12 +420,22 @@ function canExitTwo(source) {
     // (several do) must not be read as one that performs it, and blankLiterals is this
     // repository's one owner for that pass.
     if (source === null) stale.push(`${suite} is not readable as a suite of this directory`)
-    else if (!canExitTwo(blankLiterals(source))) stale.push(`${suite} has no exit-code expression that can be 2, so it cannot skip`)
+    // The citation is checked BEFORE the exit expression, because a citation that no
+    // longer resolves is the same class one step earlier: the entry describes a branch
+    // this file does not have any more, so what it certifies is unknown rather than false.
+    else if (!Array.isArray(branch) || branch.length === 0) {
+      stale.push(`${suite} declares no branch citation, so the entry cannot be checked against the suite it declares`)
+    } else {
+      const unresolved = branch.filter((citation) => !citationResolves(source, citation))
+      if (unresolved.length > 0) stale.push(`${suite} cites branch text it no longer carries: ${JSON.stringify(unresolved)}`)
+      else if (!canExitTwo(blankLiterals(source))) stale.push(`${suite} has no exit-code expression that can be 2, so it cannot skip`)
+    }
   }
   if (stale.length > 0) {
     console.log(`\nFAIL  a declared skip is STALE — the suite it names cannot skip any more: ${stale.join('; ')}`)
-    console.log('      A declaration is honest only while the skip it describes is possible. Remove the entry,')
-    console.log('      or restore the exit-2 branch of the suite it names.')
+    console.log('      A declaration is honest only while the skip it describes is possible AND the entry still')
+    console.log('      points at it: remove the entry, restore the exit-2 branch, or re-point its branch citation')
+    console.log('      at the text that branch carries now.')
     process.exit(1)
   }
   console.log(`declared-skip table clean across ${DECLARED_SKIPS.length} suite(s)`)

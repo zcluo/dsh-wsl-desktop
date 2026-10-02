@@ -101,6 +101,34 @@ const PRECONDITION_TOKEN = 'no /mnt spelling'
 const REMEDY_TOKEN = 'run the suite from a checkout on a Windows drive'
 
 /**
+ * What one child run WAS, rather than the single number spawnSync reports.
+ *
+ * spawnSync funnels several endings through one `status`, and `?? 1` reads every one of
+ * them as "the suite exited 1" — the conflation verify-all.mjs fixed for itself (its
+ * outcomeOf), and it matters here because this pin asserts a CHILD's exit code: a child
+ * pin killed at this helper's own ceiling would satisfy a row claiming the pin REDDENED.
+ * Measured endings on this platform (Windows, Node 24), the same table the aggregate
+ * carries: a ceiling kill is status null + signal SIGKILL + error ETIMEDOUT, a spawn that
+ * never happened is null/null/ENOENT, and a normal exit is the status alone. A child killed
+ * by a signal from elsewhere is reported exactly like one that exited 1, so this identifies
+ * the endings THIS helper produces itself and claims nothing about the others.
+ * @param {import('node:child_process').SpawnSyncReturns<string>} run - the finished run.
+ * @param {number} elapsedMs - how long the helper waited.
+ * @param {number} ceilingMs - the ceiling it waited under.
+ * @returns {{code: number, how: 'exited'|'ceiling'|'signalled'|'unstarted', note: string}} the outcome.
+ */
+function outcomeOf(run, elapsedMs, ceilingMs) {
+  const { status, signal } = run
+  const error = run.error ?? null
+  const seconds = (elapsedMs / 1000).toFixed(1)
+  const outOfTime = error?.code === 'ETIMEDOUT' || (status === null && signal !== null && elapsedMs >= ceilingMs)
+  if (outOfTime) return { code: 1, how: 'ceiling', note: `killed at this pin's ${(ceilingMs / 1000).toFixed(1)}s ceiling after ${seconds}s — it did not finish` }
+  if (status === null && signal !== null) return { code: 1, how: 'signalled', note: `killed by ${signal} after ${seconds}s — it did not finish` }
+  if (status === null) return { code: 1, how: 'unstarted', note: `could not be started${error === null ? ' (no exit status and no error)' : `: ${error.code ?? error.message}`}` }
+  return { code: status, how: 'exited', note: '' }
+}
+
+/**
  * Run one suite in a child process with an explicit environment.
  *
  * `DSH_CONFINEMENT_SKIP_SUITE` is removed from the inherited environment first:
@@ -108,20 +136,23 @@ const REMEDY_TOKEN = 'run the suite from a checkout on a Windows drive'
  * into an unrelated child) would make a later run think it is the mutant.
  * @param {Record<string, string>} env - overrides applied after the removal.
  * @param {string} [suite] - the suite to run; the mutation section points this elsewhere.
- * @returns {{code: number, out: string}} the child's exit code and combined output.
+ * @param {number} [timeoutMs] - the ceiling; shortened only by the runner rows below.
+ * @returns {{code: number, how: string, note: string, out: string}} the child's ending and combined output.
  */
-function runSuite(env, suite = suitePath) {
+function runSuite(env, suite = suitePath, timeoutMs = 300_000) {
   const childEnv = { ...process.env }
   delete childEnv.DSH_CONFINEMENT_SKIP_SUITE
   Object.assign(childEnv, env)
+  const startedAt = Date.now()
   const run = spawnSync(process.execPath, [suite], {
     encoding: 'utf8',
-    timeout: 300_000,
+    timeout: timeoutMs,
     killSignal: 'SIGKILL',
     env: childEnv,
   })
-  // A killed run settles as a null status; report it as a failure rather than as an absent code.
-  return { code: run.status ?? 1, out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
+  // The ending, not merely the number: a killed run has no status at all, and reporting
+  // that as "exit 1" is what let a kill satisfy an assertion about a reddened pin.
+  return { ...outcomeOf(run, Date.now() - startedAt, timeoutMs), out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
 }
 
 /**
@@ -260,7 +291,7 @@ function assertDrivePathSkip(run) {
   const runnerMatch = /^ {8}runner=(\S+)$/m.exec(run.out)
   const detectedHelper = runnerMatch !== null && runnerMatch[1] === 'helper'
   check(EXIT2_LABEL,
-    run.code === 2,
+    run.how === 'exited' && run.code === 2,
     `exit ${run.code}; the run's FAIL/SKIP lines and its end:\n${failureLinesOf(run.out)}\n${tailOf(run.out)}`)
   check('drive-path-free run: NO check FAILS — the missing precondition is not a defect',
     failLines.length === 0,
@@ -337,9 +368,9 @@ if (!isInnerRun) {
   // nothing — the count is what this pin is pinning.
   const childPin = runSuite({ DSH_CONFINEMENT_SKIP_SUITE: countCopy.path }, pinPath)
   rmSync(countCopy.tree, { recursive: true, force: true })
-  check('count mutant: THIS PIN reddens on it (exit 1)',
-    childPin.code === 1,
-    `exit ${childPin.code}; the child pin's FAIL lines and its end:\n${failureLinesOf(childPin.out)}\n${tailOf(childPin.out)}`)
+  check('count mutant: THIS PIN reddens on it (exited 1, not killed on the way)',
+    childPin.how === 'exited' && childPin.code === 1,
+    `exit ${childPin.code} (${childPin.how}: ${childPin.note}); the child pin's FAIL lines and its end:\n${failureLinesOf(childPin.out)}\n${tailOf(childPin.out)}`)
   check('count mutant: the row it reddens on is the exit-2 assertion',
     childPin.out.includes(`  FAIL  ${EXIT2_LABEL}`),
     failureLinesOf(childPin.out))
@@ -353,6 +384,41 @@ if (!isInnerRun) {
   check('count mutant: and it declares a clean profile while doing so (exit 0, no counted tail)',
     childPin.out.includes('ALL CHECKS PASSED') && childPin.out.includes('CHECK(S) SKIPPED') === false,
     tailOf(childPin.out, 8))
+}
+
+if (!isInnerRun) {
+  console.log('\nthe runner distinguishes what it stopped (the aggregate learned this; so does this helper)')
+  // spawnSync funnels several endings through one `status`, and `?? 1` reports every one of
+  // them as "exited 1" — so a child pin KILLED at this helper's own ceiling satisfied the
+  // row above, which claims the pin REDDENED. One ending is PRODUCED (a suite that never
+  // finishes); the other three are read through the reporter's own decision table, whose
+  // shapes are the aggregate's measured ones.
+  const scratch = mkdtempSync(join(tmpdir(), 'dsh-confinement-skip-runner-'))
+  const hangPath = join(scratch, 'hang.mjs')
+  writeFileSync(hangPath, 'setTimeout(() => {}, 60_000)\n')
+  const killed = runSuite({}, hangPath, 900)
+  check('a child killed at the runner\'s ceiling is reported as a kill, not as an exit 1',
+    killed.how === 'ceiling' && killed.code === 1 && /did not finish/.test(killed.note),
+    { how: killed.how, code: killed.code, note: killed.note })
+  // The other endings are pinned through the reporter's own decision table, because the
+  // helper always spawns process.execPath — which EXISTS, so a missing suite is node
+  // exiting 1 with "cannot find module" (measured), not a spawn that never happened. The
+  // shapes are the aggregate's measured ones; the backstop is why the signalled case runs
+  // inside the ceiling (a null status with a signal AT the ceiling is the ceiling).
+  const endings = [
+    [{ status: null, signal: 'SIGKILL', error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 900, 'ceiling'],
+    [{ status: null, signal: 'SIGTERM', error: null }, 400, 'signalled'],
+    [{ status: null, signal: null, error: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }) }, 10, 'unstarted'],
+    [{ status: 2, signal: null, error: null }, 40, 'exited'],
+  ]
+  for (const [run, elapsed, want] of endings) {
+    const got = outcomeOf(run, elapsed, 900)
+    check(`the reporter reads the ${want} ending as ${want}`, got.how === want, { how: got.how, note: got.note })
+  }
+  check('a run that never started names the reason rather than only the ending',
+    /ENOENT/.test(outcomeOf({ status: null, signal: null, error: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }) }, 10, 900).note),
+    outcomeOf({ status: null, signal: null, error: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }) }, 10, 900).note)
+  rmSync(scratch, { recursive: true, force: true })
 }
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
