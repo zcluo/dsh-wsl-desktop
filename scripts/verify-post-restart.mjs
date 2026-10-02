@@ -206,7 +206,11 @@ console.log('\nsession-level acceptance')
 // right to reject, and the two confinement assertions downstream of it never
 // engaged. A scratch directory under the home is accepted, and is removed again
 // below.
-const wslScratch = `${home}/.dsh-wsl-selftest`
+// Process-unique, like the confinement suite's scratch paths (verify-confinement.mjs:84-98
+// measured two overlapping runs sharing a machine-global name destroying each other in 24 of
+// 24 runs). A fixed name here also means one run's opening `rm -rf` deletes another run's
+// scratch while that run is still measuring it.
+const wslScratch = `${home}/.dsh-wsl-selftest-${process.pid}`
 await call('execInWsl', { cwd: home, distro, command: `rm -rf ${wslScratch} && mkdir -p ${wslScratch}` })
 const selftest = await call('selftest', { preset: 'wsl-standard', cwd: `\\\\wsl.localhost\\${distro}${wslScratch}` }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
 const step = (name) => selftest.steps.find((entry) => entry.name === name)
@@ -246,8 +250,17 @@ check('the tool layer confines a write outside the workspace', confinedTool?.san
 check('the tool layer reports the same completeness', confinedTool?.sandbox?.enforcement === 'partial', confinedTool?.sandbox)
 
 // The scratch workspace is removed again, so a run leaves nothing behind in the
-// home — the fixture file it holds lives inside it.
-await call('execInWsl', { cwd: home, distro, command: `rm -rf ${wslScratch}` }).catch(() => ({ exitCode: -1 }))
+// home — the fixture file it holds lives inside it. The removal REPORTS its own outcome: the
+// previous `.catch(() => ({ exitCode: -1 }))` turned every failure into a value nobody read, so
+// "nothing is left behind" was a claim with no evidence and no owner.
+const scratchCleanup = await call('execInWsl', {
+  cwd: home,
+  distro,
+  command: `rm -rf "${wslScratch}" && test ! -e "${wslScratch}" && echo SCRATCH-REMOVED`,
+}).catch((error) => ({ exitCode: -1, error: error.message }))
+check('the selftest scratch directory is removed again, and the removal says so',
+  scratchCleanup.exitCode === 0 && String(scratchCleanup.stdout ?? '').includes('SCRATCH-REMOVED'),
+  scratchCleanup)
 
 // The other half of "one process, two worlds": a Windows workspace must keep the
 // host execution world. Selecting the host preset explicitly is what the GUI
@@ -260,17 +273,24 @@ console.log('\nwindows workspace unaffected')
 // everywhere — so tool-pwsh reported an environment mismatch that this gate then
 // blamed on the plugin. A scratch directory under the system temp is contained
 // BY the temp root rather than containing it, which is the direction that matters.
-const windowsRoot = join(tmpdir(), 'dsh-wsl-win-selftest')
+// Process-unique for the same reason as `wslScratch` above, and removed in a `finally`: this
+// root is created by THIS suite under the system temp, so a run that throws must still not
+// leave it behind — `rmSync`/'rm' nowhere else in this file touched it before.
+const windowsRoot = join(tmpdir(), `dsh-wsl-win-selftest-${process.pid}`)
 await mkdir(windowsRoot, { recursive: true })
-const win = await call('selftest', { preset: 'standard', cwd: windowsRoot }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
-const winStep = (name) => win.steps.find((entry) => entry.name === name)
-check('a Windows workspace stays on the host preset', winStep('select')?.composed === 'standard', winStep('select'))
-// 0.1.7: the host registers its own shell at the root scope, so a Windows
-// session's shell.service IS found — the assertion is that it is NOT the WSL
-// realm's confining executor (whose prototype carries confinementFor).
-check('no realm-scoped shell is mounted', !(winStep('shell.service')?.proto ?? '').includes('confinementFor'), winStep('shell.service'))
-check('the host PowerShell tool works', (winStep('tools.pwsh')?.text ?? '').includes('"isError":false'), winStep('tools.pwsh')?.text?.slice(0, 160))
-check('no bash tool exists in the host world', (winStep('tools.bash')?.text ?? '').includes('UNKNOWN_TOOL'), winStep('tools.bash')?.text?.slice(0, 160))
+try {
+  const win = await call('selftest', { preset: 'standard', cwd: windowsRoot }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
+  const winStep = (name) => win.steps.find((entry) => entry.name === name)
+  check('a Windows workspace stays on the host preset', winStep('select')?.composed === 'standard', winStep('select'))
+  // 0.1.7: the host registers its own shell at the root scope, so a Windows
+  // session's shell.service IS found — the assertion is that it is NOT the WSL
+  // realm's confining executor (whose prototype carries confinementFor).
+  check('no realm-scoped shell is mounted', !(winStep('shell.service')?.proto ?? '').includes('confinementFor'), winStep('shell.service'))
+  check('the host PowerShell tool works', (winStep('tools.pwsh')?.text ?? '').includes('"isError":false'), winStep('tools.pwsh')?.text?.slice(0, 160))
+  check('no bash tool exists in the host world', (winStep('tools.bash')?.text ?? '').includes('UNKNOWN_TOOL'), winStep('tools.bash')?.text?.slice(0, 160))
+} finally {
+  await rm(windowsRoot, { recursive: true, force: true })
+}
 
 console.log('\nworkspace dialog host contract')
 // The dialog drives THREE route methods, and each row now reads its OWN answer: the client
