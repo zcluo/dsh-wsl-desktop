@@ -45,6 +45,31 @@ async function until(predicate, timeoutMs = 15_000) {
   return false
 }
 
+/**
+ * Wait until the PTY reports that the SHELL owns the terminal, or that it does not.
+ *
+ * Ownership is the condition, never a duration: `sleep 60` prints nothing of its own and
+ * the marker the suite waits for is satisfied by the terminal's own ECHO of the typed
+ * line, so neither is evidence that a job took the terminal. `foreground` asks the PTY
+ * (tcgetpgrp) which group holds it — the same reading `activity` compares against — so
+ * the condition and the observation are the same fact.
+ * @param {number} shellPgrp - the group the PTY reported for the idle shell.
+ * @param {boolean} owned - true to wait for the shell to hold the terminal, false for a job.
+ * @param {number} timeoutMs - how long to keep asking.
+ * @returns {Promise<{settled: boolean, last: unknown}>} the outcome and the last reading.
+ */
+async function untilOwnership(shellPgrp, owned, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let last = 'no reading'
+  for (;;) {
+    const reading = await controlRequest({ op: 'foreground' })
+    last = typeof reading.pgrp === 'number' ? reading.pgrp : reading
+    if (typeof reading.pgrp === 'number' && (reading.pgrp === shellPgrp) === owned) return { settled: true, last }
+    if (Date.now() >= deadline) return { settled: false, last }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+}
+
 console.log('bridge structural gates (offline)')
 // A FIFO read end whose writer has CLOSED is always select-readable and returns
 // b"", so leaving it in the watch set spun the pump loop at 100% CPU for the
@@ -72,6 +97,97 @@ const windowsCwd = process.env.SystemRoot ?? process.cwd()
 // a terminal emulator can give — the real Web terminal answers through xterm.js,
 // while a headless check has nothing to answer with.
 const shellArgv = ['/bin/bash', '--noprofile', '--norc', '-i']
+
+// --- the dose: one session cannot pin a race ----------------------------------------
+//
+// The session rows below exist for one defect: the group recorded at spawn was READ from
+// the OS, which raced the child's own `setsid()` and recorded the group the child had
+// INHERITED — this bridge's own — whenever the parent got there first. One session meets
+// that race only sometimes: measured on this code path, 51/300 (17.0%), 142/600 (23.7%)
+// and 39/600 (6.5%) under CPU load, and 10/300 interleaved against 3/400 on an idle
+// machine, while the same read 1 ms later never lost it (250/250). A single session is
+// therefore a pin a regression can sit behind, so DOSE short sessions are opened and EVERY
+// one must announce its own group — compared against the pid the bridge itself reported,
+// which needs no shell to be running.
+//
+// Each session runs `/bin/true` and ends on its own: the bridge reaps it, exits and
+// unlinks its own FIFO, so nothing has to be killed or cleaned up. The program does not
+// change the race — measured interleaved in ONE process, an interactive bash and `/bin/true`
+// lost it 10/300 times each.
+const SPAWN_DOSE = 6
+
+/**
+ * Open one short session and report what the bridge announced at spawn.
+ * @param {string[]} [prefix] - command the bridge is launched through (the starvation tool).
+ * @returns {Promise<{announce: object|undefined, exit: number|null, diagnostics: string[]}>} the announce reply, the session's exit code, and its own stderr.
+ */
+async function announceOnce(prefix = []) {
+  const fifo = `/tmp/dsh-pty-${randomUUID().slice(0, 8)}.fifo`
+  const child = spawn('wsl.exe', [...base, ...prefix, 'python3', '-c', bridgeSource, fifo, '80', '24', '/bin/true'], {
+    cwd: windowsCwd, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+  })
+  let announce
+  let buffer = ''
+  const diagnostics = []
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => {
+    buffer += chunk
+    while (buffer.includes('\n')) {
+      const index = buffer.indexOf('\n')
+      const line = buffer.slice(0, index)
+      buffer = buffer.slice(index + 1)
+      if (!line.startsWith('#dsh-pty ')) {
+        // The session's own diagnostics: what a missing starvation tool or a python3 that
+        // cannot run the source looks like, and what the rows below report.
+        if (line.trim() !== '') diagnostics.push(line.trim().slice(0, 200))
+        if (diagnostics.length > 6) diagnostics.shift()
+        continue
+      }
+      try {
+        const parsed = JSON.parse(line.slice('#dsh-pty '.length))
+        if (parsed.event === 'started') announce = parsed
+      } catch {
+        // A reply this suite cannot read is not this row's subject: the row below reports
+        // a session that announced nothing as a failure instead of passing vacuously.
+      }
+    }
+  })
+  const exit = await new Promise((resolve) => {
+    child.on('close', (code) => resolve(code))
+    child.on('error', () => resolve(null))
+  })
+  return { announce, exit, diagnostics }
+}
+
+const dose = []
+for (let opened = 0; opened < SPAWN_DOSE; opened += 1) dose.push(await announceOnce())
+const wrongGroups = dose.filter((entry) => typeof entry.announce?.pgrp !== 'number' || entry.announce.pgrp !== entry.announce.pid)
+check(`every one of ${SPAWN_DOSE} extra sessions announces its OWN process group`,
+  wrongGroups.length === 0,
+  `${wrongGroups.length} of ${SPAWN_DOSE} did not: ${JSON.stringify(wrongGroups.slice(0, 3))} (exit codes ${JSON.stringify(dose.map((entry) => entry.exit))})`)
+
+// --- the starved spawn: the race, held still ----------------------------------------
+//
+// On ONE CPU the parent keeps the processor after `fork()`, so the child is not scheduled
+// at all before the parent reads — the losing side of the race, made a property instead of
+// left to the machine's mood. Measured with the racy read (the mutation that reddens this
+// row): 294/300 and 299/300 spawns recorded the group the child had INHERITED with the
+// bridge pinned to one CPU (`taskset -c 0`, and `-c 0` plus two busy loops on that CPU),
+// against 11/300 and 45/300 unpinned in the same session. It is what makes the row below
+// fail on EVERY run rather than one run in five, which the unpinned dose cannot promise.
+//
+// `taskset` is util-linux (a busybox applet too), so its absence is reported as its own
+// row: the property row below must fail because a WRONG GROUP was announced, never because
+// this machine could not starve the session.
+const STARVED_PREFIX = ['taskset', '-c', '0']
+const starved = await announceOnce(STARVED_PREFIX)
+check('the starved session runs, so the row below is about the group it announced',
+  starved.announce !== undefined && starved.exit === 0,
+  `exit=${String(starved.exit)} announce=${JSON.stringify(starved.announce)} stderr=${JSON.stringify(starved.diagnostics)}`)
+check('a session starved onto ONE CPU still announces its OWN process group',
+  typeof starved.announce?.pgrp === 'number' && starved.announce.pgrp === starved.announce.pid,
+  `announced=${String(starved.announce?.pgrp)} pid=${String(starved.announce?.pid)} — with one CPU the racy read recorded the group the child had INHERITED, which is this bridge's own`)
+
 const data = spawn('wsl.exe', [...base, 'python3', '-c', bridgeSource, fifo, '80', '24', ...shellArgv], {
   cwd: windowsCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
 })
@@ -212,16 +328,48 @@ check('the shell observes the new window size', await until(() => /\b40 120\b/.t
 const foreground = await controlRequest({ op: 'foreground' })
 check('the foreground process group is readable', foreground.ok === true && typeof foreground.pgrp === 'number', foreground)
 
+// The PTY is the reference for the rows below: `foreground` asks the terminal itself
+// (tcgetpgrp) while `started.pgrp` is what the bridge RECORDED at spawn, so comparing
+// them compares a reading against a record rather than a value against itself.
+//
+// Reading that record raced the child's own `setsid()`: measured on this production code
+// path in this distribution, 51/300 (17.0%), 142/600 (23.7%) and 39/600 (6.5%) of spawns
+// recorded the group the child INHERITED — the bridge's own — while a fresh read of the
+// same child 1 ms later answered with its own group 250/250 times. A group recorded that
+// way never corrects itself, so `activity` compared the PTY's answer against a group the
+// session was never in and reported an IDLE shell BUSY for the life of the session; the
+// retention policy that reclaims an unattended terminal acts only on `idle`, so such a
+// session was never reclaimed.
+const idlePgrp = typeof foreground.pgrp === 'number' ? foreground.pgrp : -1
+check('the group announced at spawn is the group the PTY reports for the idle shell',
+  typeof started?.pgrp === 'number' && started.pgrp === idlePgrp,
+  `announced=${String(started?.pgrp)} pid=${String(started?.pid)} pty=${String(foreground.pgrp)}`)
+
 const activity = await controlRequest({ op: 'activity' })
-check('activity is reported as a known state', ['idle', 'busy', 'unknown'].includes(activity.state), activity)
+check('an idle shell is reported idle, not busy',
+  activity.state === 'idle',
+  `state=${String(activity.state)} announced=${String(started?.pgrp)} pid=${String(started?.pid)} pty=${String(foreground.pgrp)} revision=${String(activity.revision)}`)
 
 const interrupted = out.length
 data.stdin.write('sleep 60\r')
 await until(() => out.length > interrupted, 3000)
+// The other half of the same property: a bridge that answered `idle` unconditionally
+// would satisfy the rows above while telling the retention policy to reclaim a session
+// that is still running a job, so the busy state is asserted where it is observable.
+const jobOwns = await untilOwnership(idlePgrp, false, 20_000)
+const busy = await controlRequest({ op: 'activity' })
+check('a foreground job is reported busy, so idle is not answered unconditionally',
+  jobOwns.settled && busy.state === 'busy',
+  `the job owns the terminal=${String(jobOwns.settled)} lastForeground=${JSON.stringify(jobOwns.last)} state=${String(busy.state)} shellPgrp=${String(idlePgrp)}`)
 const signalled = await controlRequest({ op: 'signal', signal: 'SIGINT' })
 check('a signal reaches the foreground group', signalled.ok === true, signalled)
 data.stdin.write('echo ALIVE-25\r')
 check('the shell survives the interrupt', await until(() => out.includes('ALIVE-25')), JSON.stringify(out.slice(-300)))
+const shellOwns = await untilOwnership(idlePgrp, true, 10_000)
+const idleAgain = await controlRequest({ op: 'activity' })
+check('the session reports idle again once the shell owns the terminal',
+  shellOwns.settled && idleAgain.state === 'idle',
+  `the shell owns the terminal=${String(shellOwns.settled)} lastForeground=${JSON.stringify(shellOwns.last)} state=${String(idleAgain.state)}`)
 
 // --- malformed control payloads: the bridge's own guarantee -----------------
 //

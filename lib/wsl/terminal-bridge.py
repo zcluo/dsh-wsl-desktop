@@ -150,7 +150,27 @@ class Bridge:
             except OSError:
                 pass
             os._exit(127)
-        self.shell_pgrp = os.getpgid(self.pid)
+        # The session's OWN group, which is this child's pid. `pty.fork()` makes the
+        # child a session leader with this PTY as its controlling terminal — that is
+        # the stdlib function's documented contract, and why it can be relied on —
+        # and a session leader's process group IS its own pid: it can neither join
+        # another group (setpgid answers EPERM for a session leader) nor start a new
+        # session. Reading `os.getpgid(self.pid)` here instead — the shape this
+        # replaced — RACED the child's own `setsid()` and answered the group the child
+        # had INHERITED, this bridge's own, whenever it got there first. Measured on
+        # this code path in the distribution this ships on: 51/300 (17.0%), 142/600
+        # (23.7%) and 39/600 (6.5%) of spawns recorded the inherited group, while the
+        # same read 1 ms later answered with the child's own group 250/250 times.
+        #
+        # A group recorded that way never corrects itself: `tcgetpgrp()` reports the
+        # child's real group, so the comparison in `activity()` never matches and an
+        # IDLE shell is reported BUSY for the life of the session — the retention
+        # policy that reclaims an unattended terminal acts only on `idle`. Measured
+        # through the host-visible protocol in scripts/verify-terminal.mjs: the
+        # announced group came back as the bridge's own pid and `activity` answered
+        # "busy" for a shell sitting at its prompt. `terminate()` reads this value
+        # too, as the group to signal when the PTY reports no foreground group.
+        self.shell_pgrp = self.pid
         reply({"event": "started", "pid": self.pid, "pgrp": self.shell_pgrp})
 
     def resize(self, cols, rows):
