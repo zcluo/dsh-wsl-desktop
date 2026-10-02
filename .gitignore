@@ -14,9 +14,13 @@ pnpm-debug.log*
 
 # Verification residue (a suite that throws mid-run can leave these behind).
 # /%SystemDrive%/ is an unexpanded cmd-style %VAR% one: something ran with this
-# repo as its CWD and built the Windows chain under a literal folder name. Git
-# cannot even report it while the tree holds no files, so the rule is what keeps
-# it visible to a future cleanup. The writer is unidentified.
+# repo as its CWD and built the Windows chain under a literal folder name. The
+# writer is unidentified. This rule HIDES the path; it protects nothing and
+# schedules no cleanup — measured in a scratch repo: with no rule `git clean
+# -fdn` reports the empty directory, with the rule it does not, and `git status
+# --ignored -uall` does not list it either (git cannot see an empty directory).
+# Only `git clean -Xdn` shows what is being kept out. That is the intent — the
+# junk must never be committed — but finding it again is a manual job.
 /tmp-probe/
 /%SystemDrive%/
 _debug-*.mjs
