@@ -155,8 +155,13 @@ check('the host half uses the same header name', DEV_TOKEN_HEADER === HOST_TOKEN
 // there. `existsSync` under the share root is the only channel the fence check has, so the
 // positive control further down proves that channel can see this write at all.
 const probeFile = `/tmp/dsh-wsl-fence-probe-${process.pid}.txt`
+rmSync(`${shareRoot}${probeFile}`, { force: true })
+// The removal is on the line AFTER the spelling ON PURPOSE: verify-all-skip's section H scans
+// for exactly this shape (a `dsh-` name under a fixed root, spelled without a pid, created or
+// removed within one line of where it is spelled) and accepts this one only because of the pid.
+// Putting an intermediate const between the spelling and the removal would move this file
+// outside the scan's window, and a dropped suffix would then be undetectable.
 const probeHostPath = `${shareRoot}${probeFile}`
-rmSync(probeHostPath, { force: true })
 const probeAbsentBefore = !existsSync(probeHostPath)
 check('the escape probe starts from an absent path, so its absence below is a change this run made',
   probeAbsentBefore, `path=${probeHostPath} exists=${!probeAbsentBefore}`)

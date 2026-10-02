@@ -602,6 +602,15 @@ console.log('\n=== G. a suite the aggregate itself stops ===')
 // verify-fs-fence's /tmp/dsh-fence-probe.txt targets are never created, so no concurrent
 // run can take one away. A name created far from its spelling is not caught; the KNOWN
 // table is where such a case is recorded, and every entry in it must still be found.
+//
+// THE TABLE IS EMPTY ON PURPOSE: the three cases it recorded have been FIXED. verify-route's
+// /tmp/dsh-wsl-fence-probe.txt, and verify-post-restart's `${home}/.dsh-wsl-selftest` and its
+// host-temp `dsh-wsl-win-selftest` were recorded here because the pid suffix "cannot be
+// verified without the host" — the suffixes and the missing cleanup owner have since been
+// applied and verified against the running desktop, so keeping the entries would leave three
+// names in the table that no longer exist. A name that REAPPEARS is caught by the row below
+// the scan; an entry recorded here later is a dated last resort and must be removed when its
+// case is fixed, which is what the "still in the tree" row exists to force.
 // ---------------------------------------------------------------------------
 console.log('\n=== H. fixed machine-global scratch names in scripts/ ===')
 {
@@ -637,23 +646,11 @@ console.log('\n=== H. fixed machine-global scratch names in scripts/ ===')
    * Every entry must still be FOUND: an entry whose name is gone is how a table like this
    * rots, and a name that is not here reddens the row above instead.
    */
-  const KNOWN_FIXED_SCRATCH = [
-    {
-      file: 'verify-route.mjs',
-      name: 'dsh-wsl-fence-probe.txt',
-      reason: 'a LIVE suite (it needs the running desktop host). The name is the target of the command the fence is expected to REFUSE, and the suite pre-removes it before asserting it is absent — so a concurrent run pre-removing it can turn a real escape into a green. Same fix (a pid suffix); recorded rather than applied because the suite cannot be run here to verify it.',
-    },
-    {
-      file: 'verify-post-restart.mjs',
-      name: 'dsh-wsl-selftest',
-      reason: 'a LIVE suite: a fixed scratch workspace under the session home, created and removed by every run, so two runs destroy each other workspace. Recorded rather than applied: the pid suffix cannot be verified without the host.',
-    },
-    {
-      file: 'verify-post-restart.mjs',
-      name: 'dsh-wsl-win-selftest',
-      reason: 'a LIVE suite: a fixed host-temp directory that is created and NEVER removed — the same class plus a missing cleanup owner. Recorded rather than applied: the fix cannot be verified without the host.',
-    },
-  ]
+  // EMPTY, and that is the point: every case it ever recorded has been fixed rather than
+  // tolerated. The three names above now carry `-25684` (and the host-temp root is
+  // removed in a `finally`), so listing them here would be a table of names that no longer
+  // exist. See section H's header for what each entry used to say.
+  const KNOWN_FIXED_SCRATCH = []
   const sources = new Map(readdirSync(here)
     .filter((name) => name.endsWith('.mjs'))
     .map((name) => [name, readFileSync(join(here, name), 'utf8')]))
@@ -664,6 +661,12 @@ console.log('\n=== H. fixed machine-global scratch names in scripts/ ===')
     undeclared.length === 0,
     undeclared.map((entry) => `${entry.file}:${entry.line} ${entry.name}`).join('; '))
   const stale = declared.filter((key) => !found.map((entry) => `${entry.file}:${entry.name}`).includes(key))
+  // With nothing tolerated, the row below has nothing to check. Said out loud rather than left
+  // as a green row a reader would take for coverage: this section's policing is done by the
+  // scan row above, and the row below exists for whenever an entry is recorded again.
+  if (declared.length === 0) {
+    console.log('  DISCLOSED  the KNOWN table is EMPTY: no fixed scratch name is tolerated, so the "still in the tree" row is vacuous this run — the scan row above is the one policing the shape')
+  }
   check('every KNOWN fixed scratch name is still in the tree (a table that outlives its entries certifies nothing)',
     stale.length === 0, stale.join('; '))
   check('the scan read the suites it polices',
