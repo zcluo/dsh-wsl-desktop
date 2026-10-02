@@ -6,6 +6,15 @@
  * writable, everything else on the read-only root is not, and files created
  * inside the namespace belong to the session user rather than root.
  *
+ * Six checks below RUN the shipped helper inside the distribution, so they need
+ * the checkout reachable from WSL — a drive path. When it is not (the suite is
+ * run from a checkout that lives inside a distribution), those checks cannot run
+ * at all: each is then a COUNTED skip that names its own label, its precondition
+ * and the remedy, and the suite exits 2, which verify-all.mjs reports as SKIP
+ * rather than as PASS. A skip that printed and exited 0 was a green aggregate
+ * standing for checks that did not run — the class this convention removes
+ * (verify-modules, verify-9p, verify-fs-fence and verify-client-ui implement it).
+ *
  * Run: node scripts/verify-confinement.mjs [distro]
  */
 
@@ -36,6 +45,7 @@ const home = resolveLinuxHome(distro)
 const run = (options) => runWslShell(options)
 
 let failures = 0
+let skipped = 0
 
 /**
  * Record one assertion.
@@ -47,6 +57,35 @@ function check(label, ok, detail) {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
   if (!ok) failures += 1
 }
+
+/**
+ * Record checks that could not run here, and count them.
+ *
+ * A skip is a check that did not run: reporting it as a pass lets a green
+ * aggregate stand for coverage that was never established, so the count reaches
+ * the tail and the suite exits 2 — what verify-all.mjs renders as SKIP. The
+ * labels are passed in from the same list the checks below print, so the SKIP
+ * cannot name a set that differs from the one that did not run.
+ * @param {string[]} labels - the assertions that were not evaluated.
+ * @param {string} precondition - why they could not run.
+ * @param {string} remedy - what the operator can do about it.
+ */
+function skip(labels, precondition, remedy) {
+  skipped += labels.length
+  console.log(`  SKIP  ${labels.join('; ')} — ${labels.length} check(s) not evaluated, ${precondition}; ${remedy}`)
+}
+
+/**
+ * The precondition the drive-path probes share: the shipped helper is reached
+ * from inside the distribution by its /mnt spelling, which only a Windows drive
+ * path has.
+ * @param {string} path - the helper's Windows path.
+ * @returns {string} the precondition clause.
+ */
+const drivePathPrecondition = (path) => `the checkout is not on a drive path (${path} has no /mnt spelling)`
+
+/** The remedy for every drive-path probe: run the suite from a checkout the distribution can mount. */
+const DRIVE_PATH_REMEDY = 'run the suite from a checkout on a Windows drive, which the distribution mounts under /mnt/<drive>'
 
 /** Run one command through the confinement wrapper (the detected runner). */
 async function confined(command, { mode, workspaceLinuxRoot, linuxCwd = '/' }) {
@@ -288,12 +327,24 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
 // the EMPTY one (falling through to the identity comparison, which answers with a
 // different message) and a re-wrapped comparison skips the refusal entirely. Both
 // mutations were measured to redden these two checks.
+/**
+ * The two spellings of "no SUDO_USER" the shipped helper must refuse — ONE list
+ * for the loop below and for the SKIP's labels and count, so the SKIP cannot name
+ * a different set than the loop evaluates.
+ */
+const SUDO_USER_PROBES = [['empty', 'SUDO_USER= '], ['unset', 'env -u SUDO_USER ']]
+/**
+ * The label one spelling's check carries.
+ * @param {string} spelling - 'empty' or 'unset'.
+ * @returns {string} the check label.
+ */
+const sudoUserRefusalLabel = (spelling) => `the shipped helper refuses an ${spelling} SUDO_USER before any privileged work`
 {
   const mnt = windowsToMntPath(helperPathFile)
   if (mnt === null) {
-    console.log('  SKIP  the shipped helper refuses an empty/unset SUDO_USER (helper not on a drive path)')
+    skip(SUDO_USER_PROBES.map(([spelling]) => sudoUserRefusalLabel(spelling)), drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
-    for (const [label, prefix] of [['empty', 'SUDO_USER= '], ['unset', 'env -u SUDO_USER ']]) {
+    for (const [label, prefix] of SUDO_USER_PROBES) {
       const refusal = await runWslShell({
         distro,
         linuxCwd: '/',
@@ -301,7 +352,7 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
         loginShell: false,
         timeoutMs: 60_000,
       })
-      check(`the shipped helper refuses an ${label} SUDO_USER before any privileged work`,
+      check(sudoUserRefusalLabel(label),
         refusal.stdout.includes('EXIT=2')
           && refusal.stderr.includes('cannot determine the invoking user')
           && !refusal.stdout.includes('GATE-SKIPPED'),
@@ -314,10 +365,12 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
 // any user that does not exist. The pin asserts the derivation; this asserts it by
 // running: a SUDO_USER that cannot be resolved must refuse with the identity mismatch,
 // not walk on toward the fence.
+/** The label the unresolvable-SUDO_USER check carries; the SKIP names the same value. */
+const UNRESOLVABLE_SUDO_USER_LABEL = 'the shipped helper refuses a SUDO_USER that does not resolve'
 {
   const mnt = windowsToMntPath(helperPathFile)
   if (mnt === null) {
-    console.log('  SKIP  the shipped helper refuses an unresolvable SUDO_USER (helper not on a drive path)')
+    skip([UNRESOLVABLE_SUDO_USER_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
     const refusal = await runWslShell({
       distro,
@@ -326,7 +379,7 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
       loginShell: false,
       timeoutMs: 60_000,
     })
-    check('the shipped helper refuses a SUDO_USER that does not resolve',
+    check(UNRESOLVABLE_SUDO_USER_LABEL,
       refusal.stdout.includes('EXIT=2')
         && refusal.stderr.includes('identity mismatch')
         && !refusal.stdout.includes('GATE-SKIPPED'),
@@ -341,12 +394,25 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
 // the same assertion is repeated under `unshare -r`: the guard must refuse on the VALUE
 // whoever is running it. Probed first and SKIPped when the machine has no user
 // namespaces - a check that reddens a healthy machine for a kernel-policy reason is worse
-// than a documented gap.
+// than a documented gap — and the gap is DOCUMENTED rather than silent: the skip
+// is counted and the suite exits 2, so verify-all shows SKIP where a green pass
+// would have claimed the M5 assertion had run.
+/** The label the user-namespace-root check carries; the SKIP names the same value. */
+const USERNS_ROOT_LABEL = 'the shipped helper refuses an empty SUDO_USER under user-namespace root'
 {
   const mnt = windowsToMntPath(helperPathFile)
   const usernsProbe = mnt === null ? null : await runWslShell({ distro, linuxCwd: '/', command: 'unshare -r id -u 2>/dev/null', loginShell: false, timeoutMs: 60_000 })
   if (mnt === null || usernsProbe.stdout.trim() !== '0') {
-    console.log(`  SKIP  the shipped helper refuses an empty SUDO_USER under user-namespace root (${mnt === null ? 'helper not on a drive path' : `unshare -r id -u -> ${JSON.stringify(usernsProbe.stdout.trim())}`})`)
+    // The two preconditions are named apart: they have different remedies, and a
+    // SKIP whose reason is "helper not on a drive path" while the real cause is a
+    // kernel policy sends the operator after the wrong thing.
+    skip([USERNS_ROOT_LABEL],
+      mnt === null
+        ? drivePathPrecondition(helperPathFile)
+        : `the distribution has no unprivileged user namespace (unshare -r id -u -> ${JSON.stringify(usernsProbe.stdout.trim())})`,
+      mnt === null
+        ? DRIVE_PATH_REMEDY
+        : 'enable unprivileged user namespaces in the distribution (sysctl kernel.unprivileged_userns_clone=1, or CONFIG_USER_NS) and re-run')
   } else {
     const refusal = await runWslShell({
       distro,
@@ -355,30 +421,34 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
       loginShell: false,
       timeoutMs: 60_000,
     })
-    check('the shipped helper refuses an empty SUDO_USER under user-namespace root',
+    check(USERNS_ROOT_LABEL,
       refusal.stdout.includes('EXIT=2')
         && refusal.stderr.includes('cannot determine the invoking user')
         && !refusal.stdout.includes('GATE-SKIPPED'),
       `stdout=${JSON.stringify(refusal.stdout.slice(-200))} stderr=${JSON.stringify(refusal.stderr.slice(-200))}`)
   }
 }
+/** The label the parse gate carries; the SKIP names the same value. */
+const PARSE_GATE_LABEL = 'the helper parses under bash -n'
 {
   const mnt = windowsToMntPath(helperPathFile)
   if (mnt === null) {
-    console.log('  SKIP  bash -n parse gate (helper not on a drive path)')
+    skip([PARSE_GATE_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
     const parse = await runWslShell({ distro, linuxCwd: '/', command: `bash -n ${shellQuote(mnt)} && echo PARSE-OK`, loginShell: false, timeoutMs: 60_000 })
-    check('the helper parses under bash -n', parse.stdout.includes('PARSE-OK'), parse.stderr)
+    check(PARSE_GATE_LABEL, parse.stdout.includes('PARSE-OK'), parse.stderr)
   }
 }
 // A REAL invocation of the shipped helper, unprivileged and without sudo: the
 // argument validation runs before anything privileged, so the refusal is
 // deterministic and needs no grant. The LF is materialized INSIDE the
 // distribution by printf, so the value crosses wsl.exe as plain text.
+/** The label the control-character refusal carries; the SKIP names the same value. */
+const CONTROL_CHARACTER_LABEL = 'the shipped helper exits 2 on a control character in --workspace'
 {
   const mnt = windowsToMntPath(helperPathFile)
   if (mnt === null) {
-    console.log('  SKIP  the shipped helper refuses a control character in --workspace (helper not on a drive path)')
+    skip([CONTROL_CHARACTER_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
     const refusal = await runWslShell({
       distro,
@@ -387,7 +457,7 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
       loginShell: false,
       timeoutMs: 60_000,
     })
-    check('the shipped helper exits 2 on a control character in --workspace',
+    check(CONTROL_CHARACTER_LABEL,
       refusal.stdout.includes('EXIT=2') && refusal.stderr.includes('control characters'),
       `stdout=${JSON.stringify(refusal.stdout.slice(-200))} stderr=${JSON.stringify(refusal.stderr.slice(-200))}`)
   }
@@ -502,18 +572,26 @@ console.log(`        runner=${runner}`)
 // the helper INSTALLED at HELPER_PATH, a copy the operator makes by hand. If
 // that copy has drifted from the file this package ships, a green suite would
 // describe an artifact nobody ships. Compare them, and name the repair.
+//
+// Only this branch can hide anything: when the detected runner is the direct
+// sudo-unshare path there is no installed copy whose drift could matter, so no
+// check is missing there and nothing is recorded. When the runner IS the helper
+// the check has a subject, and a checkout with no /mnt spelling is then a counted
+// skip.
+/** The label the installed-copy comparison carries; the SKIP names the same value. */
+const INSTALLED_HELPER_LABEL = 'the installed helper is the helper this package ships'
 if (runner === RUNNER_HELPER) {
   const helperMnt = windowsToMntPath(helperPathFile)
   if (helperMnt === null) {
-    // The same condition the bash -n gate above SKIPs on: the checkout is not on
+    // The same condition the bash -n gate above skips on: the checkout is not on
     // a drive path (it lives inside a distribution), so the shipped file has no
     // /mnt spelling to compare against. Failing here told the operator to
     // reinstall a byte-identical helper.
-    console.log('  SKIP  the installed helper is the helper this package ships (helper not on a drive path)')
+    skip([INSTALLED_HELPER_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
     const sums = await runWslShell({ distro, linuxCwd: '/', command: `md5sum ${shellQuote(HELPER_PATH)} ${shellQuote(helperMnt)} 2>/dev/null`, loginShell: false, timeoutMs: 60_000 })
     const [installedSum, shippedSum] = sums.stdout.trim().split('\n').map((line) => line.split(/\s+/)[0])
-    check('the installed helper is the helper this package ships',
+    check(INSTALLED_HELPER_LABEL,
       typeof installedSum === 'string' && installedSum !== '' && installedSum === shippedSum,
       `installed=${String(installedSum)} shipped=${String(shippedSum)} — the suite is exercising the installed copy; reinstall it per README: install -m 0755 -o root -g root <lib/wsl/dsh-wsl-confine.sh> ${HELPER_PATH}`)
   }
@@ -673,5 +751,10 @@ console.log(`        ${pidns.result.stdout.trim().replace(/\n/g, ' | ')}`)
 // carry spaces and ERE metacharacters — which is the point of the sections
 // above — so an unquoted rm would either miss them or be re-parsed.
 await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${shellQuote(probeRoot)} ${shellQuote(spacedRoot)} ${shellQuote(metaRoot)} ${shellQuote(`${home}/dsh-wsl-forbidden.txt`)} /tmp/dsh-wsl-tmp.txt` })
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+// A skip is a check that did not run, and reporting it as a pass would make this
+// suite's green meaningless exactly where the shipped helper is the subject: exit
+// 2 is what verify-all renders as SKIP (the sibling suites' ruling, applied here).
+if (failures > 0) console.log(`\n${failures} CHECK(S) FAILED${skipped === 0 ? '' : `, ${skipped} CHECK(S) SKIPPED`}`)
+else if (skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+else console.log('\nALL CHECKS PASSED')
+process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0
