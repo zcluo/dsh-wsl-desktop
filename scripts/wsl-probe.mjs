@@ -7,12 +7,15 @@
  * answered in 300ms a moment earlier (measured on this host: ~300ms, then 30.4s and 30.5s on
  * two consecutive calls while the VM ran at load ~11 with its swap 95% full).
  *
- * `lib/wsl/world.js` implements this for the probes it owns (`listLinuxDir`, `checkLinuxPath`,
- * `resolveDistroHome`, `resolveIdentity`, `detectRunner`, the NO_NEW_PRIVS probe). The suites
- * that run their OWN `wsl.exe` probes had no such runner: `scripts/verify-confinement.mjs`
- * makes ~25 of them, and ONE stalled probe reddened checks that were measuring something else
- * entirely — the class that made `verify-confinement-skip.mjs` report a count mutation the
- * suite had performed correctly.
+ * Three modules implement it, and this is where each one lives: `lib/wsl/world.js` for the
+ * three probes it owns (`listLinuxDir`, `checkLinuxPath`, `resolveDistroHome`),
+ * `lib/wsl/confinement.js` inside `resolveIdentity`, `detectRunner` and the NO_NEW_PRIVS
+ * probe, and `lib/wsl/pty.js` inside the bridge-runtime probe. The suites that run their OWN
+ * `wsl.exe` probes had no such runner: `scripts/verify-confinement.mjs` carries 36 of them
+ * (19 `probe(...)` sites, 15 `confined(...)` sites and the 2 fixture probes — and the
+ * SUDO_USER site sits in a loop, so a run makes more than 36 spawns), and ONE stalled probe
+ * reddened checks that were measuring something else entirely — the class that made
+ * `verify-confinement-skip.mjs` report a count mutation the suite had performed correctly.
  *
  * THE TRIGGER IS `timedOut` ALONE, and that is what makes it safe to put in front of a probe
  * whose answer is a REFUSAL: a refusal is an immediate answer carrying an exit code and stderr
