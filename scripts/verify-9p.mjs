@@ -26,6 +26,7 @@ import { realpathSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { canonicalHostPath, isUnderHost } from '../lib/wsl/fence.js'
+import { PUBLICATION_CEILING_MS, PUBLICATION_POLL_MS, publishReplace } from '../lib/wsl/publish.js'
 import { resolveDistro, resolveOtherDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 
@@ -50,6 +51,18 @@ function probe(label, available, expected, detail) {
   console.log(`  ${matches ? 'OK  ' : 'FAIL'}  ${label} — ${available ? 'available' : 'unavailable'}${matches ? '' : ` (expected ${expected})`}`)
   if (!matches && detail !== undefined) console.log(`        ${detailText(detail)}`)
   if (!matches) failures += 1
+}
+
+/**
+ * Record one assertion about the provider's publication (boolean, not an
+ * availability probe).
+ * @param {string} label - what was asserted.
+ * @param {boolean} ok - the outcome.
+ * @param {unknown} [detail] - context shown on failure.
+ */
+function publicationCheck(label, ok, detail) {
+  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : ` — ${detailText(detail)}`}`)
+  if (!ok) failures += 1
 }
 
 /**
@@ -94,80 +107,28 @@ try {
   probe('hard link (create-if-absent publication)', false, 'unavailable', `${error.code} ${error.message}`)
 }
 
-/** How long the publication condition is waited out before the primitive is called unavailable. */
-const PUBLICATION_CEILING_MS = 2000
-/** How often the publication condition is re-asked while it does not hold. */
-const PUBLICATION_POLL_MS = 5
-
-/**
- * Publish `replacement` over `target`, waiting on the CONDITION — the destination holds
- * the replacement's bytes — rather than on a duration.
- *
- * One unretried `rename` is not a measurement of this primitive on the share: the share
- * refuses a replace of an existing file with ERROR_ACCESS_DENIED (Node reports EPERM) in
- * 4-5% of back-to-back invocations, which is a race rather than a capability answer. Every
- * one of the 321 refusals observed across 6900 replace invocations cleared on a retry —
- * 8-49 ms in every run but one 82 ms outlier, and at most 3 attempts. A destination that
- * does not exist is never refused (0/1000); the distribution's own rename is never refused
- * (0/3000); the destination is not blocked while it is refused (`unlink` succeeded in
- * 51/51); and the same sequence through .NET fails the same way, so the refusal belongs to
- * the SHARE rather than to this client. The provider publishes with exactly this rename
- * (lib/wsl/fs.js `replaceFile`), so what must hold is that the publication LANDS.
- *
- * Both ways the condition can fail to hold are bounded by ONE deadline: a refused rename is
- * retried, and a read-back that is not the replacement's bytes is re-read. EVERY throw from
- * the rename is retried, not only the measured ERROR_ACCESS_DENIED: a whitelist of codes
- * would re-open this flake the day the share refuses with a code this probe has not seen,
- * and the price of not having one is that a DETERMINISTIC error also pays the ceiling in
- * full (2 s here) before it is reported. The caller is told how many attempts were refused,
- * and for how long, so the share's own behaviour stays on the record instead of being
- * swallowed here.
- *
- * MUTATION that reddens the dose row below: make this a single attempt — measured, the dose
- * then reported 12, 20, 20 and 23 of 200 publications that did not land, while the
- * single-invocation row above still passed. One invocation meets the race only ~5% of the
- * time, which is what makes the DOSE the pin rather than that single check.
- * @param {string} replacement - the staged file to publish.
- * @param {string} target - the destination the replacement must land on.
- * @param {string} expected - the content that proves the publication landed.
- * @param {number} [ceilingMs] - how long to keep asking before reporting failure.
- * @returns {Promise<{landed: boolean, refusals: number, waitedMs: number, last: string}>} the outcome.
- */
-async function publishOverwrite(replacement, target, expected, ceilingMs = PUBLICATION_CEILING_MS) {
-  const started = Date.now()
-  let refusals = 0
-  let renamed = false
-  let last = 'not attempted'
-  for (;;) {
-    if (!renamed) {
-      try {
-        await rename(replacement, target)
-        renamed = true
-      } catch (error) {
-        refusals += 1
-        last = `${error.code} ${error.message}`
-      }
-    }
-    if (renamed) {
-      try {
-        const value = await readFile(target, 'utf8')
-        if (value === expected) return { landed: true, refusals, waitedMs: Date.now() - started, last }
-        last = `read back ${JSON.stringify(value)}`
-      } catch (error) {
-        last = `${error.code} ${error.message}`
-      }
-    }
-    if (Date.now() - started >= ceilingMs) return { landed: false, refusals, waitedMs: Date.now() - started, last }
-    await new Promise((resolve) => setTimeout(resolve, PUBLICATION_POLL_MS))
-  }
-}
+// The wait is NOT re-implemented here. `lib/wsl/publish.js` owns it — the provider's
+// `replaceFile` publishes through that function — and this probe drives THAT function
+// against the real share, so the code being measured is the code that ships. Before it
+// existed the probe carried its own copy of the wait, and that copy is exactly how a
+// provider-side publication with no wait at all stayed invisible: the probe passed while
+// `lib/wsl/fs.js` published once, unretried, and 2 of 200 writes through the provider's
+// own `writeText` failed with EPERM against this share.
 
 try {
-  await writeFile(join(root, 'replace-me.txt'), 'old\n', 'utf8')
-  await writeFile(join(root, 'replacement.txt'), 'new\n', 'utf8')
-  const published = await publishOverwrite(join(root, 'replacement.txt'), join(root, 'replace-me.txt'), 'new\n')
-  probe('rename replaces an existing file (overwrite publication)', published.landed, 'available',
-    published.landed ? undefined : `after ${published.waitedMs} ms and ${published.refusals} refused attempt(s): ${published.last}`)
+  const replaced = join(root, 'replace-me.txt')
+  const replacement = join(root, 'replacement.txt')
+  await writeFile(replaced, 'old\n', 'utf8')
+  await writeFile(replacement, 'new\n', 'utf8')
+  const published = await publishReplace(replaced, replacement)
+  // The landing is asserted from the CONTENT, not from the call returning: the
+  // primitive's contract on this share is that the destination HOLDS the replacement,
+  // and "the rename did not throw" would also accept a publication that landed nowhere.
+  const value = await readFile(replaced, 'utf8').catch(() => null)
+  probe('rename replaces an existing file (overwrite publication)', value === 'new\n', 'available',
+    value === 'new\n'
+      ? undefined
+      : `the publication returned after ${published.attempts} attempt(s) and the destination holds ${JSON.stringify(value)}`)
 } catch (error) {
   probe('rename replaces an existing file (overwrite publication)', false, 'available', `${error.code} ${error.message}`)
 }
@@ -261,46 +222,191 @@ function fact(label, value) {
 }
 
 // ---------------------------------------------------------------------------
-// The overwrite publication at a DOSE, because a single invocation cannot measure it
+// The overwrite publication at a DOSE, through the PROVIDER's own helper
 //
-// The check above is ONE invocation, and one invocation measures a race rather than a
-// capability. Measured on this machine (debian, the Windows 9P share): the share refuses
-// a replace of an EXISTING file with ERROR_ACCESS_DENIED (Node reports EPERM) in 4-5% of
-// back-to-back invocations — 47/1000, 52/1000, 51/1000, 39/1000 and 49/1000 across five
-// runs of an isolated loop. The refusal is not a capability answer: every one of the 321
-// observed refusals cleared on a retry (8-49 ms; one 82 ms outlier), and the destination
-// is not blocked while it is refused (unlink succeeded in 51/51). It is specific to the
-// REPLACE (0/1000 when the destination does not exist) and to the SHARE (0/3000 through the
-// distribution's own rename, while the same sequence through .NET fails the same way, so it
-// is not this probe's client library).
+// The check above is ONE invocation, and one invocation measures a RATE rather than a
+// capability: the share refuses a replace of an EXISTING file with ERROR_ACCESS_DENIED
+// (Node reports EPERM) at a rate that follows how densely the SAME destination name is
+// rewritten — 4.2% (42/1000) back-to-back, 1.5% (6/400) with 25 ms between iterations of the
+// identical sequence, 0/200 at 100 ms, and 9.9% in an independent replay of the sequence.
+// Every one of the 321 observed refusals cleared on a retry (8-49 ms, one 82 ms outlier, at
+// most 3 attempts), the destination is not blocked while it is refused (unlink succeeded in
+// 51/51), a destination that does not exist is never refused (0/1000), and the distribution's
+// own rename never is (0/3000) — so the refusal is the SHARE's bounded, rate-dependent
+// transient, not an unavailable primitive.
 //
-// A dose, therefore, is what says whether the capability is there, and a refused attempt
-// is a refusal to WAIT OUT rather than availability to report. This row is also the pin:
-// it reddens when the wait is removed.
+// WITHDRAWN from the record this row was added with: that the refusal was a race between the
+// two CREATIONS, decaying with the gap between them. The three runs above change the DENSITY
+// only — the intra-iteration gap between those two writes is the same ~2 ms in all of them —
+// and the rate still collapses, so the runs that seemed to measure that gap were confounded:
+// they moved the density and the per-iteration repetition too, and no single reading fits all
+// of them (25/400 refused at ~90 ms per iteration on the old reading, against 0/400 at ~79 ms
+// on the other). What SURVIVES is all the fix needs: a REPLACE-specific transient that clears
+// on a retry. The better-supported reading is the destination name's own write recency and
+// rewrite rate; the wait below is on the operation's own outcome either way, so it does not
+// depend on which reading is right.
+//
+// This row is the pin for the PROVIDER's publication: it publishes up to 200 times through
+// `publishReplace` — the function `lib/wsl/fs.js:replaceFile` itself calls — and asserts
+// that every publication LANDED (the destination holds the replacement's bytes). Against a
+// single unretried rename it reports the refusals as losses, which is precisely the
+// user-visible failure it exists to prevent; the mutation that reddens it is making
+// `publishReplace` a single attempt.
 // ---------------------------------------------------------------------------
 
 /** How many back-to-back publications the dose runs. */
 const PUBLICATION_DOSE = 200
 
+let publicationAttempts = 0
 let publicationMisses = 0
 let publicationRefusals = 0
 let slowestRefusalMs = 0
+/** How the FIRST publication that missed the bound missed it — the reason this row reports. */
+let firstMiss = ''
+// WHY A MISS ENDS THE DOSE. A publication the wait did not save is not the transient this row
+// exists for — that one is waited out inside `publishReplace` and never counted here — and the
+// remaining attempts cannot answer differently: each would pay the ceiling again. Running all
+// 200 against a refusal that never clears cost 106.2 s per probe run, measured here with
+// publishReplace's own rename replaced by a refusing one; the row then reported
+// "200 of 200 did not land within 500 ms each (0 refused attempt(s))" — no errno at all, and a
+// count that reads as though NOTHING had been refused, because the thrown error was swallowed.
+// 106 s is already past the 300 s ceiling of the AGGREGATE that runs the probe several times
+// (verify-all.mjs SIGKILLs a suite; verify-9p-skip.mjs spawns the probe ~9 times), so the
+// reason was never printed anywhere. One miss and the reason below is printed in seconds.
 for (let dose = 0; dose < PUBLICATION_DOSE; dose += 1) {
-  await writeFile(join(root, 'replace-me.txt'), 'old\n', 'utf8')
-  await writeFile(join(root, 'replacement.txt'), 'new\n', 'utf8')
-  const published = await publishOverwrite(join(root, 'replacement.txt'), join(root, 'replace-me.txt'), 'new\n')
-  if (!published.landed) publicationMisses += 1
+  const replaced = join(root, 'replace-me.txt')
+  const replacement = join(root, 'replacement.txt')
+  await writeFile(replaced, 'old\n', 'utf8')
+  await writeFile(replacement, 'new\n', 'utf8')
+  const startedAt = Date.now()
+  publicationAttempts += 1
+  let published
+  try {
+    published = await publishReplace(replaced, replacement)
+  } catch (error) {
+    // The wait gave up: the refusal outlived the ceiling, which is not the transient this row
+    // waits out. The error is KEPT — swallowing it is what left the reason unprintable.
+    publicationMisses += 1
+    firstMiss = `${error.code} ${error.message} — the wait spent ${Date.now() - startedAt} ms before giving up`
+    break
+  }
   publicationRefusals += published.refusals
   // Only a REFUSED publication's wait is a window length worth recording: an ordinary
-  // publication's few milliseconds are the share's speed, not the race's duration.
+  // publication's few milliseconds are the share's speed, not the refusal's duration.
   if (published.refusals > 0) slowestRefusalMs = Math.max(slowestRefusalMs, published.waitedMs)
+  const value = await readFile(replaced, 'utf8').catch(() => null)
+  if (value !== 'new\n') {
+    publicationMisses += 1
+    firstMiss = `the publication returned after ${published.attempts} attempt(s) and the destination holds ${JSON.stringify(value)}`
+    break
+  }
 }
 probe('the overwrite publication lands at a dose, so a transient refusal is waited out instead of reported as unavailability',
   publicationMisses === 0, 'available',
-  `${publicationMisses} of ${PUBLICATION_DOSE} did not land within ${PUBLICATION_CEILING_MS} ms each (${publicationRefusals} refused attempt(s))`)
-fact('the overwrite publication at a dose of ' + PUBLICATION_DOSE + ' back-to-back attempts',
-  publicationMisses + ' did not land; ' + publicationRefusals + ' refused attempt(s)'
-    + (publicationRefusals === 0 ? '' : `, the slowest cleared in ${slowestRefusalMs} ms`))
+  `${publicationMisses} of ${publicationAttempts} attempted did not land`
+    + (publicationMisses === 0 ? '' : ` (stopped there: ${firstMiss})`)
+    + (publicationRefusals === 0 ? '' : `; ${publicationRefusals} refused attempt(s) waited out`))
+fact('the overwrite publication at a dose of up to ' + PUBLICATION_DOSE + ' back-to-back attempts',
+  publicationAttempts + ' of ' + PUBLICATION_DOSE + ' attempted; ' + publicationMisses + ' did not land'
+    + (publicationRefusals === 0 ? '' : '; ' + publicationRefusals + ' refused attempt(s), the slowest cleared in ' + slowestRefusalMs + ' ms')
+    + (publicationMisses === 0 ? '' : '; the first failure: ' + firstMiss))
+
+// The other half of the same guarantee, on the REAL share: the wait must not swallow a
+// refusal that is not transient. A deterministic failure is produced by publishing a
+// source that does not exist, and what must hold is that the publication REPORTS it and
+// that the destination keeps its bytes — a retry that turned a real error into a
+// success would be worse than the flake it replaced.
+{
+  const replaced = join(root, 'persistent-target.txt')
+  const missing = join(root, 'never-created.txt')
+  await rm(missing, { force: true })
+  await writeFile(replaced, 'old\n', 'utf8')
+  const started = Date.now()
+  let code = 'returned'
+  try {
+    await publishReplace(replaced, missing)
+  } catch (error) {
+    code = error.code
+  }
+  const value = await readFile(replaced, 'utf8').catch(() => null)
+  probe('a deterministic publication failure is reported, not swallowed by the wait, and the destination keeps its bytes',
+    code !== 'returned' && value === 'old\n', 'available',
+    `the publication returned ${code} after ${Date.now() - started} ms and the destination holds ${JSON.stringify(value)}`)
+}
+
+// The ceiling has to stay ABOVE the tail it was chosen for, or the wait becomes a
+// coin flip again: every clearing measured on this share took at most 82 ms (one
+// outlier; 8-49 ms otherwise), and the constant is asserted to keep at least 5x that.
+probe('the publication ceiling stays above the measured tail of the refusal',
+  PUBLICATION_CEILING_MS >= 5 * 82, 'available',
+  `ceiling=${PUBLICATION_CEILING_MS} ms, the worst clearing ever measured on this share was 82 ms`)
+
+// ---------------------------------------------------------------------------
+// The BOUND: a refusal that does not clear must still surface
+//
+// The dose proves the wait works; these rows prove it STOPS. A retry that swallowed a
+// persistent error would be worse than the flake it replaced, so the bound is asserted
+// against a rename the probe controls rather than measures: it refuses a known number of
+// times and records what it was asked. The error's IDENTITY matters as much as the count —
+// `fs-local`'s publication inspects `error.code` (an ENOENT from `replaceFile` means "the
+// target disappeared while staging" and falls back to a plain rename), so the module must
+// rethrow what it was handed and never a wrapper of its own.
+// ---------------------------------------------------------------------------
+
+/** The refusal the controlled rename repeats, so the surfaced error is compared by IDENTITY. */
+const PERSISTENT_REFUSAL = Object.assign(new Error('pin: the share refuses this publication'), { code: 'EPERM' })
+
+/**
+ * A rename under the probe's control, recording what the publication asked of it.
+ * @param {number} refusals - how many attempts are refused before the publication lands.
+ * @returns {{record: {calls: number, landed: boolean}, rename: (from: string, to: string) => Promise<void>}} the fake and its record.
+ */
+function controlledRename(refusals) {
+  const record = { calls: 0, landed: false }
+  return {
+    record,
+    rename: async () => {
+      record.calls += 1
+      if (record.calls <= refusals) throw PERSISTENT_REFUSAL
+      record.landed = true
+    },
+  }
+}
+
+{
+  const twice = controlledRename(2)
+  // The throw is caught HERE rather than left to the module: a publication that never
+  // retries at all must be REPORTED as a failing row, never crash the suite before it
+  // prints one — the first run of this row did exactly that, so the suite reported
+  // nothing about the bound it was added to measure.
+  let outcome
+  try {
+    outcome = await publishReplace('/pin/replaced.txt', '/pin/replacement.txt', { rename: twice.rename })
+  } catch (error) {
+    outcome = { attempts: 1, refusals: 0, waitedMs: 0, error }
+  }
+  publicationCheck('a refused publication is retried until it lands, and the wait it spent is reported',
+    twice.record.landed && outcome.attempts === 3 && outcome.refusals === 2 && outcome.waitedMs >= 2 * PUBLICATION_POLL_MS,
+    `landed=${String(twice.record.landed)} attempts=${String(outcome.attempts)} refusals=${String(outcome.refusals)} waitedMs=${String(outcome.waitedMs)} poll=${String(PUBLICATION_POLL_MS)} thrown=${outcome.error === undefined ? 'none' : String(outcome.error.code)}`)
+}
+
+{
+  const forever = controlledRename(Number.POSITIVE_INFINITY)
+  const started = Date.now()
+  let thrown
+  try {
+    await publishReplace('/pin/replaced.txt', '/pin/replacement.txt', { rename: forever.rename })
+  } catch (error) {
+    thrown = error
+  }
+  const elapsed = Date.now() - started
+  publicationCheck('a refusal that never clears is reported as a failure instead of retried forever',
+    thrown === PERSISTENT_REFUSAL
+      && forever.record.calls >= 2
+      && forever.record.calls <= PUBLICATION_CEILING_MS / PUBLICATION_POLL_MS + 2
+      && elapsed >= PUBLICATION_CEILING_MS && elapsed <= PUBLICATION_CEILING_MS * 4,
+    `thrown=${thrown === undefined ? 'none' : String(thrown.code)} sameError=${String(thrown === PERSISTENT_REFUSAL)} calls=${String(forever.record.calls)} elapsedMs=${String(elapsed)} ceiling=${String(PUBLICATION_CEILING_MS)}`)
+}
 
 /**
  * Whether a path exists, without reporting why it does not.

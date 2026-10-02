@@ -268,6 +268,7 @@ function buildFixtureFailedCopy() {
     [join(here, 'detail.mjs'), join(tree, 'scripts', 'detail.mjs')],
     [join(here, '..', 'lib', 'wsl', 'fence.js'), join(tree, 'lib', 'wsl', 'fence.js')],
     [join(here, '..', 'lib', 'wsl', 'paths.js'), join(tree, 'lib', 'wsl', 'paths.js')],
+    [join(here, '..', 'lib', 'wsl', 'publish.js'), join(tree, 'lib', 'wsl', 'publish.js')],
   ]) copyFileSync(from, to)
   const source = readFileSync(probePath, 'utf8')
   const importLine = "import { execFileSync } from 'node:child_process'"
@@ -393,7 +394,7 @@ function buildOneDistributionCopy() {
   for (const name of ['env.mjs', 'detail.mjs', 'verify-9p.mjs', 'verify-9p-skip.mjs']) {
     copyFileSync(join(here, name), join(tree, 'scripts', name))
   }
-  for (const name of ['fence.js', 'paths.js']) {
+  for (const name of ['fence.js', 'paths.js', 'publish.js']) {
     copyFileSync(join(here, '..', 'lib', 'wsl', name), join(tree, 'lib', 'wsl', name))
   }
   const envPath = join(tree, 'scripts', 'env.mjs')

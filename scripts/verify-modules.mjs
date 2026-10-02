@@ -38,7 +38,7 @@ function check(label, ok, detail) {
 }
 
 /** Modules that import nothing from the harness, so the source tree can load them. */
-const PURE = ['lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/http-admission.js']
+const PURE = ['lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/publish.js', 'lib/http-admission.js']
 
 /** Every module the host half loads, including the ones that need the host's resolution. */
 const ALL = [
@@ -50,6 +50,7 @@ const ALL = [
   'lib/wsl/confinement.js',
   'lib/wsl/shell.js',
   'lib/wsl/fs.js',
+  'lib/wsl/publish.js',
   'lib/wsl/subprocess.js',
   'lib/wsl/pty.js',
   'lib/wsl/host-refs.js',
