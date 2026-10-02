@@ -105,9 +105,23 @@ check('observes the document element, not a body that may not exist yet',
   code.includes('observer.observe(document.documentElement,')
   && !code.includes('observer.observe(document.body')
   && !code.includes('document.body.append'))
-check('never mutates the tree from the branch the observer watches',
+// What this row measures, and nothing more: the companion's STEADY-STATE visibility is a
+// style write, and no interval drives the sync. It is NOT "never mutates the tree from the
+// observed branch" — the client does remove nodes there (`button.remove()` when the anchor
+// is gone, `mine.remove()` in syncWorkspaceIcons), so the earlier label claimed more than
+// the assertion established. It reads the BLANKED code, for the reason the accessor pins
+// below state: the raw text also carries this literal inside a comment, so `source` let a
+// comment satisfy the row while the code itself stopped writing that value (measured: with
+// the write replaced by a `visibility` write and the old spelling left in a comment above
+// it, the raw-text form printed OK).
+// ...and the blanked code cannot carry the literal verbatim: `blankLiterals` blanks the
+// string BODIES inside it (`''` and `'none'` both become `''`), so the pin reads the
+// assignment's SHAPE instead — a style write whose condition is `fits && triggerVisible`.
+// Reading the raw text was what let a comment satisfy the row; reading the code's shape
+// cannot be satisfied by prose.
+check('the steady-state visibility is a style write, and no interval drives the sync',
   !code.includes('setInterval')
-  && source.includes("button.style.display = fits && triggerVisible ? '' : 'none'"))
+  && /button\.style\.display\s*=\s*fits\s*&&\s*triggerVisible\s*\?/.test(code))
 check('follows the shipped actions when the header hides them',
   source.includes("getComputedStyle(trigger).visibility !== 'hidden'"))
 check('prefers the shipped cluster and stands down on an unrecognised duplicate',
