@@ -326,8 +326,10 @@ const pathFacts = await settle(() => checkLinuxPath(distro, '/', { run: pathRetr
 check('checkLinuxPath repeats a timed-out probe exactly once and answers from the repeat',
   pathRetry.calls.length === 2 && pathFacts.isDirectory === true,
   { calls: pathRetry.calls.length, facts: pathFacts })
-check('checkLinuxPath asks for the documented 60s ceiling',
-  pathRetry.calls.every((call) => call.timeoutMs === 60_000),
+// The count is asserted WITH the ceiling: `[].every(…)` is true, so a probe that asked the
+// runner for nothing at all would satisfy a bare `.every` while claiming it asked for 60s.
+check('checkLinuxPath asks for the documented 60s ceiling, on both attempts',
+  pathRetry.calls.length === 2 && pathRetry.calls.every((call) => call.timeoutMs === 60_000),
   pathRetry.calls.map((call) => call.timeoutMs))
 // The listing's own protocol is NUL-framed and raw, so the scripted answer is a Buffer exactly
 // as runWslShell returns one: a string here would pass through toString('utf8') unchanged and
@@ -341,8 +343,9 @@ check('listLinuxDir repeats a timed-out probe exactly once and answers from the 
   listingRetry.calls.length === 2 && listingFacts.entries.length === 2
   && listingFacts.entries.some((entry) => entry.name === 'alpha.txt' && entry.kind === 'file'),
   { calls: listingRetry.calls.length, facts: listingFacts })
-check('listLinuxDir asks for the documented 60s ceiling and keeps its raw framing',
-  listingRetry.calls.every((call) => call.timeoutMs === 60_000 && call.raw === true),
+check('listLinuxDir asks for the documented 60s ceiling and keeps its raw framing, on both attempts',
+  listingRetry.calls.length === 2
+  && listingRetry.calls.every((call) => call.timeoutMs === 60_000 && call.raw === true),
   listingRetry.calls.map((call) => ({ timeoutMs: call.timeoutMs, raw: call.raw })))
 // resolveDistroHome makes TWO probes and either can stall: the login-name probe before the
 // getent one, and the getent probe itself. Both halves are pinned separately, because a retry
@@ -376,19 +379,25 @@ check('resolveDistroHome repeats a timed-out home probe exactly once and answers
   && homeProbeFacts.home === '/home/zcluo',
   { calls: homeProbeRetry.calls.length, commands: homeProbeCommands, facts: homeProbeFacts })
 check('resolveDistroHome asks for the documented 60s ceiling on both probes',
-  homeProbeRetry.calls.every((call) => call.timeoutMs === 60_000),
+  homeProbeRetry.calls.length === 3 && homeProbeRetry.calls.every((call) => call.timeoutMs === 60_000),
   homeProbeRetry.calls.map((call) => call.timeoutMs))
 // The retry must not launder a persistent stall into an answer: two timeouts still throw, and
 // the message still carries the probe's own evidence rather than a guess about the path.
+// The runner is CAPTURED: "it must try twice before it gives up" is a claim about the number
+// of attempts, and the message alone does not measure it — a probe that never retried throws
+// the very same `探针超时` error on its first attempt, which is why this row used to pass
+// with the repeat absent.
+const twiceRetry = scriptedRunner([timedOutProbe, timedOutProbe])
 let twiceTimedOut = ''
 try {
-  await checkLinuxPath(distro, '/', { run: scriptedRunner([timedOutProbe, timedOutProbe]).run })
+  await checkLinuxPath(distro, '/', { run: twiceRetry.run })
 } catch (error) {
   twiceTimedOut = error instanceof Error ? error.message : String(error)
 }
-check('a probe that times out twice still fails loudly, naming the timeout',
-  twiceTimedOut.includes('探针超时') && twiceTimedOut.includes('/'),
-  twiceTimedOut || '(no error was thrown — a persistent stall was reported as an answer)')
+check('a probe that times out twice still fails loudly, naming the timeout, after exactly two attempts',
+  twiceRetry.calls.length === 2
+  && twiceTimedOut.includes('探针超时') && twiceTimedOut.includes('/'),
+  `${twiceRetry.calls.length} attempt(s); ${twiceTimedOut || '(no error was thrown — a persistent stall was reported as an answer)'}`)
 console.log('\nthe selftest default workspace (the default PATH has to be exercised, not assumed)')
 // Finding 2. `resolveDistroHome(undefined, ...)` cannot run at all: wsl.exe cannot
 // be handed an undefined distribution name, so the expression the selftest default
@@ -549,7 +558,6 @@ check('subprocess.js threads it into the executable-lookup probe',
 const loginShellCalls = (subprocessCode.match(/resolveLoginShell\(plan\.distro, this\.config\.username, \{ wslPath: this\.config\.wslPath \}\)/g) ?? []).length
 check('subprocess.js threads it into both resolveLoginShell calls',
   loginShellCalls >= 2, { loginShellCalls })
-
 // The executable lookup is the FOURTH probe the documented sentence names (README.md:132 /
 // README.en.md:132 — 探针超时 60s + 超时后一次透明重试), and it is output-parsed: its empty
 // answer is read below as "no such executable", a class the terminal controller catches to
