@@ -20,9 +20,10 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const live = process.argv.includes('--live')
 
-/** Suites that run against the distribution and the source tree alone. */
+/** Suites that run against the distribution and the source tree alone (verify-package needs only npm and the package root). */
 const STANDALONE = [
   'verify-modules.mjs',
+  'verify-package.mjs',
   'verify-fs-fence.mjs',
   'verify-fs-fence-skip.mjs',
   'verify-world.mjs',
