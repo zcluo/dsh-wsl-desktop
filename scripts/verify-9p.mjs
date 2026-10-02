@@ -94,12 +94,80 @@ try {
   probe('hard link (create-if-absent publication)', false, 'unavailable', `${error.code} ${error.message}`)
 }
 
+/** How long the publication condition is waited out before the primitive is called unavailable. */
+const PUBLICATION_CEILING_MS = 2000
+/** How often the publication condition is re-asked while it does not hold. */
+const PUBLICATION_POLL_MS = 5
+
+/**
+ * Publish `replacement` over `target`, waiting on the CONDITION — the destination holds
+ * the replacement's bytes — rather than on a duration.
+ *
+ * One unretried `rename` is not a measurement of this primitive on the share: the share
+ * refuses a replace of an existing file with ERROR_ACCESS_DENIED (Node reports EPERM) in
+ * 4-5% of back-to-back invocations, which is a race rather than a capability answer. Every
+ * one of the 321 refusals observed across 6900 replace invocations cleared on a retry —
+ * 8-49 ms in every run but one 82 ms outlier, and at most 3 attempts. A destination that
+ * does not exist is never refused (0/1000); the distribution's own rename is never refused
+ * (0/3000); the destination is not blocked while it is refused (`unlink` succeeded in
+ * 51/51); and the same sequence through .NET fails the same way, so the refusal belongs to
+ * the SHARE rather than to this client. The provider publishes with exactly this rename
+ * (lib/wsl/fs.js `replaceFile`), so what must hold is that the publication LANDS.
+ *
+ * Both ways the condition can fail to hold are bounded by ONE deadline: a refused rename is
+ * retried, and a read-back that is not the replacement's bytes is re-read. EVERY throw from
+ * the rename is retried, not only the measured ERROR_ACCESS_DENIED: a whitelist of codes
+ * would re-open this flake the day the share refuses with a code this probe has not seen,
+ * and the price of not having one is that a DETERMINISTIC error also pays the ceiling in
+ * full (2 s here) before it is reported. The caller is told how many attempts were refused,
+ * and for how long, so the share's own behaviour stays on the record instead of being
+ * swallowed here.
+ *
+ * MUTATION that reddens the dose row below: make this a single attempt — measured, the dose
+ * then reported 12, 20, 20 and 23 of 200 publications that did not land, while the
+ * single-invocation row above still passed. One invocation meets the race only ~5% of the
+ * time, which is what makes the DOSE the pin rather than that single check.
+ * @param {string} replacement - the staged file to publish.
+ * @param {string} target - the destination the replacement must land on.
+ * @param {string} expected - the content that proves the publication landed.
+ * @param {number} [ceilingMs] - how long to keep asking before reporting failure.
+ * @returns {Promise<{landed: boolean, refusals: number, waitedMs: number, last: string}>} the outcome.
+ */
+async function publishOverwrite(replacement, target, expected, ceilingMs = PUBLICATION_CEILING_MS) {
+  const started = Date.now()
+  let refusals = 0
+  let renamed = false
+  let last = 'not attempted'
+  for (;;) {
+    if (!renamed) {
+      try {
+        await rename(replacement, target)
+        renamed = true
+      } catch (error) {
+        refusals += 1
+        last = `${error.code} ${error.message}`
+      }
+    }
+    if (renamed) {
+      try {
+        const value = await readFile(target, 'utf8')
+        if (value === expected) return { landed: true, refusals, waitedMs: Date.now() - started, last }
+        last = `read back ${JSON.stringify(value)}`
+      } catch (error) {
+        last = `${error.code} ${error.message}`
+      }
+    }
+    if (Date.now() - started >= ceilingMs) return { landed: false, refusals, waitedMs: Date.now() - started, last }
+    await new Promise((resolve) => setTimeout(resolve, PUBLICATION_POLL_MS))
+  }
+}
+
 try {
   await writeFile(join(root, 'replace-me.txt'), 'old\n', 'utf8')
   await writeFile(join(root, 'replacement.txt'), 'new\n', 'utf8')
-  await rename(join(root, 'replacement.txt'), join(root, 'replace-me.txt'))
-  const after = await readFile(join(root, 'replace-me.txt'), 'utf8')
-  probe('rename replaces an existing file (overwrite publication)', after === 'new\n', 'available', JSON.stringify(after))
+  const published = await publishOverwrite(join(root, 'replacement.txt'), join(root, 'replace-me.txt'), 'new\n')
+  probe('rename replaces an existing file (overwrite publication)', published.landed, 'available',
+    published.landed ? undefined : `after ${published.waitedMs} ms and ${published.refusals} refused attempt(s): ${published.last}`)
 } catch (error) {
   probe('rename replaces an existing file (overwrite publication)', false, 'available', `${error.code} ${error.message}`)
 }
@@ -191,6 +259,48 @@ function fact(label, value) {
   console.log(`  FACT    ${label} — ${value}`)
   facts.push({ label, value })
 }
+
+// ---------------------------------------------------------------------------
+// The overwrite publication at a DOSE, because a single invocation cannot measure it
+//
+// The check above is ONE invocation, and one invocation measures a race rather than a
+// capability. Measured on this machine (debian, the Windows 9P share): the share refuses
+// a replace of an EXISTING file with ERROR_ACCESS_DENIED (Node reports EPERM) in 4-5% of
+// back-to-back invocations — 47/1000, 52/1000, 51/1000, 39/1000 and 49/1000 across five
+// runs of an isolated loop. The refusal is not a capability answer: every one of the 321
+// observed refusals cleared on a retry (8-49 ms; one 82 ms outlier), and the destination
+// is not blocked while it is refused (unlink succeeded in 51/51). It is specific to the
+// REPLACE (0/1000 when the destination does not exist) and to the SHARE (0/3000 through the
+// distribution's own rename, while the same sequence through .NET fails the same way, so it
+// is not this probe's client library).
+//
+// A dose, therefore, is what says whether the capability is there, and a refused attempt
+// is a refusal to WAIT OUT rather than availability to report. This row is also the pin:
+// it reddens when the wait is removed.
+// ---------------------------------------------------------------------------
+
+/** How many back-to-back publications the dose runs. */
+const PUBLICATION_DOSE = 200
+
+let publicationMisses = 0
+let publicationRefusals = 0
+let slowestRefusalMs = 0
+for (let dose = 0; dose < PUBLICATION_DOSE; dose += 1) {
+  await writeFile(join(root, 'replace-me.txt'), 'old\n', 'utf8')
+  await writeFile(join(root, 'replacement.txt'), 'new\n', 'utf8')
+  const published = await publishOverwrite(join(root, 'replacement.txt'), join(root, 'replace-me.txt'), 'new\n')
+  if (!published.landed) publicationMisses += 1
+  publicationRefusals += published.refusals
+  // Only a REFUSED publication's wait is a window length worth recording: an ordinary
+  // publication's few milliseconds are the share's speed, not the race's duration.
+  if (published.refusals > 0) slowestRefusalMs = Math.max(slowestRefusalMs, published.waitedMs)
+}
+probe('the overwrite publication lands at a dose, so a transient refusal is waited out instead of reported as unavailability',
+  publicationMisses === 0, 'available',
+  `${publicationMisses} of ${PUBLICATION_DOSE} did not land within ${PUBLICATION_CEILING_MS} ms each (${publicationRefusals} refused attempt(s))`)
+fact('the overwrite publication at a dose of ' + PUBLICATION_DOSE + ' back-to-back attempts',
+  publicationMisses + ' did not land; ' + publicationRefusals + ' refused attempt(s)'
+    + (publicationRefusals === 0 ? '' : `, the slowest cleared in ${slowestRefusalMs} ms`))
 
 /**
  * Whether a path exists, without reporting why it does not.
