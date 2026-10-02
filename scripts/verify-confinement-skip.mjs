@@ -28,6 +28,14 @@
  * to redden on it. A pin that only read the print would stay green through that
  * mutation, which is exactly the defect the counted skips were added to remove.
  *
+ * THE MUTANT'S PROFILE IS READ FROM THE MUTANT, AND A CHILD'S OWN FAILURE IS NOT THIS
+ * PIN'S FINDING. Section B asserts the mutant exits 0 with no counted tail against the
+ * mutant's OWN output and exit code, and the child pin's red is asserted to be the
+ * count's rather than a suite that failed a check of its own. Every suite run below is
+ * repeated once when its own summary reports failing checks (runSuiteConclusive): this
+ * pin reads the SKIP, and the suite's ~25 un-retried wsl.exe probes are not its subject.
+ * A run contaminated twice still reddens.
+ *
  * Every mutation is applied to a COPY in a throwaway tree that carries the suite's
  * imports too, so the real scripts are never touched and nothing scratch is written
  * inside the repository.
@@ -96,6 +104,8 @@ const DRIVE_PATH_LABELS = [
 const INSTALLED_HELPER_LABEL = 'the installed helper is the helper this package ships'
 /** The label section A's flagship assertion carries, and section B requires it to print as FAIL. */
 const EXIT2_LABEL = 'drive-path-free run: exit 2, so verify-all reports the suite as SKIP instead of as a pass'
+/** The label whose FAIL proves the run the child pin read had a failing check of its own. */
+const NO_FAILS_LABEL = 'drive-path-free run: NO check FAILS — the missing precondition is not a defect'
 /** The token the drive-path precondition names, and the remedy it must offer. */
 const PRECONDITION_TOKEN = 'no /mnt spelling'
 const REMEDY_TOKEN = 'run the suite from a checkout on a Windows drive'
@@ -154,6 +164,64 @@ function runSuite(env, suite = suitePath, timeoutMs = 300_000) {
   // that as "exit 1" is what let a kill satisfy an assertion about a reddened pin.
   return { ...outcomeOf(run, Date.now() - startedAt, timeoutMs), out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
 }
+/**
+ * A finished child's own summary line: the last line it printed.
+ * @param {string} out - the child's combined output.
+ * @returns {string} the ending, or '' when the run printed nothing.
+ */
+function endingOf(out) {
+  return out.trimEnd().split('\n').slice(-1)[0] ?? ''
+}
+
+/**
+ * Whether a child's own summary reports FAILING checks — the run is CONTAMINATED.
+ *
+ * The suite's tail is one of `ALL CHECKS PASSED`, `${n} CHECK(S) FAILED`,
+ * `${n} CHECK(S) FAILED, ${m} CHECK(S) SKIPPED`, or the counted-skip line. Only the
+ * FAILED forms say that a check this pin does not read failed inside the run it read.
+ * @param {string} out - the child's combined output.
+ * @returns {boolean} true when the run's own ending reports failures.
+ */
+function reportsFailedChecks(out) {
+  return /\d+ CHECK\(S\) FAILED/.test(endingOf(out))
+}
+
+/**
+ * Run a suite, repeating the SAME run once when its own summary reports failing checks.
+ *
+ * This pin measures the SKIP's content and its count — not the suite's other ~80
+ * checks. The suite makes ~25 wsl.exe probes with no retry of their own, over a VM this
+ * machine shares with a sibling distribution that runs a heavy service, so a stall in any
+ * one of them ends a run with `1 CHECK(S) FAILED` while the drive-path SKIP is intact —
+ * and every assertion below would then read the wrong subject. MEASURED: one unrelated
+ * failing check inside the mutant reddened "and it declares a clean profile" while the
+ * mutant's own count behaviour was correct all along. README.md states the ruling for
+ * exactly this kind of probe (探针超时 60s + 超时后一次透明重试), and fixtureAnswer and
+ * detectRunner already follow it: the run is repeated once, both attempts are disclosed,
+ * and the assertions read the conclusive attempt. A run contaminated TWICE is a real
+ * failure and reddens — a defect in the suite repeats, a hiccup does not.
+ * @param {Record<string, string>} env - overrides applied after the marker removal.
+ * @param {string} [suite] - the suite to run; the mutation section points this elsewhere.
+ * @param {number} [timeoutMs] - the ceiling; shortened only by the runner rows below.
+ * @returns {{code: number, how: string, note: string, out: string}} the conclusive run.
+ */
+function runSuiteConclusive(env, suite = suitePath, timeoutMs = 300_000) {
+  const first = runSuite(env, suite, timeoutMs)
+  // Only an EXITED run whose own summary reports failures is repeated: a ceiling kill or
+  // a run that never started is the machine's own statement and is reported as it stands.
+  if (first.how !== 'exited' || !reportsFailedChecks(first.out)) return first
+  // The first attempt's failing checks, each line marked: a bare `  FAIL  ` line printed
+  // here would read as a row of THIS pin, and this one is not a row of this pin.
+  console.log(`  DISCLOSED  the first run ended with failed checks of its own (${endingOf(first.out)}):`)
+  for (const line of failureLinesOf(first.out, /^\s*FAIL\b/).split('\n')) console.log(`  DISCLOSED  first run: ${line.trim()}`)
+  const second = runSuite(env, suite, timeoutMs)
+  if (second.how === 'exited' && !reportsFailedChecks(second.out)) {
+    console.log(`  DISCLOSED  the repeat is clean (${endingOf(second.out)}); that failure is the suite's, not this pin's finding`)
+    return second
+  }
+  console.log(`  DISCLOSED  the repeat ended with failed checks too (${endingOf(second.out)}); both attempts are reported below`)
+  return second
+}
 
 /**
  * The `  SKIP  ` lines of a run: one per family the suite could not evaluate.
@@ -184,13 +252,16 @@ function claimOf(line) {
  * ended. SKIP lines are included: a run that skipped the family prints no FAIL of its
  * own, and the evidence section B reads (the mutant's own output) lives here.
  * @param {string} out - the child's combined output.
+ * @param {RegExp} [pattern] - which rows to keep; FAIL and SKIP by default, because a run
+ *   that skipped a family prints no FAIL of its own. The disclosure below keeps FAIL rows
+ *   only: a SKIP line is this pin's NORMAL content, not something a run "failed" on.
  * @returns {string} the matching lines, or a note when there are none.
  */
-function failureLinesOf(out) {
+function failureLinesOf(out, pattern = /^\s*(FAIL|SKIP)\b/) {
   const all = out.split('\n')
   const lines = []
   for (const [index, entry] of all.entries()) {
-    if (!/^\s*(FAIL|SKIP)\b/.test(entry)) continue
+    if (!pattern.test(entry)) continue
     lines.push(entry)
     for (const next of all.slice(index + 1)) {
       if (!/^ {8}\S/.test(next)) break
@@ -293,7 +364,7 @@ function assertDrivePathSkip(run) {
   check(EXIT2_LABEL,
     run.how === 'exited' && run.code === 2,
     `exit ${run.code}; the run's FAIL/SKIP lines and its end:\n${failureLinesOf(run.out)}\n${tailOf(run.out)}`)
-  check('drive-path-free run: NO check FAILS — the missing precondition is not a defect',
+  check(NO_FAILS_LABEL,
     failLines.length === 0,
     failLines.join('\n') || `exit ${run.code}; the run ends:\n${tailOf(run.out)}`)
   check('drive-path-free run: the SKIP names every drive-path assertion that did not run',
@@ -348,13 +419,13 @@ if (isInnerRun) {
   // directly (rebuilding the drive-path mutation here would test the real file and
   // make the outer assertion vacuous), and the mutation section is not entered again.
   console.log('the suite under test, given by DSH_CONFINEMENT_SKIP_SUITE (the inner run of the mutation section)')
-  assertDrivePathSkip(runSuite({}))
+  assertDrivePathSkip(runSuiteConclusive({}))
 } else {
   console.log('the suite run from a checkout with no /mnt spelling (a UNC helper path in a copy)')
   const uncCopy = buildMutantCopy()
   check('the drive-path mutation applied to the copy (a stale mutation must not pass silently)',
     uncCopy.mutated, `the copy at ${uncCopy.path} does not carry the UNC helper path`)
-  assertDrivePathSkip(runSuite({}, uncCopy.path))
+  assertDrivePathSkip(runSuiteConclusive({}, uncCopy.path))
   rmSync(uncCopy.tree, { recursive: true, force: true })
 }
 
@@ -363,6 +434,18 @@ if (!isInnerRun) {
   const countCopy = buildMutantCopy(true)
   check('count mutant: the mutation applied to the copy (a stale mutation must not pass silently)',
     countCopy.mutated, `the copy at ${countCopy.path} does not carry both mutations`)
+  // THE MUTANT'S OWN RUN, read from the mutant. The claim is about the SUITE — it exits
+  // 0 and prints no counted tail — so it is asserted against the suite's own output and
+  // exit code. It used to be read out of the child pin's failure detail, where the
+  // mutant's ending arrives only as a side effect of another row's evidence; one
+  // unrelated check failing inside the suite then reddened a row that names the count
+  // (MEASURED: an injected failing check in the mutant produced exactly the captured
+  // 1-row failure, with the mutant's own count behaviour correct all along).
+  const mutant = runSuiteConclusive({}, countCopy.path)
+  check('count mutant: the mutant itself exits 0, prints the SKIP lines, and prints no counted tail',
+    mutant.how === 'exited' && mutant.code === 0 && skipLinesOf(mutant.out).length > 0
+      && mutant.out.includes('ALL CHECKS PASSED') && mutant.out.includes('CHECK(S) SKIPPED') === false,
+    `exit ${mutant.code} (${mutant.how}: ${mutant.note}); the run's FAIL/SKIP lines and its end:\n${failureLinesOf(mutant.out)}\n${tailOf(mutant.out)}`)
   // THIS pin, run against that copy's suite. It must FAIL: the suite still prints every
   // SKIP line, but it exits 0 and declares a clean profile, so the print alone proves
   // nothing — the count is what this pin is pinning.
@@ -375,15 +458,17 @@ if (!isInnerRun) {
     childPin.out.includes(`  FAIL  ${EXIT2_LABEL}`),
     failureLinesOf(childPin.out))
   check('count mutant: the mutant still PRINTS the SKIP lines (the print is not the load-bearing part)',
-    childPin.out.includes('  SKIP  the helper parses under bash -n')
-      && childPin.out.includes('the shipped helper refuses a SUDO_USER that does not resolve'),
+    mutant.out.includes('  SKIP  the helper parses under bash -n')
+      && mutant.out.includes('the shipped helper refuses a SUDO_USER that does not resolve'),
+    failureLinesOf(mutant.out))
+  // The child pin's red is the COUNT's only if the run IT read was clean: a suite that
+  // failed a check of its own exits 1 as well, so the exit-2 row above is satisfied by
+  // that run too. Asserted as the absence of the one row that FAILS exactly then —
+  // content, not position — rather than assumed: this is the discrimination the
+  // captured failure showed was missing.
+  check('count mutant: and it reddened on the count, not on a suite that failed a check of its own',
+    !childPin.out.includes(`  FAIL  ${NO_FAILS_LABEL}`),
     failureLinesOf(childPin.out))
-  // The mutant's own end is read from the child pin's evidence, which carries the run's
-  // last lines. Asserted as the ABSENCE of the counted tail rather than as a phrase from
-  // this file's failure detail: a detail that is reworded must not redden the pin.
-  check('count mutant: and it declares a clean profile while doing so (exit 0, no counted tail)',
-    childPin.out.includes('ALL CHECKS PASSED') && childPin.out.includes('CHECK(S) SKIPPED') === false,
-    tailOf(childPin.out, 8))
 }
 
 if (!isInnerRun) {
