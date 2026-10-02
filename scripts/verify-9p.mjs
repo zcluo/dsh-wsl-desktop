@@ -31,7 +31,17 @@ import { resolveDistro, resolveOtherDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 
 const distro = resolveDistro(process.argv[2])
-const root = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe`
+// Both scratch trees this suite owns are made UNIQUE TO THIS PROCESS. They used to be
+// machine-global (`/tmp/dsh-wsl-9p-probe`, `/tmp/dsh-wsl-9p-probe-link`), so two runs
+// overlapping in time destroyed each other: one run's opening `rm -rf` deletes the
+// other's root, and a `rm -rf` that races a concurrent write dies ENOTEMPTY. Measured
+// with two overlapping runs of this probe: 17 of 20 runs crashed (13 ENOTEMPTY, 3 ENOENT,
+// 1 EPERM) and the crash is the LAST cleanup, which runs before the report is printed —
+// so the suite lost its whole verdict, not one row. The pid is enough: concurrent
+// processes never share one, and a reused pid finds only its own leftover, which the
+// opening `rm -rf` removes anyway.
+const runSuffix = process.pid
+const root = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe-${runSuffix}`
 
 let failures = 0
 /** Share facts that could not be measured here; the suite's exit code reports them (see the tail). */
@@ -490,8 +500,8 @@ if (!libListed) {
 // named in the SKIP block, counted in the tail, and NOT pushed into `facts` (which
 // counts measurements).
 const WSL_TIMEOUT_MS = 30_000
-const linkScratchLinux = '/tmp/dsh-wsl-9p-probe-link'
-const linkScratch = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe-link`
+const linkScratchLinux = `/tmp/dsh-wsl-9p-probe-link-${runSuffix}`
+const linkScratch = `\\\\wsl.localhost\\${distro}\\tmp\\dsh-wsl-9p-probe-link-${runSuffix}`
 const linkFixture = `${linkScratch}\\root`
 const linkOutside = `${linkScratch}\\outside`
 const linkEntry = `${linkFixture}\\escape`

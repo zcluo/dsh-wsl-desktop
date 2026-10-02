@@ -77,6 +77,18 @@ const LINK_FIXTURE_FACTS = [
 const LINK_FIXTURE_ASSERTION = 'the fence refuses the target its own canonicalization produces for that spelling'
 
 /**
+ * The subjects the two SKIP families name before the em dash — the key every lookup in
+ * this file binds on.
+ *
+ * A run can carry BOTH families at once and the probe prints the fixture's block first,
+ * so "the run's SKIP block" is not a single thing. Each name below is already required on
+ * its family's SKIP line by a check in this file, so a rename reddens a check instead of
+ * quietly re-pointing a lookup at the other family's block.
+ */
+const CROSS_SHARE_SKIP_SUBJECT = 'cross-share identity'
+const FIXTURE_SKIP_SUBJECT = 'the link fixture'
+
+/**
  * Run the probe in a child process with an explicit environment.
  *
  * `DSH_WSL_OTHER_DISTRO` is removed from the inherited environment first: a
@@ -102,30 +114,73 @@ function runProbe(env, probe = probePath) {
 }
 
 /**
- * The whole SKIP block of a run: the `  SKIP  ` line and the 8-space-indented lines that
+ * The SUBJECT a SKIP line names — the family the SKIP belongs to — read from the text
+ * before the em dash.
+ *
+ * This is the key every lookup below binds on, and it is CONTENT rather than position:
+ * the probe prints the link-fixture SKIP (verify-9p.mjs:556) BEFORE the cross-share SKIP
+ * (:721), so a lookup that took "the run's first SKIP block" read the fixture's block
+ * whenever the fixture could not be built and judged every cross-share assertion against
+ * it — measured, against a copy whose fixture always fails: 5 cross-share rows red while
+ * `exit 2` and the no-early-skip row stayed green, which only the fixture SKIP firing
+ * can produce. "The last block" would be the same fragility one step over (any third
+ * family, in any order, moves it again), so the lookup is keyed on the family's own name.
+ * That name cannot drift silently: this file already requires it on the SKIP line
+ * (`a SKIP line names the cross-share block`, and the fixture rows below), so a rename
+ * reddens a check instead of quietly re-pointing a lookup at another family's block.
+ * @param {string} line - a SKIP line.
+ * @returns {string} the subject, or '' when the line is not a SKIP line or carries no em dash.
+ */
+function skipSubjectOf(line) {
+  const marker = '  SKIP  '
+  if (!line.startsWith(marker)) return ''
+  const rest = line.slice(marker.length)
+  return rest.includes('—') ? rest.slice(0, rest.indexOf('—')).trim() : ''
+}
+
+/**
+ * Every SKIP block of a run: each `  SKIP  ` line and the 8-space-indented lines that
  * belong to it, ending at the first line that does not.
  *
  * The block is what a reader actually reads, and the checks below must be satisfied by
  * IT — the same words appearing on a FACT line elsewhere in the run are not the SKIP
  * naming them — so nothing here greps the run's whole output.
  * @param {string} out - the child's combined output.
- * @returns {string[]} the block's lines; empty when the run printed no SKIP.
+ * @returns {string[][]} one block per SKIP line, in the order the run printed them.
  */
-function skipBlockOf(out) {
+function skipBlocksOf(out) {
   const lines = out.split('\n')
-  const start = lines.findIndex((entry) => entry.startsWith('  SKIP  '))
-  if (start === -1) return []
-  const block = [lines[start]]
-  for (const next of lines.slice(start + 1)) {
-    if (!/^ {8}\S/.test(next)) break
-    block.push(next)
+  const blocks = []
+  for (const [index, entry] of lines.entries()) {
+    if (!entry.startsWith('  SKIP  ')) continue
+    const block = [entry]
+    for (const next of lines.slice(index + 1)) {
+      if (!/^ {8}\S/.test(next)) break
+      block.push(next)
+    }
+    blocks.push(block)
   }
-  return block
+  return blocks
+}
+
+/**
+ * The SKIP block of ONE family, chosen by the subject its SKIP line names.
+ *
+ * A run carries several families at once whenever more than one precondition is missing
+ * — the link fixture and the cross-share rows are independent and either can fire alone
+ * — so "the run's SKIP block" is not a single thing, and this is the only lookup the
+ * checks may use.
+ * @param {string} out - the child's combined output.
+ * @param {string} subject - the family's own name, as its SKIP line spells it.
+ * @returns {string[]} that family's block, or [] when the run printed no SKIP for it.
+ */
+function skipBlockNaming(out, subject) {
+  return skipBlocksOf(out).find((block) => skipSubjectOf(block[0]) === subject) ?? []
 }
 
 /**
  * The SKIP line of a block, and the precondition it names after the em dash.
- * @param {string[]} block - the block from skipBlockOf.
+ * @param {string[]} block - a block from skipBlockNaming.
  * @returns {{line: string, reason: string}} the SKIP line and its reason (both empty when absent).
  */
 function skipLineOf(block) {
@@ -209,14 +264,22 @@ function tailOf(out, lines = 3) {
  * @param {string} reasonMustName - a token the named precondition must contain.
  */
 function assertSkipContent(where, run, reasonMustName) {
-  const block = skipBlockOf(run.out)
+  // The CROSS-SHARE family's own block, by its subject — never the run's first block.
+  const block = skipBlockNaming(run.out, CROSS_SHARE_SKIP_SUBJECT)
   const blockText = block.join('\n')
   const { line, reason } = skipLineOf(block)
   check(`${where}: exit 2, so verify-all reports the probe as SKIP instead of as a pass`,
     run.code === 2,
     `exit ${run.code}; the run's FAIL/SKIP lines and its end:\n${failureLinesOf(run.out)}\n${tailOf(run.out)}`)
+  // This row shares its predicate with the lookup above ON PURPOSE: it is what NAMES the
+  // failure when the run printed no cross-share SKIP at all — a probe that crashed in its
+  // own cleanup (measured: ENOTEMPTY, exit 1, no report), or one that measured the second
+  // share instead of skipping — and every row below then reads an empty block. It can
+  // fail: measured red against exactly that crashed probe, green against the fixture-only
+  // SKIP whose block this lookup is bound to.
   check(`${where}: a SKIP line names the cross-share block`,
-    line.includes('cross-share identity'), line || `(no "  SKIP  " line); the run ends:\n${tailOf(run.out)}`)
+    block.length > 0,
+    line || `(no "  SKIP  " line whose subject is "${CROSS_SHARE_SKIP_SUBJECT}"); the run ends:\n${tailOf(run.out)}`)
   check(`${where}: the SKIP names the missing precondition ("${reasonMustName}"), never a bare reason`,
     reason.length > 0 && reason.includes(reasonMustName),
     line || `(no "  SKIP  " line); the run ends:\n${tailOf(run.out)}`)
@@ -227,15 +290,25 @@ function assertSkipContent(where, run, reasonMustName) {
     blockText.includes('DSH_WSL_OTHER_DISTRO') && blockText.includes('install a second WSL distribution'),
     blockText || `(the run printed no SKIP block); the run ends:\n${tailOf(run.out)}`)
   const tail = run.out.split('\n').find((entry) => entry.includes('WERE NOT MEASURED')) ?? ''
-  // The count is DERIVED from the list that owns it and BOUND to the phrase it counts.
+  // The tail's count is the RUN's total of skipped share facts, so the expectation is the
+  // cross-share family PLUS the fixture family when that family skipped too — read from
+  // the run's own SKIP blocks, never assumed from the machine class. The fixture fails on
+  // its own (measured under concurrent runs: `ETIMEDOUT: spawnSync wsl.exe ETIMEDOUT`),
+  // and a hardcoded 3 then reddened a correct run: measured, the tail printed "6 SHARE
+  // FACT(S) WERE NOT MEASURED AND 4 CHECK(S) WERE NOT EVALUATED" while the fixture's own
+  // rows in section D stayed green.
+  //
+  // The count is DERIVED from the lists that own it and BOUND to the phrase it counts.
   // The hardcoded `/\b3\b/` was satisfied by a 3 anywhere in the line — this tail also
   // carries a CHECK count — so a tail whose share count no longer matched
   // CROSS_SHARE_LABELS kept the row green: measured, with the tail printing "2 SHARE
   // FACT(S) ... AND 3 CHECK(S) ...", the old boolean was TRUE. The fixture family below
   // was already fixed for exactly this (a hardcoded count reddened it on the
   // one-distribution class); this is the same defect one family over.
-  check(`${where}: the tail counts the ${CROSS_SHARE_LABELS.length} unmeasured facts instead of declaring a clean profile`,
-    new RegExp(`(^| )${CROSS_SHARE_LABELS.length} SHARE FACT\\(S\\) WERE NOT MEASURED`).test(tail),
+  const fixtureBlock = skipBlockNaming(run.out, FIXTURE_SKIP_SUBJECT)
+  const expectedSkipped = CROSS_SHARE_LABELS.length + (fixtureBlock.length > 0 ? LINK_FIXTURE_FACTS.length : 0)
+  check(`${where}: the tail counts the ${expectedSkipped} unmeasured fact(s)${fixtureBlock.length > 0 ? ' (the fixture family skipped too)' : ''} instead of declaring a clean profile`,
+    new RegExp(`(^| )${expectedSkipped} SHARE FACT\\(S\\) WERE NOT MEASURED`).test(tail),
     tail || `(no line saying the facts were not measured); the run ends:\n${tailOf(run.out)}`)
   // The skip is NOT an early exit: the probe still runs, and the facts that need no
   // second share are still measured and printed, so a reader loses exactly the three
@@ -307,7 +380,11 @@ function buildFixtureFailedCopy() {
  */
 function assertFixtureSkipContent(run, machineSecond) {
   const expectedFacts = LINK_FIXTURE_FACTS.length + (machineSecond.hasSecond ? 0 : CROSS_SHARE_LABELS.length)
-  const block = skipBlockOf(run.out)
+  // The FIXTURE family's own block, by its subject — the same binding the cross-share rows
+  // use, and for the same reason: on a one-distribution machine this run skips BOTH
+  // families, and a lookup that took the first block would be right only by the accident
+  // that the fixture happens to print first.
+  const block = skipBlockNaming(run.out, FIXTURE_SKIP_SUBJECT)
   const blockText = block.join('\n')
   const { line, reason } = skipLineOf(block)
   check('fixture skip: exit 2, so verify-all reports the probe as SKIP instead of as a pass',
@@ -356,17 +433,28 @@ console.log('\nthe control: the machine\'s own answer')
 const machineSecond = machineSecondDistro()
 const control = runProbe({})
 if (machineSecond.hasSecond) {
-  check('control: with a second share present the probe exits 0 (the skip is conditional)',
-    control.code === 0, `exit ${control.code} with "${machineSecond.other}" installed; the run ends:\n${tailOf(control.out)}`)
-  check('control: no SKIP is printed when the second share answered',
-    skipBlockOf(control.out).length === 0,
-    control.out.split('\n').filter((entry) => entry.includes('SKIP')).join('\n'))
+  // The control is about the CROSS-SHARE family: with a second share present that family
+  // must measure its rows and print no SKIP. The run's exit code is not that family's own
+  // verdict — the fixture family forces a legitimate 2 on its own (section D pins that
+  // branch, and it was measured firing here as `ETIMEDOUT`) — so the code is asserted
+  // against the families that actually skipped, and the cross-share family's absence is
+  // asserted on its own. Demanding 0 unconditionally reddened a correct run: measured
+  // against a copy whose fixture always fails, `exit 2 with "debian-dev" installed`.
+  const controlCross = skipBlockNaming(control.out, CROSS_SHARE_SKIP_SUBJECT)
+  const controlFixture = skipBlockNaming(control.out, FIXTURE_SKIP_SUBJECT)
+  const expectedCode = controlFixture.length > 0 ? 2 : 0
+  check(`control: with a second share present the probe exits ${expectedCode} (the skip is conditional)`,
+    control.code === expectedCode, `exit ${control.code} with "${machineSecond.other}" installed; the run ends:\n${tailOf(control.out)}`)
+  check('control: the cross-share family prints no SKIP when the second share answered',
+    controlCross.length === 0,
+    controlCross.join('\n') || control.out.split('\n').filter((entry) => entry.includes('SKIP')).join('\n'))
   check('control: all three cross-share identity rows are MEASURED, not merely printed',
     CROSS_SHARE_LABELS.every((label) => measuredRow(control.out, label)),
     control.out.split('\n').filter((entry) => entry.includes('cross-share identity')).join('\n'))
 } else {
   check(`control: this machine lists no second distribution beyond "${distro}", so the unforced run skips too`,
-    control.code === 2 && skipBlockOf(control.out).length > 0, `exit ${control.code}; the run ends:\n${tailOf(control.out)}`)
+    control.code === 2 && skipBlockNaming(control.out, CROSS_SHARE_SKIP_SUBJECT).length > 0,
+    `exit ${control.code}; the run ends:\n${tailOf(control.out)}`)
 }
 
 // D: the probe's OTHER skip. When wsl.exe fails or a cold VM start exceeds its ceiling
