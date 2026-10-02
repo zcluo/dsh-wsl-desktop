@@ -4840,8 +4840,8 @@
       </div>
     </div>
 
-    <script id="archify-guided-views-data" type="application/json">[{"id":"create-path","label":"创建接缝","focus":["client","host","registry","realm"],"note":"会话创建请求命名 WSL 预设，是唯一无竞态的绑定缝。"},{"id":"exec-path","label":"执行世界","focus":["realm","shell","sub","wsl","distro"],"note":"isolate realm 只隔离 shell 与 fs；执行统一经 wsl.exe 进入发行版。"},{"id":"two-transports","label":"两种传输","focus":["fs","distro"],"note":"fs 走 9P UNC 且过围栏；命令执行走 wsl.exe。"}]</script>
-    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"https://github.com/zcluo/dsh-wsl-desktop","revision":"da0344e44668616aaae8d126d88822cc30805969","shortRevision":"da0344e"},"referenceCount":8,"nodes":{"client":[{"path":"lib/client.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/client.js"}],"host":[{"path":"lib/index.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/index.js"}],"admission":[{"path":"lib/http-admission.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/http-admission.js"}],"realm":[{"path":"lib/wsl/preset.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/wsl/preset.js"}],"shell":[{"path":"lib/wsl/shell.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/wsl/shell.js"}],"fs":[{"path":"lib/wsl/fs.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/wsl/fs.js"},{"path":"lib/wsl/fence.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/wsl/fence.js"}],"sub":[{"path":"lib/wsl/subprocess.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/da0344e44668616aaae8d126d88822cc30805969/lib/wsl/subprocess.js"}]}}</script>
+    <script id="archify-guided-views-data" type="application/json">[{"id":"create-path","label":"创建接缝","focus":["client","host","registry","realm"],"note":"会话创建请求命名 WSL 预设，是唯一无竞态的绑定缝。"},{"id":"exec-path","label":"执行世界","focus":["realm","shell","sub","wsl","distro"],"note":"isolate realm 隔离 shell、fs 与 subprocess；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe。"},{"id":"two-transports","label":"两种传输","focus":["fs","distro"],"note":"fs 走 9P UNC 且过围栏；命令执行走 wsl.exe。"}]</script>
+    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"https://github.com/zcluo/dsh-wsl-desktop","revision":"896c1b7f0229e236ae485050ca8efe8428223ef6","shortRevision":"896c1b7"},"referenceCount":8,"nodes":{"client":[{"path":"lib/client.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/client.js"}],"host":[{"path":"lib/index.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/index.js"}],"admission":[{"path":"lib/http-admission.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/http-admission.js"}],"realm":[{"path":"lib/wsl/preset.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/wsl/preset.js"}],"shell":[{"path":"lib/wsl/shell.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/wsl/shell.js"}],"fs":[{"path":"lib/wsl/fs.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/wsl/fs.js"},{"path":"lib/wsl/fence.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/wsl/fence.js"}],"sub":[{"path":"lib/wsl/subprocess.js","href":"https://github.com/zcluo/dsh-wsl-desktop/blob/896c1b7f0229e236ae485050ca8efe8428223ef6/lib/wsl/subprocess.js"}]}}</script>
     <div class="guided-views no-print" id="guided-views" hidden aria-label="Guided diagram views">
       <button id="guided-view-prev" type="button" aria-label="Previous guided view" title="Previous guided view ([)">&#8592;</button>
       <div class="guided-view-copy">
@@ -4925,7 +4925,7 @@
         <path data-edge-from="host" data-edge-to="realm" data-edge-label="创建时 presets.mount" data-edge-key="3" data-edge-id="host-realm" data-composition-points="370,362;430,362" d="M 370 362 L 430 362" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="realm" data-edge-to="shell" data-edge-label="ctx.shell" data-edge-key="4" data-edge-id="realm-shell" data-composition-points="510,394;510,457;400,457;400,520" d="M 510 394 L 510 449 Q 510 457 502 457 L 408 457 Q 400 457 400 465 L 400 520" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="realm" data-edge-to="fs" data-edge-label="ctx.fs" data-edge-key="5" data-edge-id="realm-fs" data-composition-points="510,394;510,457;570,457;570,520" d="M 510 394 L 510 449 Q 510 457 518 457 L 562 457 Q 570 457 570 465 L 570 520" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="realm" data-edge-to="sub" data-edge-label="ctx.subprocess 继承宿主" data-edge-key="6" data-edge-id="realm-sub" data-composition-points="590,362;648,362;648,550;660,550" d="M 590 362 L 640 362 Q 648 362 648 370 L 648 544 Q 648 550 654 550 L 660 550" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="realm" data-edge-to="sub" data-edge-label="ctx.subprocess 域内 provider" data-edge-key="6" data-edge-id="realm-sub" data-composition-points="590,362;648,362;648,550;660,550" d="M 590 362 L 640 362 Q 648 362 648 370 L 648 544 Q 648 550 654 550 L 660 550" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="sub" data-edge-to="wsl" data-edge-label="spawn · shell / pty 同经此路" data-edge-key="7" data-edge-id="sub-wsl" data-composition-points="735,520;735,455;785,455;785,390" d="M 735 520 L 735 463 Q 735 455 743 455 L 777 455 Q 785 455 785 447 L 785 390" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="wsl" data-edge-to="distro" data-edge-label="进入发行版" data-edge-key="8" data-edge-id="wsl-distro" data-composition-points="850,360;890,360" d="M 850 360 L 890 360" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="fs" data-edge-to="distro" data-edge-label="9P UNC（过围栏）" data-edge-key="9" data-edge-id="fs-distro" data-composition-points="570,580;570,650;965,650;965,392" d="M 570 580 L 570 642 Q 570 650 578 650 L 957 650 Q 965 650 965 642 L 965 392" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
@@ -4981,15 +4981,15 @@
         <text data-detail="context" x="510" y="194" class="t-muted" font-size="9" text-anchor="middle">wsl-* 变体预设</text>
         </g>
 
-        <g id="node-realm" data-node-id="realm" data-node-label="isolate realm" tabindex="0" role="button" aria-label="Focus isolate realm, lib/wsl/preset.js · shell/fs 隔离, DSH Desktop 宿主进程 · 改动需重启" aria-pressed="false" data-node-kind="backend" data-node-sublabel="lib/wsl/preset.js · shell/fs 隔离" data-node-tag="wsl-standard" data-node-context="DSH Desktop 宿主进程 · 改动需重启">
-          <title>isolate realm · lib/wsl/preset.js · shell/fs 隔离 · DSH Desktop 宿主进程 · 改动需重启 · wsl-standard</title>
+        <g id="node-realm" data-node-id="realm" data-node-label="isolate realm" tabindex="0" role="button" aria-label="Focus isolate realm, preset.js · shell/fs/subprocess 隔离, DSH Desktop 宿主进程 · 改动需重启" aria-pressed="false" data-node-kind="backend" data-node-sublabel="preset.js · shell/fs/subprocess 隔离" data-node-tag="wsl-standard" data-node-context="DSH Desktop 宿主进程 · 改动需重启">
+          <title>isolate realm · preset.js · shell/fs/subprocess 隔离 · DSH Desktop 宿主进程 · 改动需重启 · wsl-standard</title>
           <rect x="430" y="330" width="160" height="64" rx="6" class="c-mask"/>
           <rect x="430" y="330" width="160" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(436 336) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-detail-anchor x="510" y="360" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">isolate realm</text>
-        <text data-detail="context" x="510" y="376" class="t-muted" font-size="7.6" text-anchor="middle">lib/wsl/preset.js · shell/fs 隔离</text>
+        <text data-detail="context" x="510" y="376" class="t-muted" font-size="7" text-anchor="middle">preset.js · shell/fs/subprocess 隔离</text>
         <text data-detail="fine" x="510" y="386" class="t-backend" font-size="7" text-anchor="middle">wsl-standard</text>
         </g>
 
@@ -5078,9 +5078,9 @@
           <rect x="520.6" y="434" width="38.8" height="14" rx="3" class="c-mask"/>
           <text x="540" y="444" class="t-muted" font-size="8" text-anchor="middle">ctx.fs</text>
         </g>
-        <g data-detail="context" data-edge-from="realm" data-edge-to="sub" data-edge-label="ctx.subprocess 继承宿主" data-edge-key="6" data-edge-id="realm-sub">
-          <rect x="587.8" y="490" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="648" y="500" class="t-messagebus" font-size="8" text-anchor="middle">ctx.subprocess 继承宿主</text>
+        <g data-detail="context" data-edge-from="realm" data-edge-to="sub" data-edge-label="ctx.subprocess 域内 provider" data-edge-key="6" data-edge-id="realm-sub">
+          <rect x="575.8" y="490" width="144.4" height="14" rx="3" class="c-mask"/>
+          <text x="648" y="500" class="t-messagebus" font-size="8" text-anchor="middle">ctx.subprocess 域内 provider</text>
         </g>
         <g data-detail="context" data-edge-from="sub" data-edge-to="wsl" data-edge-label="spawn · shell / pty 同经此路" data-edge-key="7" data-edge-id="sub-wsl">
           <rect x="662.8" y="466" width="144.4" height="14" rx="3" class="c-mask"/>
@@ -5309,7 +5309,18 @@
         </div>
         <ul>
           <li>&bull; preset 在会话创建请求里命名，创建时组合</li>
-          <li>&bull; isolate realm 只隔离 shell 与 fs，subprocess 继承宿主</li>
+          <li>&bull; isolate realm 隔离 shell · fs · subprocess；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot violet"></div>
+          <h3>验证口径</h3>
+        </div>
+        <ul>
+          <li>&bull; sources 是证据行，钉在 meta.repository.revision 这个提交上：被引用文件一改，就要重钉到包含该改动的提交，否则链接指向旧代码</li>
+          <li>&bull; 重新校验：archify validate &lt;type&gt; &lt;spec&gt; --quality showcase --json；本图带 source evidence，还要加 --repo-root .，另外四张不用</li>
         </ul>
       </div>
     </div>

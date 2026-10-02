@@ -32,7 +32,7 @@
           "bridge_down",
           "residual"
         ],
-        "note": "失败与正常 teardown 汇入同一条清理路径；SIGKILL 残留 FIFO。"
+        "note": "失败与正常 teardown 汇入同一条清理路径；只有宿主进程被杀才残留 FIFO。"
       }
     ]
   },
@@ -118,8 +118,8 @@
     {
       "id": "residual",
       "type": "failure",
-      "label": "SIGKILL：FIFO 残留",
-      "sublabel": "至发行版重启 · 先 unlink",
+      "label": "宿主被杀：FIFO 残留",
+      "sublabel": "桥被杀由宿主 rm -f 兜住",
       "lane": "outcomes",
       "col": 2,
       "tag": "终点"
@@ -211,7 +211,7 @@
       "id": "t9",
       "from": "live",
       "to": "residual",
-      "label": "SIGKILL",
+      "label": "宿主 SIGKILL",
       "variant": "security",
       "route": "straight",
       "fromSide": "bottom",
@@ -246,8 +246,8 @@
       "dot": "amber",
       "title": "已知残留",
       "items": [
-        "硬杀后 /tmp/dsh-pty-*.fifo 残留到发行版重启，属临时垃圾",
-        "不影响行为：下次分配先 unlink 同名 FIFO"
+        "只有宿主进程被硬杀才残留 /tmp/dsh-pty-*.fifo 到发行版重启",
+        "桥被杀由宿主侧 rm -f 兜住；每次分配都用新 uuid，残留不被复用也不清扫"
       ]
     }
   ]

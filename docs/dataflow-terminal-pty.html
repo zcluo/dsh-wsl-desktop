@@ -5265,8 +5265,8 @@
           <h3>残余限制</h3>
         </div>
         <ul>
-          <li>&bull; 宿主被 SIGKILL 时 finally 不执行，FIFO 残留到发行版重启</li>
-          <li>&bull; 下次分配先 unlink 同名 FIFO，临时垃圾不影响行为</li>
+          <li>&bull; 宿主被 SIGKILL 时桥的 finally 与宿主侧 rm 都执行不到，FIFO 残留到发行版重启</li>
+          <li>&bull; 桥被杀由宿主侧 rm -f 兜住；每次分配都用新 uuid，残留不影响行为</li>
         </ul>
       </div>
     </div>

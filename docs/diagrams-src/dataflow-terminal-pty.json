@@ -221,8 +221,8 @@
       "dot": "amber",
       "title": "残余限制",
       "items": [
-        "宿主被 SIGKILL 时 finally 不执行，FIFO 残留到发行版重启",
-        "下次分配先 unlink 同名 FIFO，临时垃圾不影响行为"
+        "宿主被 SIGKILL 时桥的 finally 与宿主侧 rm 都执行不到，FIFO 残留到发行版重启",
+        "桥被杀由宿主侧 rm -f 兜住；每次分配都用新 uuid，残留不影响行为"
       ]
     }
   ]

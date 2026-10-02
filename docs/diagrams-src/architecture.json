@@ -27,7 +27,7 @@
           "wsl",
           "distro"
         ],
-        "note": "isolate realm 只隔离 shell 与 fs；执行统一经 wsl.exe 进入发行版。"
+        "note": "isolate realm 隔离 shell、fs 与 subprocess；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe。"
       },
       {
         "id": "two-transports",
@@ -41,7 +41,7 @@
     ],
     "repository": {
       "url": "https://github.com/zcluo/dsh-wsl-desktop",
-      "revision": "da0344e44668616aaae8d126d88822cc30805969"
+      "revision": "896c1b7f0229e236ae485050ca8efe8428223ef6"
     }
   },
   "components": [
@@ -121,7 +121,7 @@
       "id": "realm",
       "type": "backend",
       "label": "isolate realm",
-      "sublabel": "lib/wsl/preset.js · shell/fs 隔离",
+      "sublabel": "preset.js · shell/fs/subprocess 隔离",
       "tag": "wsl-standard",
       "pos": [
         430,
@@ -333,7 +333,7 @@
       "id": "realm-sub",
       "from": "realm",
       "to": "sub",
-      "label": "ctx.subprocess 继承宿主",
+      "label": "ctx.subprocess 域内 provider",
       "variant": "dashed",
       "fromSide": "right",
       "toSide": "left",
@@ -405,7 +405,15 @@
       "title": "执行世界",
       "items": [
         "preset 在会话创建请求里命名，创建时组合",
-        "isolate realm 只隔离 shell 与 fs，subprocess 继承宿主"
+        "isolate realm 隔离 shell · fs · subprocess；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "验证口径",
+      "items": [
+        "sources 是证据行，钉在 meta.repository.revision 这个提交上：被引用文件一改，就要重钉到包含该改动的提交，否则链接指向旧代码",
+        "重新校验：archify validate <type> <spec> --quality showcase --json；本图带 source evidence，还要加 --repo-root .，另外四张不用"
       ]
     }
   ]
