@@ -111,10 +111,30 @@ Copy-Item (Join-Path $src 'package.json') $dest
 Copy-Item (Join-Path $src 'cordis.patch.yml') $dest
 Copy-Item (Join-Path $src 'lib') $dest -Recurse
 
-# Only the row id is stamped; the `name:` value must stay the package name.
+# Both rewrites below are LOAD-BEARING, and `-replace` reports NOTHING when its
+# pattern does not match: it returns its input unchanged, the file was written back
+# unchanged, and the run still exited 0. The row id is what makes the loader mount a
+# NEW generation (it refuses one it has already mounted) and the config is what turns
+# the acceptance surface on — so a miss surfaced much later, as a stage that was
+# ignored in silence or as a string of 401s, with nothing in the run saying so.
+#
+# Each substitution is therefore CHECKED before anything is written, and a miss stops
+# the run. The directory this run staged is removed again first, so a failure leaves
+# the profile exactly as it was rather than holding a half-configured generation that
+# the next run's filter would keep. Only the row id is stamped; the `name:` value must
+# stay the package name.
 $patchPath = Join-Path $dest 'cordis.patch.yml'
-(Get-Content $patchPath -Raw) -replace '(?m)^(\s*- id: )wsl-desktop\s*$', "`${1}wsl-desktop-$stamp" |
-  Set-Content $patchPath -NoNewline
+$original = Get-Content $patchPath -Raw
+
+$rowIdPattern = '(?m)^(\s*- id: )wsl-desktop\s*$'
+$stamped = $original -replace $rowIdPattern, "`${1}wsl-desktop-$stamp"
+# The positive form is the assertion: the stamped text must CARRY the stamped id. A
+# "did the text change" test alone accepted an empty source (an empty file returns
+# $null, and $null -replace … is '' — also "unchanged" by comparison but written back).
+if (-not $stamped.Contains("wsl-desktop-$stamp")) {
+  Remove-Item $dest -Recurse -Force
+  throw "cordis.patch.yml carries no 'wsl-desktop' row id to stamp (pattern: $rowIdPattern); nothing was staged"
+}
 
 # This installer exists to exercise the plugin on a development machine, so it
 # turns the acceptance surface on. The shipped patch leaves it off: that surface
@@ -123,9 +143,17 @@ $patchPath = Join-Path $dest 'cordis.patch.yml'
 # holders too: a development token replaces only the browser-authentication arm
 # (401), never the rebinding arm (403). The token decides which methods a
 # non-browser caller may reach, not whether the fence runs.
-$patch = Get-Content $patchPath -Raw
-$patch = $patch -replace "(?m)^(\s*name: 'dsh-wsl-desktop')\s*$", "`${1}`n      config:`n        developerTools: true"
-Set-Content $patchPath $patch -NoNewline
+$configPattern = "(?m)^(\s*name: 'dsh-wsl-desktop')\s*$"
+$configured = $stamped -replace $configPattern, "`${1}`n      config:`n        developerTools: true"
+# Both halves are required here: the text must have CHANGED (a patch that already
+# carried the config would otherwise pass on a miss) and it must carry the key.
+if ($configured -ceq $stamped -or -not $configured.Contains('developerTools: true')) {
+  Remove-Item $dest -Recurse -Force
+  throw "cordis.patch.yml carries no 'dsh-wsl-desktop' name line to configure (pattern: $configPattern); nothing was staged"
+}
+
+# One write, after both substitutions have been shown to apply.
+Set-Content $patchPath $configured -NoNewline
 
 # Point the profile at the generation just staged.
 #

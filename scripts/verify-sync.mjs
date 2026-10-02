@@ -15,7 +15,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -82,9 +82,11 @@ function said(output, pattern) {
  * @param {'linked'|'dangling'|'unlinked'|'fresh'} options.link - what the profile link looks like.
  * @param {number} [options.runs] - how many times to run the script (two models a
  * second stage before the desktop was ever restarted).
+ * @param {(text: string) => string} [options.patch] - a rewrite of the SOURCE
+ * cordis.patch.yml, for the cases whose subject is the script's own input.
  * @returns {Promise<object>} the fixture and everything the run left behind.
  */
-async function scenario({ link, runs = 1 }) {
+async function scenario({ link, runs = 1, patch }) {
   const home = await mkdtemp(join(tmpdir(), 'dsh-wsl-sync-'))
   const profile = join(home, 'profiles', 'verify')
   const plugins = join(profile, 'plugins')
@@ -131,12 +133,33 @@ async function scenario({ link, runs = 1 }) {
   } else {
     await mkdir(profile, { recursive: true })
   }
+  // A case whose subject is the script's own INPUT: the staging script copies
+  // package.json, cordis.patch.yml and lib/ from its parent directory, so a source tree
+  // carrying a patch the substitution cannot match is built by copying that much into
+  // the throwaway home. Nothing outside the temp directory is touched.
+  let scriptPath = script
+  if (patch !== undefined) {
+    const source = join(home, 'source')
+    await mkdir(join(source, 'scripts'), { recursive: true })
+    await cp(join(pluginRoot, 'package.json'), join(source, 'package.json'))
+    await cp(join(pluginRoot, 'lib'), join(source, 'lib'), { recursive: true })
+    await cp(script, join(source, 'scripts', 'sync.ps1'))
+    const patchPath = join(source, 'cordis.patch.yml')
+    await cp(join(pluginRoot, 'cordis.patch.yml'), patchPath)
+    const before = await readFile(patchPath, 'utf8')
+    const after = patch(before)
+    // A rewrite that silently did not apply would make its case pass for the wrong
+    // reason — the same silent-substitution class the case exists to remove.
+    if (after === before) throw new Error(`the source-patch rewrite of ${patchPath} did not apply`)
+    await writeFile(patchPath, after, 'utf8')
+    scriptPath = join(source, 'scripts', 'sync.ps1')
+  }
   let error = null
   let output = ''
   const staged = []
   for (let index = 0; index < runs; index += 1) {
     const run = await new Promise((resolve) => {
-      execFile(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Profile', 'verify'],
+      execFile(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Profile', 'verify'],
         { env: { ...process.env, DSH_HOME: home }, timeout: 120000 },
         (err, stdout, stderr) => resolve({ err, stdout, stderr }))
     })
@@ -246,6 +269,56 @@ console.log('\nno profile link at all')
   check('every generation is kept rather than guessed at',
     run.after.includes('dsh-wsl-desktop-0000') && run.after.includes('dsh-wsl-desktop-0001'), run.after)
   check('and the run says so', said(run.output, /keeping every staged generation/i), run.output)
+  await rm(run.home, { recursive: true, force: true })
+}
+
+console.log('\nthe source patch carries no row id the stamp can match')
+{
+  // `-replace` reports nothing when its pattern does not match: it returns its input, and
+  // the run wrote that UNCHANGED patch into a new generation and exited 0. The loader
+  // refuses a row id it has already mounted, so the stage was ignored in silence — the
+  // failure only showed up later, as a generation that never took effect.
+  const run = await scenario({
+    link: 'linked',
+    patch: (text) => text.replace('- id: wsl-desktop', '- id: wsl-desktop-renamed'),
+  })
+  check('the staging script fails when the row-id stamp cannot apply', run.error !== null,
+    run.error === null ? `the run exited 0; output: ${run.output}` : undefined)
+  check('and it says which substitution did not apply',
+    said(run.output, /no 'wsl-desktop' row id to stamp/), run.output)
+  // No generation other than the three fixtures: the run staged one and removed it
+  // again, so the earlier ones (including the one the profile link resolves) are exactly
+  // what the failed run left behind.
+  check('nothing is left staged: the half-written generation is removed again',
+    !run.after.some((name) => !['dsh-wsl-desktop-0000', 'dsh-wsl-desktop-0001', 'dsh-wsl-desktop-0002'].includes(name)),
+    run.after)
+  check('the profile link still resolves the generation it did',
+    run.linkTarget !== null && run.linkTarget.endsWith('dsh-wsl-desktop-0002'), `link=${String(run.linkTarget)}`)
+  await rm(run.home, { recursive: true, force: true })
+}
+
+console.log('\nthe source patch\'s name line the config rewrite cannot match')
+{
+  // The other load-bearing substitution. It applies AFTER the row-id stamp, so a miss
+  // here is the half-written case: the stamp was already computed, and without the guard
+  // the config would simply not be inserted — leaving the acceptance surface off and
+  // every token caller reading 401s, with nothing in the run saying so.
+  const run = await scenario({
+    link: 'linked',
+    patch: (text) => text.replace("name: 'dsh-wsl-desktop'", 'name: "dsh-wsl-desktop"'),
+  })
+  check('the staging script fails when the config rewrite cannot apply', run.error !== null,
+    run.error === null ? `the run exited 0; output: ${run.output}` : undefined)
+  check('and it says which substitution did not apply',
+    said(run.output, /no 'dsh-wsl-desktop' name line to configure/), run.output)
+  // No generation other than the three fixtures: the run staged one and removed it
+  // again, so the earlier ones (including the one the profile link resolves) are exactly
+  // what the failed run left behind.
+  check('nothing is left staged: the half-written generation is removed again',
+    !run.after.some((name) => !['dsh-wsl-desktop-0000', 'dsh-wsl-desktop-0001', 'dsh-wsl-desktop-0002'].includes(name)),
+    run.after)
+  check('the profile link still resolves the generation it did',
+    run.linkTarget !== null && run.linkTarget.endsWith('dsh-wsl-desktop-0002'), `link=${String(run.linkTarget)}`)
   await rm(run.home, { recursive: true, force: true })
 }
 
