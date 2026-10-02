@@ -107,6 +107,12 @@ const FIXTURES = {
     'process.exitCode = failures === 0 ? 0 : 1',
     '',
   ].join('\n'),
+  'fixture-hang.mjs': [
+    '// A suite that never finishes: the aggregate must kill it at its ceiling and SAY so.',
+    "console.log('  ... the fixture is hanging')",
+    'setTimeout(() => {}, 60_000)',
+    '',
+  ].join('\n'),
   'fixture-suffixed.mjs': [
     '// The exit code comes from a NAME that ends in a digit. It is still a name, not a',
     '// number, and a rule that counts digits inside identifiers reads it as one.',
@@ -141,17 +147,21 @@ check('the aggregate still spells the two tables this pin rewrites (STANDALONE a
 /**
  * Build one copy of the aggregate over a fixture suite list and a fixture table.
  *
- * Only these two literals are rewritten; the copy is otherwise the real aggregate,
- * so what it does with a skip is what the aggregate does with a skip.
+ * Only these literals are rewritten; the copy is otherwise the real aggregate, so what
+ * it does with a skip is what the aggregate does with a skip.
  * @param {string} name - the copy's file name in the scratch directory.
- * @param {{suites: string[], declarations: {suite: string, precondition: string}[]}} fixture - what to build.
- * @returns {string} the copy's path.
+ * @param {{suites: string[], declarations: {suite: string, precondition: string}[], edits?: [string, string][]}} fixture - what to build.
+ * @returns {string} the copy's file name in the scratch directory.
  */
-function buildAggregate(name, { suites, declarations }) {
+function buildAggregate(name, { suites, declarations, edits = [] }) {
   const withSuites = aggregateSource.replace(STANDALONE_ANCHOR,
     `const STANDALONE = [\n${suites.map((suite) => `  '${suite}',`).join('\n')}\n]`)
-  const next = withSuites.replace(DECLARED_ANCHOR,
+  let next = withSuites.replace(DECLARED_ANCHOR,
     `const DECLARED_SKIPS = [\n${declarations.map((entry) => `  { suite: '${entry.suite}', precondition: ${JSON.stringify(entry.precondition)} },`).join('\n')}\n]`)
+  // Caller-supplied mutations of the copy. Each must CHANGE the text: a mutation whose
+  // anchor moved is stale, and every assertion made against a stale mutant is vacuous, so
+  // the sections below check the applied text back before they rely on it.
+  for (const [from, to] of edits) next = next.replace(from, to)
   writeFileSync(join(scratch, name), next)
   return name
 }
@@ -363,6 +373,54 @@ console.log('\n=== F. the rule behind "can this suite skip?" ===')
   check('computed: an exit code the rule cannot read is not reported as a suite that cannot skip',
     computedRun.code === 0 && !/STALE/.test(computedRun.out),
     `exit ${String(computedRun.code)}; the run ends:\n${computedRun.out.slice(-1000)}`)
+}
+
+// ---------------------------------------------------------------------------
+// G. A suite this aggregate stops itself
+//
+// spawnSync funnels several endings through one `status`, and `?? 1` reported all of them
+// as "the suite exited 1" — so a suite killed at this aggregate's OWN ceiling read exactly
+// like a suite whose checks failed (observed: verify-confinement.mjs and its pin printed
+// FAIL (exit 1) in aggregate runs while each printed ALL CHECKS PASSED alone). The ceiling
+// is shortened here so the ending is produced on purpose, and the spawn path is broken so
+// the one that never started is produced too. The third ending — a child killed by a
+// signal from somewhere else — is NOT producible: measured on this platform, a child that
+// dies from a signal reports status 1 and signal null, exactly like a normal exit.
+// ---------------------------------------------------------------------------
+console.log('\n=== G. a suite the aggregate itself stops ===')
+{
+  const copy = buildAggregate('G-ceiling.mjs', {
+    suites: ['fixture-hang.mjs'],
+    declarations: [],
+    edits: [['const SUITE_CEILING_MS = 300_000', 'const SUITE_CEILING_MS = 1_200']],
+  })
+  check('ceiling: the shortened ceiling was applied to the copy (a stale mutation must not pass silently)',
+    readFileSync(join(scratch, copy), 'utf8').includes('const SUITE_CEILING_MS = 1_200'),
+    'the anchor "const SUITE_CEILING_MS = 300_000" moved, so the run below used the real ceiling')
+  const run = runAggregate(copy)
+  check('ceiling: a suite killed at the ceiling is NOT reported as FAIL (exit 1)',
+    run.code === 1 && !/FAIL \(exit 1\)/.test(run.out),
+    `exit ${String(run.code)}; the run ends:\n${run.out.slice(-900)}`)
+  check('ceiling: the summary names the ceiling it hit and says the suite did not finish',
+    /killed at this aggregate's 1\.2s ceiling/.test(run.out) && /did not finish/.test(run.out),
+    run.out.slice(-900))
+  check('ceiling: it still FAILS the aggregate (a run that never finished established nothing)',
+    run.code === 1 && /1 failed: fixture-hang\.mjs/.test(run.out),
+    run.out.slice(-900))
+}
+{
+  const copy = buildAggregate('G-unstarted.mjs', {
+    suites: ['fixture-pass.mjs'],
+    declarations: [],
+    edits: [['spawnSync(process.execPath,', "spawnSync(join(here, 'no-such-node.exe'),"]],
+  })
+  check('unstarted: the broken spawn path was applied to the copy',
+    readFileSync(join(scratch, copy), 'utf8').includes("spawnSync(join(here, 'no-such-node.exe'),"),
+    'the anchor "spawnSync(process.execPath," moved, so the run below spawned a real Node')
+  const run = runAggregate(copy)
+  check('unstarted: a suite that could not be started is NOT reported as FAIL (exit 1), and says what stopped it',
+    run.code === 1 && !/FAIL \(exit 1\)/.test(run.out) && /could not be started/.test(run.out) && /ENOENT/.test(run.out),
+    `exit ${String(run.code)}; the run ends:\n${run.out.slice(-900)}`)
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)

@@ -28,6 +28,59 @@ import { blankLiterals } from './source-text.mjs'
 const here = dirname(fileURLToPath(import.meta.url))
 const live = process.argv.includes('--live')
 
+/**
+ * The milliseconds one suite may run before this aggregate kills it.
+ *
+ * Every suite bounds its own external calls, but a hung fs-on-UNC or jsdom run must fail
+ * the aggregator rather than hang it. The name is not decoration: what a kill MEANS is
+ * reported from this value (see outcomeOf), so a suite THIS aggregate stopped cannot be
+ * read as a suite whose checks failed — and a pin can shorten it to produce that ending
+ * on purpose.
+ */
+const SUITE_CEILING_MS = 300_000
+
+/** The ceiling as a message spells it. */
+const ceilingText = () => `${Number((SUITE_CEILING_MS / 1000).toFixed(1))}s`
+
+/**
+ * What one suite's run WAS.
+ *
+ * spawnSync funnels several different endings through one `status` field, and `?? 1`
+ * reported every one of them as "the suite exited 1": a suite THIS aggregate killed at
+ * its own ceiling — a bound on the whole run, which a loaded machine reaches — was
+ * byte-identical in the summary to a suite whose checks failed. Observed:
+ * verify-confinement.mjs and verify-confinement-skip.mjs printed FAIL (exit 1) in
+ * aggregate runs while each printed ALL CHECKS PASSED and exited 0 run alone, and nothing
+ * in that summary let a reader tell a broken suite from one the aggregator itself stopped.
+ *
+ * Measured endings on this platform (Windows, Node 24) — the numbers, not assumptions:
+ *   ceiling hit         status null, signal 'SIGKILL', error ETIMEDOUT
+ *   spawn failed        status null, signal null,      error ENOENT
+ *   exited 3            status 3,    signal null,      error null
+ *   killed by a signal  status 1,    signal null,      error null   <- indistinguishable
+ * The last line is the honest limit: on Windows a child that dies from a signal is
+ * reported exactly like one that exited 1, so this identifies the endings THIS aggregate
+ * produces itself — its ceiling, and a spawn that never happened — and does not pretend
+ * to identify a kill from anywhere else.
+ *
+ * @param {string} suite - the suite's file name.
+ * @param {import('node:child_process').SpawnSyncReturns<Buffer>} run - the finished run.
+ * @param {number} elapsedMs - how long the aggregate waited for it.
+ * @returns {{suite: string, code: number, how: 'exited' | 'ceiling' | 'signalled' | 'unstarted', note: string}} the outcome.
+ */
+function outcomeOf(suite, run, elapsedMs) {
+  const { status, signal } = run
+  const error = run.error ?? null
+  const seconds = (elapsedMs / 1000).toFixed(1)
+  // The elapsed test backstops a platform that reports the kill without ETIMEDOUT: at
+  // the ceiling's own expiry, a child still without a status was stopped by it.
+  const outOfTime = error?.code === 'ETIMEDOUT' || (status === null && signal !== null && elapsedMs >= SUITE_CEILING_MS)
+  if (outOfTime) return { suite, code: 1, how: 'ceiling', note: `killed at this aggregate's ${ceilingText()} ceiling after ${seconds}s — the suite did not finish` }
+  if (status === null && signal !== null) return { suite, code: 1, how: 'signalled', note: `killed by ${signal} after ${seconds}s — the suite did not finish` }
+  if (status === null) return { suite, code: 1, how: 'unstarted', note: `could not be started${error === null ? ' (no exit status and no error)' : `: ${error.code ?? error.message}`}` }
+  return { suite, code: status, how: 'exited', note: '' }
+}
+
 /** Suites that run against the distribution and the source tree alone (verify-package needs only npm and the package root). */
 const STANDALONE = [
   'verify-modules.mjs',
@@ -71,54 +124,72 @@ const LIVE = ['verify-route.mjs', 'inspect-live-client.mjs', 'verify-post-restar
  * A suite with more than one exit-2 branch lists all of them: the aggregate sees one
  * exit code and cannot tell which branch produced it, so an entry that named only
  * one of them would cover a skip it does not describe.
+ *
+ * Each precondition states the CONDITION ITS BRANCH TESTS, in every way that branch can
+ * fire — not merely the way that happens to occur on this machine. An entry narrower
+ * than its branch is the defect this table exists to prevent: a claim that does not
+ * cover what it certifies. Measured, when this rule was applied to the entries below:
+ * verify-client-ui.mjs's icon branch fires for an existing checkout that does not carry
+ * the icon source, so a precondition reading "the harness checkout is absent" named a
+ * condition that was not the branch's, and the suite skips in cases it did not cover.
  */
 const DECLARED_SKIPS = [
   {
-    // verify-modules.mjs:95 — no dependencies at `DSH_WSL_DEPS ?? <plugin root>/node_modules`,
-    // so lib/index.js cannot be imported. That import is the suite's motivating check.
+    // verify-modules.mjs:95 — the branch tests `!existsSync(DSH_WSL_DEPS ?? <plugin root>/node_modules)`,
+    // which is true when the plugin root carries no node_modules AND when an override names a
+    // directory that is not there. Either way lib/index.js cannot be imported, which is the
+    // suite's motivating check.
     suite: 'verify-modules.mjs',
-    precondition: 'the plugin root has no host node_modules (and DSH_WSL_DEPS names none), so lib/index.js cannot be imported here',
+    precondition: 'the dependency directory the suite resolves (DSH_WSL_DEPS when it names one, otherwise the plugin root node_modules) does not exist, so lib/index.js cannot be imported here',
   },
   {
-    // verify-package.mjs:184 — `npm --version` could not run, so the packed artifact
-    // cannot be produced or inspected at all.
+    // verify-package.mjs:184 — the branch tests `!(status === 0 && a version in stdout)`, so it
+    // fires for an npm that cannot be spawned, one that exits non-zero, and one that answers
+    // without a version.
     suite: 'verify-package.mjs',
-    precondition: 'npm is not usable here (npm --version cannot run, or exits non-zero)',
+    precondition: 'npm --version cannot be spawned, exits non-zero, or answers without a version, so the packed artifact cannot be produced or inspected here',
   },
   {
-    // verify-fs-fence.mjs:562 — the checkout's packages/fs/fs-local/src/fsio.ts is not
-    // readable; verify-fs-fence.mjs:690 — no second distribution's share answers.
-    // (Its third exit-2 print, at :452, sits behind a FAIL, so a run that reaches it
-    // exits 1: it is not a skip-only branch and is not declared here.)
+    // verify-fs-fence.mjs:562 — the branch tests `publicationCode === null`, which a missing
+    // checkout AND an existing checkout without packages/fs/fs-local/src/fsio.ts both produce;
+    // :683 tests `!otherReachable`, true with no second distribution installed, an empty
+    // DSH_WSL_OTHER_DISTRO, one naming this distribution, a resolver that threw, or a resolved
+    // share that does not exist. (Its third exit-2 print, at :452, sits behind the FAIL at :358,
+    // so a run that reaches it exits 1: not a skip-only branch.)
     suite: 'verify-fs-fence.mjs',
-    precondition: 'the harness checkout is absent (the publication pin has no source to read), or no second WSL distribution share answers',
+    precondition: 'the checkout file packages/fs/fs-local/src/fsio.ts cannot be read (no checkout, or one without it), or there is no second WSL distribution share to compare against (none installed, the override names none or names this one, the resolver failed, or the resolved share does not exist)',
   },
   {
-    // verify-9p.mjs:556 — the probe could not build its own symlink fixture through
-    // wsl.exe (a cold VM start, a timeout); verify-9p.mjs:721 — no second
-    // distribution to compare shares against.
+    // verify-9p.mjs:555 — the branch tests `linkProblem !== ''`, set by any throw while the
+    // fixture is built through wsl.exe (a cold VM start, a timeout, an unwritable share);
+    // :720 tests `otherDistro === ''`, the same resolver conditions as the entry above.
     suite: 'verify-9p.mjs',
-    precondition: 'the probe could not build its own symlink fixture through wsl.exe, or no second WSL distribution exists to compare shares against',
+    precondition: 'the probe could not build its own symlink fixture through wsl.exe, or there is no second WSL distribution share to compare against (none installed, the override names none or names this one, or its share does not exist)',
   },
   {
-    // verify-confinement.mjs:454/482/545/560/699/981 — the checkout (or the host temp
-    // directory) is not on a drive path, so the distribution has no /mnt spelling of
-    // it; :990 — the fixtures could not be built in the distribution; :1041 — the
-    // sudoers grant does not cover the fixture tree.
+    // verify-confinement.mjs — every branch has its OWN precondition, and the entry names all of
+    // them: :454/482/545/560/699 test `windowsToMntPath(helperPathFile) === null` (the checkout
+    // has no /mnt spelling); :518 tests that OR `unshare -r id -u` answering something other
+    // than 0 (no unprivileged user namespace); :981 tests `FIXTURE_SOURCE_MNT === null`, which is
+    // about the HOST TEMP directory, not the checkout; :990 the fixture setup not answering
+    // fixtures-ok; :1041 the grant probe not answering the expected version.
     suite: 'verify-confinement.mjs',
-    precondition: 'the checkout is not on a mountable drive path, or the fixtures could not be built in the distribution, or the sudoers grant does not cover them',
+    precondition: 'the checkout has no mountable drive path for the shipped helper, the distribution has no unprivileged user namespace, the host temp directory has no /mnt spelling, the fixtures could not be built in the distribution, or the sudoers grant does not cover them',
   },
   {
-    // verify-client-ui.mjs:146 — the shipped icon source is not readable, so the
-    // trigger geometry cannot be checked against the artwork.
+    // verify-client-ui.mjs:146 — the branch tests `iconSource === null` after the read is caught,
+    // which a missing checkout AND an existing checkout that does not carry
+    // packages/client/ui-primitives/src/icons/index.tsx both produce. Measured with --checkout
+    // pointed at a directory holding only a package.json: 30 check(s) passed, 1 skipped, exit 2.
     suite: 'verify-client-ui.mjs',
-    precondition: 'the harness checkout is absent, so the shipped icon source cannot be compared against the trigger geometry',
+    precondition: 'the shipped icon source (packages/client/ui-primitives/src/icons/index.tsx) is not readable — no checkout, or one that does not carry that file — so the trigger geometry cannot be checked against the artwork',
   },
   {
-    // verify-client-dom.mjs:56 — jsdom is not resolvable from the checkout, so the
-    // factory cannot be run against a real DOM.
+    // verify-client-dom.mjs:56 — the branch is the catch around
+    // `createRequire(join(checkout, 'package.json'))('jsdom')`, which throws for a missing
+    // checkout AND for an existing one without the dependency.
     suite: 'verify-client-dom.mjs',
-    precondition: 'jsdom is not resolvable from the harness checkout, so the browser half cannot be run in a real DOM',
+    precondition: 'there is no harness checkout to resolve jsdom from, or jsdom is not installed in one, so the browser half cannot be run in a real DOM',
   },
 ]
 
@@ -299,11 +370,11 @@ function canExitTwo(source) {
 
 for (const suite of suites) {
   console.log(`\n=== ${suite} ===`)
-  // A hard ceiling per suite: every suite bounds its own external calls, but
-  // a hung fs-on-UNC or jsdom run must fail the aggregator, not hang it.
-  // A killed run settles as a null status, which `?? 1` reports as FAIL.
-  const run = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit', timeout: 300_000, killSignal: 'SIGKILL' })
-  results.push({ suite, code: run.status ?? 1 })
+  // A hard ceiling per suite (SUITE_CEILING_MS). What a stopped run MEANS is decided by
+  // outcomeOf rather than by the exit code it does not have.
+  const startedAt = Date.now()
+  const run = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit', timeout: SUITE_CEILING_MS, killSignal: 'SIGKILL' })
+  results.push(outcomeOf(suite, run, Date.now() - startedAt))
 }
 
 console.log('\n=== summary ===')
@@ -312,8 +383,12 @@ console.log('\n=== summary ===')
 // and it is accepted ONLY from a suite DECLARED_SKIPS names together with the
 // precondition that justifies it: an undeclared skip is a suite that never ran and
 // nobody said so, which is the one thing this aggregate must not report green.
-for (const { suite, code } of results) {
-  if (code === 0) console.log(`  PASS  ${suite}`)
+for (const entry of results) {
+  const { suite, code, how, note } = entry
+  // A suite this aggregate stopped, or could not start, produced no exit code at all:
+  // printing "exit 1" would report the aggregator's own act as the suite's verdict.
+  if (how !== 'exited') console.log(`  FAIL (${note})  ${suite}`)
+  else if (code === 0) console.log(`  PASS  ${suite}`)
   else if (code !== 2) console.log(`  FAIL (exit ${code})  ${suite}`)
   else if (declarations.has(suite)) {
     console.log(`  SKIP  ${suite}`)
@@ -335,6 +410,19 @@ if (undeclared.length > 0) {
   console.log('      together with the precondition that justifies it: add an entry for')
   console.log(`      ${names} to DECLARED_SKIPS in scripts/verify-all.mjs, or remove the precondition`)
   console.log('      that forced the skip.')
+}
+
+// A suite the aggregate stopped itself established nothing, and saying so is the point:
+// its checks are UNMEASURED, not failed, and the remedy is to run it again where it has the
+// machine to itself. It stays a failure of this run — the ceiling bounds the run, and a
+// green aggregate must not stand for checks nobody performed — but a reader can now tell it
+// from a defect without re-running every suite by hand.
+const unfinished = results.filter((entry) => entry.how === 'ceiling' || entry.how === 'signalled')
+if (unfinished.length > 0) {
+  console.log(`\nNOTE  stopped before finishing (${unfinished.length}): ${unfinished.map((entry) => entry.suite).join(', ')}`)
+  console.log('      A stopped suite\'s checks are UNMEASURED, not failed. Re-run each alone to see')
+  console.log('      whether it is broken or whether this run was simply too slow:')
+  for (const entry of unfinished) console.log(`        node scripts/${entry.suite}`)
 }
 
 // A declaration whose precondition does not hold here was not exercised: its suite ran
