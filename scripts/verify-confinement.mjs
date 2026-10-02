@@ -618,18 +618,33 @@ check('reads still work', readOnlyRead.result.stdout.includes('seed'), readOnlyR
 console.log('\nseparately mounted filesystems')
 // `mount -o remount,ro,bind /` makes ONE mount read-only. Every other mount
 // keeps its own flags, so the honest question is not "is / read-only" but "is
-// anything still writable". `test -w` answers it without writing anything.
+// anything still writable". `test -w` answers it without writing anything — but
+// only for a path that EXISTS: it is false for one that is not there at all, so
+// the old `[ -w "$p" ] && echo WRITABLE || echo READONLY` reported a path this
+// distribution does not have as READONLY. Measured on this suite: asked about a
+// nonexistent path it printed `/mnt/ocr-missing-3 READONLY` and "the Windows
+// filesystem is not writable" — the row whose whole subject is that path — PASSED,
+// i.e. the row could be satisfied by a machine with no /mnt/c mounted at all.
+// MISSING is therefore its own state, and each row below requires READONLY
+// exactly, so an absent path FAILS the row instead of satisfying it.
 const mounts = await confined(
   'findmnt -rno TARGET,OPTIONS | grep -E "^(/|/mnt/[a-z]|/dev/shm|/run/user)" | head -20; echo ---;'
-  + ' for p in / /mnt/c /dev/shm "/run/user/$(id -u)"; do printf "%s %s\\n" "$p" "$([ -w "$p" ] && echo WRITABLE || echo READONLY)"; done',
+  + ' for p in / /mnt/c /dev/shm "/run/user/$(id -u)"; do'
+  + ' if [ ! -e "$p" ]; then printf "%s %s\\n" "$p" MISSING;'
+  + ' elif [ -w "$p" ]; then printf "%s %s\\n" "$p" WRITABLE;'
+  + ' else printf "%s %s\\n" "$p" READONLY; fi; done',
   { mode: 'workspace-write', workspaceLinuxRoot: probeRoot },
 )
 console.log(mounts.result.stdout.trim().split('\n').map((line) => `        ${line}`).join('\n'))
-check('the root filesystem is read-only', /^\/ READONLY$/m.test(mounts.result.stdout), mounts.result.stdout)
-check('the Windows filesystem is not writable', /^\/mnt\/c READONLY$/m.test(mounts.result.stdout), mounts.result.stdout)
-check('shared memory is not writable', /^\/dev\/shm READONLY$/m.test(mounts.result.stdout), mounts.result.stdout)
-check('the session runtime directory is not writable',
-  /^\/run\/user\/\d+ READONLY$/m.test(mounts.result.stdout), mounts.result.stdout)
+/** One path's state as the probe reported it: MISSING, WRITABLE or READONLY ('(not reported)' when absent). */
+const mountState = (pattern) => new RegExp(`^${pattern} (\\w+)$`, 'm').exec(mounts.result.stdout)?.[1] ?? '(not reported)'
+/** The failure detail, naming MISSING: it is the state that used to read as READONLY. */
+const whyState = (pattern) => `state=${mountState(pattern)} — MISSING means the path does not exist in this distribution, and a path that is not there must not satisfy a writability row`
+check('the root filesystem is present and read-only', mountState('/') === 'READONLY', whyState('/'))
+check('the Windows filesystem is present and not writable', mountState('/mnt/c') === 'READONLY', whyState('/mnt/c'))
+check('shared memory is present and not writable', mountState('/dev/shm') === 'READONLY', whyState('/dev/shm'))
+check('the session runtime directory is present and not writable',
+  mountState('/run/user/\\d+') === 'READONLY', whyState('/run/user/\\d+'))
 
 console.log('\na setup step that cannot succeed')
 // The steps are joined with `; ` and there is no `set -e`, so a failed mount
