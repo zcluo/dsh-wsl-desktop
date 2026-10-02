@@ -188,7 +188,49 @@ check('a session starved onto ONE CPU still announces its OWN process group',
   typeof starved.announce?.pgrp === 'number' && starved.announce.pgrp === starved.announce.pid,
   `announced=${String(starved.announce?.pgrp)} pid=${String(starved.announce?.pid)} — with one CPU the racy read recorded the group the child had INHERITED, which is this bridge's own`)
 
-const data = spawn('wsl.exe', [...base, 'python3', '-c', bridgeSource, fifo, '80', '24', ...shellArgv], {
+// --- the two long-lived children, and the ONE place that reaps them --------------
+//
+// The bridge (data) holds the session's PTY and the control process holds the FIFO's
+// write end. They used to be killed only AFTER the final check, so any path that left
+// the suite before it — the unguarded parse in the reply demux below, a check that
+// throws, an interrupt — skipped the cleanup entirely. reap() is the single owner of
+// the kill instead: it is idempotent and it runs on every exit Node can still act on
+// (a normal exit, process.exit, and an uncaught exception, which Node reports before
+// running 'exit' listeners). verify-all's SIGKILL after its ceiling is the one path
+// nothing inside this process can intercept.
+let data = null
+let control = null
+
+/** Whether a child is still running: an exited child has an exitCode, a signalled one a signalCode. */
+function isAlive(child) {
+  return child !== null && child.exitCode === null && child.signalCode === null
+}
+
+/** Kill both long-lived children. Idempotent, and safe at any point after this line. */
+function reap() {
+  // `isAlive`, not `exitCode === null`: a child this suite killed itself has a null
+  // exitCode and a signalCode, and the exit hook below runs after the tail's own reap()
+  // — liveness is the property that makes a second call a no-op instead of a second
+  // signal at a dead pid.
+  if (isAlive(control)) {
+    // Ending the control process's stdin is what lets its read loop finish; the kill
+    // releases the FIFO. Both can fail when the child is already gone, which is not an
+    // error here — the cleanup's subject is "no child left running".
+    try { control.stdin.end() } catch { /* the pipe is already gone */ }
+    try { control.kill() } catch { /* already dead */ }
+  }
+  if (isAlive(data)) {
+    try { data.kill() } catch { /* already dead */ }
+  }
+}
+process.on('exit', reap)
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  // Reaped, then exited non-zero: an interrupted suite must still report as interrupted
+  // (the default disposition would have killed the process outright).
+  process.on(signal, () => { reap(); process.exit(1) })
+}
+
+data = spawn('wsl.exe', [...base, 'python3', '-c', bridgeSource, fifo, '80', '24', ...shellArgv], {
   cwd: windowsCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
 })
 
@@ -234,7 +276,7 @@ check('the session carries a pid and a process group', typeof started?.pid === '
 
 // The bridge creates the control FIFO before announcing the session, so the
 // writer can be started only after that announcement.
-const control = spawn('wsl.exe', [
+control = spawn('wsl.exe', [
   ...base, 'bash', '-c',
   'exec 3>"$1" || exit 1; while IFS= read -r line; do printf \'%s\\n\' "$line" >&3; done', 'bash', fifo,
 ], { cwd: windowsCwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
@@ -475,9 +517,8 @@ check('the session settles after termination', exited, `exit=${String(data.exitC
 check('a terminated session reports the signal, not a clean exit',
   data.exitCode === 129, `exit=${String(data.exitCode)}`)
 
-control.stdin.end()
-control.kill()
-if (data.exitCode === null) data.kill()
+// The same single owner as every other exit path, so this line is not the only reaper.
+reap()
 await settled
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
