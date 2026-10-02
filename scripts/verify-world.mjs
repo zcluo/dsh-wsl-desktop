@@ -533,13 +533,39 @@ check('index.js passes the configured path at every probe site',
   indexSites.every(([, pattern, want]) => countOf(pattern) === want),
   { sites: indexSites.map(([name, pattern, want]) => `${name}=${countOf(pattern)}/${want}`) })
 const subprocessCode = await readBlanked('lib/wsl/subprocess.js')
-const lookupAt = subprocessCode.indexOf('runWslShell(')
+// Anchored on the LOOKUP's own request literal and the call that consumes it, not on "the
+// first `runWslShell(`": the lookup now builds its options once and hands that object to an
+// `ask` closure (so a repeat repeats the SAME request), which moved the call site away from
+// the options it carries. The assertion is strictly stronger than the positional one it
+// replaces: the configured path must be INSIDE the request literal, and runWslShell must be
+// handed that very object.
+const lookupRequestAt = subprocessCode.indexOf('const request = {')
+const lookupAskAt = subprocessCode.indexOf('const ask = ()')
 check('subprocess.js threads it into the executable-lookup probe',
-  lookupAt >= 0 && /wslPath: this\.config\.wslPath/.test(subprocessCode.slice(lookupAt, lookupAt + 500)),
-  subprocessCode.slice(lookupAt, lookupAt + 400))
+  lookupRequestAt >= 0 && lookupAskAt > lookupRequestAt
+  && /wslPath: this\.config\.wslPath/.test(subprocessCode.slice(lookupRequestAt, lookupAskAt))
+  && /const ask = \(\) => runWslShell\(request\)/.test(subprocessCode),
+  subprocessCode.slice(lookupRequestAt, lookupAskAt + 120) || subprocessCode.slice(0, 400))
 const loginShellCalls = (subprocessCode.match(/resolveLoginShell\(plan\.distro, this\.config\.username, \{ wslPath: this\.config\.wslPath \}\)/g) ?? []).length
 check('subprocess.js threads it into both resolveLoginShell calls',
   loginShellCalls >= 2, { loginShellCalls })
+
+// The executable lookup is the FOURTH probe the documented sentence names (README.md:132 /
+// README.en.md:132 — 探针超时 60s + 超时后一次透明重试), and it is output-parsed: its empty
+// answer is read below as "no such executable", a class the terminal controller catches to
+// SKIP a shell candidate. Its policy is a SOURCE pin, like the shell.js rows above, because
+// subprocess.js imports @deepseek-ai/* — unresolvable in this checkout, so no executor-level
+// check is constructible. A source pin is weak on purpose here; the mutation recorded with it
+// is what shows the pin is not a constant.
+const lookupCeiling = /const LOOKUP_TIMEOUT_MS = 60_000/.test(subprocessCode)
+const lookupRetry = /const ask = \(\) => runWslShell\(request\)/.test(subprocessCode)
+  && /let result = await ask\(\)\s*\n\s*if \(result\.timedOut === true\) result = await ask\(\)/.test(subprocessCode)
+check('subprocess.js gives the executable lookup the documented 60s ceiling',
+  lookupCeiling,
+  subprocessCode.slice(Math.max(0, subprocessCode.indexOf('LOOKUP_TIMEOUT_MS') - 260), subprocessCode.indexOf('LOOKUP_TIMEOUT_MS') + 60))
+check('subprocess.js repeats the SAME executable lookup once, and only on a timeout',
+  lookupRetry,
+  subprocessCode.slice(Math.max(0, subprocessCode.indexOf('const ask =') - 120), subprocessCode.indexOf('const ask =') + 320))
 const ptyCode = await readBlanked('lib/wsl/pty.js')
 check('pty.js threads it into the bridge-runtime probe',
   /\.\.\.options\.wslPath !== undefined && options\.wslPath !== '' \? \{ wslPath: options\.wslPath \} : \{\}/.test(ptyCode),
