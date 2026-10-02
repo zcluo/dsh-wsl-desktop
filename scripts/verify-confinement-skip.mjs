@@ -37,13 +37,16 @@
  * failing checks — runSuiteConclusive, the ruling README.md states for probes.
  *
  * THE TOLERANCE THAT BUYS IS DISCLOSED, NOT HIDDEN, AND THE AGGREGATION IS STATED. One
- * runSuiteConclusive reads TWO contaminated runs before any of its own rows may redden, so a
- * defect in the suite that failed HALF the time passes ONE such reading with probability 0.25.
+ * runSuiteConclusive returns its FIRST run when that run is clean, and its SECOND only when the
+ * first reported failing checks — and this pin reads only the returned run. A defect in the suite
+ * that failed HALF the time therefore REDDENS one such reading only when BOTH of its runs are
+ * contaminated (0.5 × 0.5 = 0.25), so it PASSES one such reading with probability 0.75; the 0.25
+ * is the reddening, not the passing.
  * This pin calls runSuiteConclusive on THREE runs (section A's UNC run, section B's mutant run,
- * and the child pin's inner run), and a doubly contaminated run in ANY of them reddens a row of
- * this pin, so the PIN passes a 50%-flaky defect with probability ~0.75^3 = 0.42. The per-run
- * figure understates the tolerance, which is why both are written down. A defect that fails
- * EVERY time still reddens, with both attempts printed. The suite's OWN probes now carry the documented policy as well
+ * and the child pin's inner run), so the PIN passes a 50%-flaky defect with probability
+ * ~0.75^3 = 0.42 — the per-reading 0.75 aggregated three times, which is the figure the two
+ * lines above are written to agree with. A defect that fails EVERY time still reddens, with both
+ * attempts printed. The suite's OWN probes now carry the documented policy as well
  * (scripts/wsl-probe.mjs), which is where a transient stall belongs; the repeat here only
  * stops ONE hiccup in a run this pin merely READS from becoming this pin's finding.
  *

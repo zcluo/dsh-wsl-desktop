@@ -7,8 +7,9 @@
  * answered in 300ms a moment earlier (measured on this host: ~300ms, then 30.4s and 30.5s on
  * two consecutive calls while the VM ran at load ~11 with its swap 95% full).
  *
- * Three modules implement it, and this is where each one lives: `lib/wsl/world.js` for the
- * three probes it owns (`listLinuxDir`, `checkLinuxPath`, `resolveDistroHome`),
+ * Three modules implement a retry of this shape, and this is where each one lives:
+ * `lib/wsl/world.js` for the three probes it owns (`listLinuxDir`, `checkLinuxPath`,
+ * `resolveDistroHome`),
  * `lib/wsl/confinement.js` inside `resolveIdentity`, `detectRunner` and the NO_NEW_PRIVS
  * probe, and `lib/wsl/pty.js` inside the bridge-runtime probe. The suites that run their OWN
  * `wsl.exe` probes had no such runner: `scripts/verify-confinement.mjs` carries 36 of them
@@ -17,12 +18,17 @@
  * reddened checks that were measuring something else entirely — the class that made
  * `verify-confinement-skip.mjs` report a count mutation the suite had performed correctly.
  *
- * THE TRIGGER IS `timedOut` ALONE, and that is what makes it safe to put in front of a probe
- * whose answer is a REFUSAL: a refusal is an immediate answer carrying an exit code and stderr
- * text, never a timeout, so no repeat can turn one into a pass. A path that is genuinely
- * missing is likewise answered in ONE attempt — a fast non-zero exit, which the ceiling must
- * not double. What the repeat may not do is hide a persistent stall: the SECOND attempt's
- * result is what the caller sees, `timedOut` included.
+ * THE TRIGGER IS NOT THE SAME IN ALL THREE, AND THIS RUNNER TAKES THE NARROWEST: `timedOut`
+ * ALONE. `world.js`'s three probes (`probeWithRetry`, world.js:546) and `confinement.js`'s
+ * `resolveIdentity` (:95) repeat on a timeout alone; `detectRunner` (:311) also repeats an
+ * ANSWERED "no", because its `probeOnce` returns null both for "no" and for a probe that could
+ * not run; `detectNoNewPrivs` (:400) and `pty.js`'s python3 probe (:132) repeat on ANY
+ * non-answer — pty throws on an answered "no" rather than repeating it. The narrow trigger is
+ * what makes THIS runner safe to put in front of a probe whose answer is a REFUSAL: a refusal is
+ * an immediate answer carrying an exit code and stderr text, never a timeout, so no repeat here
+ * can turn one into a pass. A path that is genuinely missing is likewise answered in ONE attempt
+ * — a fast non-zero exit, which the ceiling must not double. What the repeat may not do is hide a
+ * persistent stall: the SECOND attempt's result is what the caller sees, `timedOut` included.
  */
 
 /** The documented probe ceiling: 60s, because a cold VM's first spawn can exceed 30s. */

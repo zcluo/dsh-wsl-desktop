@@ -647,9 +647,10 @@ console.log('\n=== H. fixed machine-global scratch names in scripts/ ===')
    * rots, and a name that is not here reddens the row above instead.
    */
   // EMPTY, and that is the point: every case it ever recorded has been fixed rather than
-  // tolerated. The three names above now carry `-25684` (and the host-temp root is
-  // removed in a `finally`), so listing them here would be a table of names that no longer
-  // exist. See section H's header for what each entry used to say.
+  // tolerated. The three names above now carry the process id in their spellings (and the
+  // host-temp root is removed in a `finally`), so no fixed name remains to record — a literal
+  // pid was never in this table, which is why the old prose's `-25684` grepped to nothing.
+  // See section H's header for what each entry used to say.
   const KNOWN_FIXED_SCRATCH = []
   const sources = new Map(readdirSync(here)
     .filter((name) => name.endsWith('.mjs'))
@@ -657,7 +658,7 @@ console.log('\n=== H. fixed machine-global scratch names in scripts/ ===')
   const found = fixedScratchNames(sources)
   const declared = KNOWN_FIXED_SCRATCH.map((entry) => `${entry.file}:${entry.name}`)
   const undeclared = found.filter((entry) => !declared.includes(`${entry.file}:${entry.name}`))
-  check('no suite creates or removes a FIXED machine-global scratch name (a concurrent run would destroy it), beyond the KNOWN ones',
+  check('no suite creates or removes an UNDECLARED fixed machine-global scratch name (a concurrent run would destroy it)',
     undeclared.length === 0,
     undeclared.map((entry) => `${entry.file}:${entry.line} ${entry.name}`).join('; '))
   const stale = declared.filter((key) => !found.map((entry) => `${entry.file}:${entry.name}`).includes(key))
