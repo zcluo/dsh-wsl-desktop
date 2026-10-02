@@ -232,9 +232,10 @@ check('refuses to close while a commit is in flight', picker.includes('if (state
 check('re-checks cancellation after the create returns', picker.includes('if (state.closed) return'))
 
 // A skip is a check that did not run; reporting it as a pass would make the
-// suite's green meaningless exactly when the checkout is wrong. It gets its
-// own exit code (2) so `verify-all` can show it as skipped without turning
-// every machine without the harness checkout red.
+// suite's green meaningless exactly when the checkout is wrong. It gets its own
+// exit code (2), which `verify-all` shows as SKIP only because verify-client-ui.mjs
+// is declared in scripts/verify-all.mjs's DECLARED_SKIPS with the precondition that
+// justifies it: undeclared, the same exit 2 fails that run instead.
 console.log(`\n${failures === 0 ? `${checks - skipped} check(s) passed` : `${failures} check(s) failed`}`
   + `${skipped === 0 ? '' : `, ${skipped} skipped`}`)
 process.exit(failures > 0 ? 1 : skipped > 0 ? 2 : 0)
