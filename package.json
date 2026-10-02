@@ -8,7 +8,9 @@
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
-  "prepack": "node -e \"require('node:fs').rmSync('lib/wsl/__pycache__', { recursive: true, force: true })\"",
+  "scripts": {
+    "prepack": "node -e \"const fs=require('node:fs'),p=require('node:path');(function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){if(e.isDirectory()){const f=p.join(d,e.name);if(e.name==='__pycache__'){fs.rmSync(f,{recursive:true,force:true})}else{w(f)}}}})('lib')\""
+  },
   "engines": {
     "node": ">=22.19"
   },

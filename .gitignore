@@ -13,10 +13,18 @@ pnpm-debug.log*
 *.log
 
 # Verification residue (a suite that throws mid-run can leave these behind).
+# /%SystemDrive%/ is an unexpanded cmd-style %VAR% one: something ran with this
+# repo as its CWD and built the Windows chain under a literal folder name. Git
+# cannot even report it while the tree holds no files, so the rule is what keeps
+# it visible to a future cleanup. The writer is unidentified.
 /tmp-probe/
+/%SystemDrive%/
 _debug-*.mjs
 
-# Bytecode cache from py_compile on the shipped bridge source.
+# Bytecode cache from py_compile on the shipped bridge source. Hygiene only:
+# "files" in package.json whitelists all of lib/, and npm cannot exclude a
+# files-included path through .gitignore — scripts.prepack is what keeps the
+# cache out of the tarball. This rule keeps it out of git, nothing more.
 lib/wsl/__pycache__/
 
 # Release artifacts. `npm pack` output is reproducible from this tree and is
