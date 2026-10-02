@@ -30,11 +30,18 @@
  *
  * THE MUTANT'S PROFILE IS READ FROM THE MUTANT, AND A CHILD'S OWN FAILURE IS NOT THIS
  * PIN'S FINDING. Section B asserts the mutant exits 0 with no counted tail against the
- * mutant's OWN output and exit code, and the child pin's red is asserted to be the
- * count's rather than a suite that failed a check of its own. Every suite run below is
- * repeated once when its own summary reports failing checks (runSuiteConclusive): this
- * pin reads the SKIP, and the suite's ~25 un-retried wsl.exe probes are not its subject.
- * A run contaminated twice still reddens.
+ * mutant's OWN output and exit code, and the child pin's red is asserted to be the count's
+ * rather than a suite that failed a check of its own. A suite this pin RUNS can fail a
+ * check of its own for a reason this pin does not measure (the VM is shared with a sibling
+ * distribution), so every suite run below is repeated once when its own summary reports
+ * failing checks — runSuiteConclusive, the ruling README.md states for probes.
+ *
+ * THE TOLERANCE THAT BUYS IS DISCLOSED, NOT HIDDEN: a defect in the suite that failed HALF
+ * the time would pass this pin with probability 0.25 (two contaminated runs, both of which
+ * must repeat before any row reddens). A defect that fails every time still reddens, with
+ * both attempts printed. The suite's OWN probes now carry the documented policy as well
+ * (scripts/wsl-probe.mjs), which is where a transient stall belongs; the repeat here only
+ * stops ONE hiccup in a run this pin merely READS from becoming this pin's finding.
  *
  * Every mutation is applied to a COPY in a throwaway tree that carries the suite's
  * imports too, so the real scripts are never touched and nothing scratch is written
@@ -51,6 +58,7 @@ import { fileURLToPath } from 'node:url'
 import { windowsToMntPath } from '../lib/wsl/paths.js'
 import { resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { probeWithRetry } from './wsl-probe.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
@@ -106,6 +114,8 @@ const INSTALLED_HELPER_LABEL = 'the installed helper is the helper this package 
 const EXIT2_LABEL = 'drive-path-free run: exit 2, so verify-all reports the suite as SKIP instead of as a pass'
 /** The label whose FAIL proves the run the child pin read had a failing check of its own. */
 const NO_FAILS_LABEL = 'drive-path-free run: NO check FAILS — the missing precondition is not a defect'
+/** The row the stalled-probe arm reads: its answer comes from the probe the stub stalls. */
+const INSIDE_WRITE_LABEL = 'a write inside the workspace succeeds'
 /** The token the drive-path precondition names, and the remedy it must offer. */
 const PRECONDITION_TOKEN = 'no /mnt spelling'
 const REMEDY_TOKEN = 'run the suite from a checkout on a Windows drive'
@@ -272,6 +282,19 @@ function failureLinesOf(out, pattern = /^\s*(FAIL|SKIP)\b/) {
 }
 
 /**
+ * The NAMES of a child's FAIL rows — labels only, without their evidence — so a row that
+ * reports "the child reddened" says WHICH rows did. The failure this pin was debugged from
+ * carried the child pin's last lines but not its failing rows: only the OUTER pin's detail is
+ * printed, so the next occurrence has to be diagnosable from the aggregate alone.
+ * @param {string} out - the child's combined output.
+ * @returns {string} the labels, joined, or a note when the child printed none.
+ */
+function failedRowNamesOf(out) {
+  const names = out.split('\n').filter((entry) => entry.startsWith('  FAIL  ')).map((entry) => entry.slice(8))
+  return names.length === 0 ? '(the child printed no FAIL row)' : names.join(' | ')
+}
+
+/**
  * The last few lines of a child's output, for a failure detail that stays readable.
  * @param {string} out - the child's combined output.
  * @param {number} [count] - how many trailing lines to keep.
@@ -293,6 +316,8 @@ function copySuiteTree(prefix) {
   for (const [dir, name] of [
     ['scripts', 'verify-confinement.mjs'],
     ['scripts', 'env.mjs'],
+    // The suite's probes run through scripts/wsl-probe.mjs; a copy without it fails to load.
+    ['scripts', 'wsl-probe.mjs'],
     ['scripts', 'detail.mjs'],
     ['scripts', 'source-text.mjs'],
     ['lib/wsl', 'world.js'],
@@ -304,6 +329,50 @@ function copySuiteTree(prefix) {
     ['lib/wsl', 'dsh-wsl-confine.sh'],
   ]) copyFileSync(join(pluginRoot, dir, name), join(tree, dir, name))
   return tree
+}
+
+/**
+ * A copy of the suite tree whose `lib/wsl/world.js` STALLS one probe (and, optionally, whose
+ * probe policy has the repeat removed), so the suite's own behaviour around a stalled probe can
+ * be read without a stalled VM.
+ *
+ * The stub answers the first call whose command carries `INSIDE-OK` with the shape a stalled
+ * `wsl.exe` produces — `timedOut: true` and no output — and delegates everything else to the
+ * real module, including the second call for that same command. `export *` skips the name this
+ * module exports itself, so the copy's `runWslShell` is the stub and every other export is the
+ * original's.
+ * @param {boolean} stripRepeat - remove the repeat from the copy's scripts/wsl-probe.mjs.
+ * @returns {{suite: string, tree: string}} the copy's suite and its root.
+ */
+function buildStalledProbeCopy(stripRepeat) {
+  const tree = copySuiteTree(stripRepeat ? 'dsh-confinement-skip-norepeat-' : 'dsh-confinement-skip-stall-')
+  const world = join(tree, 'lib', 'wsl', 'world.js')
+  writeFileSync(join(tree, 'lib', 'wsl', 'world.orig.js'), readFileSync(world, 'utf8'), 'utf8')
+  writeFileSync(world, [
+    "// PIN STUB: the first call carrying INSIDE-OK is answered with a TIMEOUT (the shape a",
+    "// stalled wsl.exe produces); every other call, including the repeat, is delegated.",
+    "import * as real from './world.orig.js'",
+    "export * from './world.orig.js'",
+    "const STALL = 'INSIDE-OK'",
+    "let seen = 0",
+    "export async function runWslShell(options) {",
+    "  const command = String(options?.command ?? '')",
+    "  if (command.includes(STALL)) {",
+    "    seen += 1",
+    "    console.log(`        PROBE STUB: attempt ${seen} of the probe carrying ${STALL} ${seen === 1 ? '-> timedOut' : '-> delegated'}`)",
+    "    if (seen === 1) return { exitCode: null, stdout: '', stderr: '', timedOut: true }",
+    "  }",
+    "  return await real.runWslShell(options)",
+    "}",
+  ].join('\n'), 'utf8')
+  if (stripRepeat) {
+    const policy = join(tree, 'scripts', 'wsl-probe.mjs')
+    const source = readFileSync(policy, 'utf8')
+    const repeat = '  if (first.timedOut !== true) return first'
+    if (!source.includes(repeat)) throw new Error('the copy no longer carries the repeat; the stub must be updated')
+    writeFileSync(policy, source.replace(repeat, '  return first // PIN STUB: the repeat removed'), 'utf8')
+  }
+  return { suite: join(tree, 'scripts', 'verify-confinement.mjs'), tree }
 }
 
 /**
@@ -453,7 +522,7 @@ if (!isInnerRun) {
   rmSync(countCopy.tree, { recursive: true, force: true })
   check('count mutant: THIS PIN reddens on it (exited 1, not killed on the way)',
     childPin.how === 'exited' && childPin.code === 1,
-    `exit ${childPin.code} (${childPin.how}: ${childPin.note}); the child pin's FAIL lines and its end:\n${failureLinesOf(childPin.out)}\n${tailOf(childPin.out)}`)
+    `exit ${childPin.code} (${childPin.how}: ${childPin.note}); the child pin's FAIL rows: ${failedRowNamesOf(childPin.out)}\n${failureLinesOf(childPin.out)}\n${tailOf(childPin.out)}`)
   check('count mutant: the row it reddens on is the exit-2 assertion',
     childPin.out.includes(`  FAIL  ${EXIT2_LABEL}`),
     failureLinesOf(childPin.out))
@@ -468,7 +537,7 @@ if (!isInnerRun) {
   // captured failure showed was missing.
   check('count mutant: and it reddened on the count, not on a suite that failed a check of its own',
     !childPin.out.includes(`  FAIL  ${NO_FAILS_LABEL}`),
-    failureLinesOf(childPin.out))
+    `the child pin's FAIL rows: ${failedRowNamesOf(childPin.out)}\n${failureLinesOf(childPin.out)}`)
 }
 
 if (!isInnerRun) {
@@ -506,5 +575,73 @@ if (!isInnerRun) {
   rmSync(scratch, { recursive: true, force: true })
 }
 
+if (!isInnerRun) {
+  console.log('\nthe probe policy the suite reads its probes through (scripts/wsl-probe.mjs)')
+  // Driven through the SEAM, not read from source: each arm hands `probeWithRetry` a stub
+  // runner and counts what it was asked for. The policy is README.md's (探针超时 60s +
+  // 超时后一次透明重试), and the two arms that matter are the ones a stall and a REFUSAL
+  // produce: a probe that TIMED OUT is repeated once and the caller reads the SECOND attempt;
+  // a probe that ANSWERED — a refusal included — is asked for exactly once, because a refusal
+  // is an immediate answer and never a timeout, so no repeat can turn one into a pass.
+  const timedOutAnswer = { exitCode: null, stdout: '', stderr: '', timedOut: true }
+  const policyRun = (answers) => {
+    const seen = []
+    return { seen, run: async (request) => { seen.push(request); return answers[Math.min(seen.length - 1, answers.length - 1)] } }
+  }
+  const refusal = { exitCode: 2, stdout: '', stderr: 'REFUSED: the helper refuses an empty SUDO_USER', timedOut: false }
+  const second = { exitCode: 0, stdout: 'ANSWER-FROM-ATTEMPT-2', stderr: '', timedOut: false }
+  const refused = policyRun([refusal])
+  const refusedAnswer = await probeWithRetry(refused.run, { distro, command: 'the helper' })
+  check('probe policy: a probe that ANSWERED (a refusal is an answer) is asked for exactly once',
+    refused.seen.length === 1 && refusedAnswer === refusal,
+    `${refused.seen.length} attempt(s); answer=${JSON.stringify(refusedAnswer)}`)
+  const retried = policyRun([timedOutAnswer, second])
+  const retries = []
+  const retriedAnswer = await probeWithRetry(retried.run, { distro, command: 'the stalled probe' }, { onRetry: (request) => retries.push(request) })
+  check('probe policy: a probe that TIMED OUT is repeated once, and the caller reads the SECOND attempt',
+    retried.seen.length === 2 && retriedAnswer === second && retries.length === 1,
+    `${retried.seen.length} attempt(s); answer=${JSON.stringify(retriedAnswer)}; retry hook fired ${retries.length} time(s)`)
+  check('probe policy: the repeat asks for the SAME probe (distro, command) and the same ceiling',
+    retried.seen.length === 2 && retried.seen[0].command === retried.seen[1].command
+      && retried.seen[0].distro === retried.seen[1].distro && retried.seen[0].timeoutMs === 60_000
+      && retried.seen[1].timeoutMs === 60_000,
+    JSON.stringify(retried.seen))
+  const twice = policyRun([timedOutAnswer])
+  const twiceAnswer = await probeWithRetry(twice.run, { distro, command: 'the stalled probe' })
+  check('probe policy: a probe that timed out TWICE still fails loudly — the second timeout reaches the caller',
+    twice.seen.length === 2 && twiceAnswer.timedOut === true,
+    `${twice.seen.length} attempt(s); answer=${JSON.stringify(twiceAnswer)}`)
+  const heavier = policyRun([refusal])
+  await probeWithRetry(heavier.run, { distro, command: 'the 20-file fixture setup', timeoutMs: 120_000 })
+  check('probe policy: a request that asks for a LONGER ceiling keeps its own, and a bare one gets the documented 60s',
+    heavier.seen.length === 1 && heavier.seen[0].timeoutMs === 120_000,
+    `ceiling=${String(heavier.seen[0]?.timeoutMs)} for a request that asked for 120000`)
+}
+if (!isInnerRun) {
+  console.log('\nthe SUITE\'s own probes: a stalled probe is repeated, so one hiccup is not a defect')
+  // The seam at the SUITE's level. `buildStalledProbeCopy` writes a tree whose
+  // `lib/wsl/world.js` answers the FIRST call carrying `INSIDE-OK` — the workspace-write probe
+  // whose answer the row `a write inside the workspace succeeds` reads — with the shape a
+  // stalled wsl.exe produces (`timedOut: true`, no output), and delegates every other call to
+  // the real module. WITH scripts/wsl-probe.mjs the suite reads the second attempt and that row
+  // never reddens; with the repeat REMOVED from the copy's policy the same stall reddens it.
+  // The stub prints one line per call, so the run's own output says how many attempts it took.
+  const stalledCopy = buildStalledProbeCopy(false)
+  const withPolicy = runSuite({}, stalledCopy.suite)
+  rmSync(stalledCopy.tree, { recursive: true, force: true })
+  const withStub = withPolicy.out.split('\n').filter((entry) => entry.includes('PROBE STUB:')).map((entry) => entry.trim())
+  check('suite probes: the stalled probe is repeated by the suite\'s OWN runner, and the row that reads it stays green',
+    withStub.length === 2 && withStub[0].includes('-> timedOut') && withStub[1].includes('-> delegated')
+      && withPolicy.out.includes('repeating the same request once')
+      && !withPolicy.out.includes(`  FAIL  ${INSIDE_WRITE_LABEL}`),
+    `exit ${withPolicy.code} (${withPolicy.how}); the stub's calls:\n${withStub.join('\n') || '(none)'}\nthe run's FAIL rows: ${failedRowNamesOf(withPolicy.out)}\n${tailOf(withPolicy.out)}`)
+  const strippedCopy = buildStalledProbeCopy(true)
+  const withoutPolicy = runSuite({}, strippedCopy.suite)
+  rmSync(strippedCopy.tree, { recursive: true, force: true })
+  const strippedStub = withoutPolicy.out.split('\n').filter((entry) => entry.includes('PROBE STUB:')).map((entry) => entry.trim())
+  check('suite probes: with the repeat removed from the copy, the SAME stall reddens the row that read the probe',
+    withoutPolicy.code === 1 && withoutPolicy.out.includes(`  FAIL  ${INSIDE_WRITE_LABEL}`) && strippedStub.length === 1,
+    `exit ${withoutPolicy.code} (${withoutPolicy.how}); the stub's calls:\n${strippedStub.join('\n') || '(none)'}\nthe run's FAIL rows: ${failedRowNamesOf(withoutPolicy.out)}\n${tailOf(withoutPolicy.out)}`)
+}
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1

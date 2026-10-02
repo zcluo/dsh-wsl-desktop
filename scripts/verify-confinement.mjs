@@ -51,10 +51,35 @@ import { shellQuote, windowsToMntPath } from '../lib/wsl/paths.js'
 import { blankLiterals } from './source-text.mjs'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { probeWithRetry } from './wsl-probe.mjs'
 
 const distro = resolveDistro(process.argv[2])
 const home = resolveLinuxHome(distro)
+// The runner LIB's probes get. `resolveIdentity` and `detectRunner` implement the probe policy
+// themselves (one 60s attempt plus one repeat of the SAME probe on a timeout), so handing them a
+// runner that repeated too would stack two retries into four attempts on a stalled VM.
 const run = (options) => runWslShell(options)
+/**
+ * The first non-empty line of a command's stderr, for a detail that stays readable.
+ *
+ * Declared HERE, above the probe runner, and not next to the fixture section that first
+ * needed it: `probe`'s disclosure runs the first time a probe actually times out, which is
+ * long before a `const` declared further down the file is initialized — the retry would
+ * throw a ReferenceError out of the probe instead of reporting it. (Measured: the stalled-
+ * probe arm of `verify-confinement-skip.mjs` crashed the suite exactly there.)
+ * @param {unknown} text - the text to read.
+ * @returns {string} its first non-empty line, trimmed.
+ */
+const firstLine = (text) => String(text ?? '').trim().split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
+// The runner THIS suite's own probes get (README.md:132 — 探针超时 60s + 超时后一次透明重试).
+// Every `wsl.exe` call below goes through it except the two inside `fixtureAnswer`/
+// `fixtureVersion`, which already carry their own 60s ceiling and their own documented repeat.
+// A REFUSAL is an immediate answer, never a timeout, so the repeat cannot turn one into a pass;
+// a genuinely missing path is answered in one attempt for the same reason. What the repeat must
+// not do is hide a persistent stall: the caller sees the SECOND attempt, `timedOut` included.
+const probe = (request) => probeWithRetry(run, request, {
+  onRetry: (retried) => console.log(`        probe timed out at its ${(retried.timeoutMs ?? 60_000) / 1000}s ceiling; repeating the same request once (README: 探针超时 60s + 超时后一次透明重试): ${firstLine(typeof retried.command === 'string' ? retried.command : '(non-string command)')}`),
+})
 
 // Every scratch path this suite owns is made UNIQUE TO THIS PROCESS. They were all
 // machine-global — `<home>/dsh-wsl-sandbox-probe`, `<home>/dsh-wsl-sandbox probe dir`,
@@ -142,7 +167,7 @@ async function confined(command, { mode, workspaceLinuxRoot, linuxCwd = '/' }) {
   // helper, every check below must exercise the hardened path, not silently
   // keep testing the direct sudo-unshare runner.
   const wrapped = buildConfinedCommand({ command, linuxCwd, mode, workspaceLinuxRoot, identity, runner })
-  const result = await runWslShell({ distro, linuxCwd, command: wrapped, timeoutMs: 60_000 })
+  const result = await probe({ distro, linuxCwd, command: wrapped, timeoutMs: 60_000 })
   return { result, identity }
 }
 
@@ -486,7 +511,7 @@ const sudoUserRefusalLabel = (spelling) => `the shipped helper refuses an ${spel
     skip(SUDO_USER_PROBES.map(([spelling]) => sudoUserRefusalLabel(spelling)), drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
     for (const [label, prefix] of SUDO_USER_PROBES) {
-      const refusal = await runWslShell({
+      const refusal = await probe({
         distro,
         linuxCwd: '/',
         command: `${prefix}bash ${shellQuote(mnt)} --uid 0 --gid 0 --home /root --cwd / -- 'echo GATE-SKIPPED'; echo EXIT=$?`,
@@ -513,7 +538,7 @@ const UNRESOLVABLE_SUDO_USER_LABEL = 'the shipped helper refuses a SUDO_USER tha
   if (mnt === null) {
     skip([UNRESOLVABLE_SUDO_USER_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
-    const refusal = await runWslShell({
+    const refusal = await probe({
       distro,
       linuxCwd: '/',
       command: `SUDO_USER=nosuchuser1234 bash ${shellQuote(mnt)} --uid 0 --gid 0 --home /root --cwd / -- 'echo GATE-SKIPPED'; echo EXIT=$?`,
@@ -542,7 +567,7 @@ const UNRESOLVABLE_SUDO_USER_LABEL = 'the shipped helper refuses a SUDO_USER tha
 const USERNS_ROOT_LABEL = 'the shipped helper refuses an empty SUDO_USER under user-namespace root'
 {
   const mnt = windowsToMntPath(helperPathFile)
-  const usernsProbe = mnt === null ? null : await runWslShell({ distro, linuxCwd: '/', command: 'unshare -r id -u 2>/dev/null', loginShell: false, timeoutMs: 60_000 })
+  const usernsProbe = mnt === null ? null : await probe({ distro, linuxCwd: '/', command: 'unshare -r id -u 2>/dev/null', loginShell: false, timeoutMs: 60_000 })
   if (mnt === null || usernsProbe.stdout.trim() !== '0') {
     // The two preconditions are named apart: they have different remedies, and a
     // SKIP whose reason is "helper not on a drive path" while the real cause is a
@@ -555,7 +580,7 @@ const USERNS_ROOT_LABEL = 'the shipped helper refuses an empty SUDO_USER under u
         ? DRIVE_PATH_REMEDY
         : 'enable unprivileged user namespaces in the distribution (sysctl kernel.unprivileged_userns_clone=1, or CONFIG_USER_NS) and re-run')
   } else {
-    const refusal = await runWslShell({
+    const refusal = await probe({
       distro,
       linuxCwd: '/',
       command: `SUDO_USER= unshare -r bash ${shellQuote(mnt)} --uid 0 --gid 0 --home /root --cwd / -- 'echo GATE-SKIPPED'; echo EXIT=$?`,
@@ -576,7 +601,7 @@ const PARSE_GATE_LABEL = 'the helper parses under bash -n'
   if (mnt === null) {
     skip([PARSE_GATE_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
-    const parse = await runWslShell({ distro, linuxCwd: '/', command: `bash -n ${shellQuote(mnt)} && echo PARSE-OK`, loginShell: false, timeoutMs: 60_000 })
+    const parse = await probe({ distro, linuxCwd: '/', command: `bash -n ${shellQuote(mnt)} && echo PARSE-OK`, loginShell: false, timeoutMs: 60_000 })
     check(PARSE_GATE_LABEL, parse.stdout.includes('PARSE-OK'), parse.stderr)
   }
 }
@@ -591,7 +616,7 @@ const CONTROL_CHARACTER_LABEL = 'the shipped helper exits 2 on a control charact
   if (mnt === null) {
     skip([CONTROL_CHARACTER_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
-    const refusal = await runWslShell({
+    const refusal = await probe({
       distro,
       linuxCwd: '/',
       command: `ws=$(printf '/home/u/proj/x\\n/mnt/c'); bash ${shellQuote(mnt)} --uid 1000 --gid 1000 --home /home/u --cwd / --workspace "$ws" -- true; echo EXIT=$?`,
@@ -690,7 +715,7 @@ const probeRoot = `${home}/dsh-wsl-sandbox-probe-${runSuffix}`
 // the tail removes it, and an unconfined `rm -rf` of a name another run owns is the same
 // cross-run delete as the trees above.
 const forbiddenPath = `${home}/dsh-wsl-forbidden-${runSuffix}.txt`
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${probeRoot} && mkdir -p ${probeRoot} && echo seed > ${probeRoot}/seed.txt` })
+await probe({ distro, linuxCwd: '/', command: `rm -rf ${probeRoot} && mkdir -p ${probeRoot} && echo seed > ${probeRoot}/seed.txt` })
 
 console.log(`probing confinement in ${distro}\n`)
 
@@ -734,7 +759,7 @@ if (runner === RUNNER_HELPER) {
     // reinstall a byte-identical helper.
     skip([INSTALLED_HELPER_LABEL], drivePathPrecondition(helperPathFile), DRIVE_PATH_REMEDY)
   } else {
-    const sums = await runWslShell({ distro, linuxCwd: '/', command: `md5sum ${shellQuote(HELPER_PATH)} ${shellQuote(helperMnt)} 2>/dev/null`, loginShell: false, timeoutMs: 60_000 })
+    const sums = await probe({ distro, linuxCwd: '/', command: `md5sum ${shellQuote(HELPER_PATH)} ${shellQuote(helperMnt)} 2>/dev/null`, loginShell: false, timeoutMs: 60_000 })
     const [installedSum, shippedSum] = sums.stdout.trim().split('\n').map((line) => line.split(/\s+/)[0])
     check(INSTALLED_HELPER_LABEL,
       typeof installedSum === 'string' && installedSum !== '' && installedSum === shippedSum,
@@ -764,7 +789,7 @@ const scratch = await confined(`echo written > /tmp/dsh-wsl-tmp-${runSuffix}.txt
 check('the private scratch space stays writable', scratch.result.stdout.includes('TMP-OK'), `${scratch.result.exitCode} ${scratch.result.stderr}`)
 const who = await confined('id -u; id -g', { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
 check('the command runs as the session user, not root', who.result.stdout.trim().split(/\s+/)[0] === identity?.uid, who.result.stdout)
-const ownership = await runWslShell({ distro, linuxCwd: '/', command: `stat -c '%u' ${probeRoot}/inside.txt` })
+const ownership = await probe({ distro, linuxCwd: '/', command: `stat -c '%u' ${probeRoot}/inside.txt` })
 check('files created stay owned by the session user', ownership.stdout.trim() === identity?.uid, `owner=${ownership.stdout.trim()} expected=${identity?.uid}`)
 
 console.log('\nworkspace path with whitespace')
@@ -775,7 +800,7 @@ console.log('\nworkspace path with whitespace')
 // iterated zero times — reporting success while every mount except / stayed
 // writable.
 const spacedRoot = `${home}/dsh-wsl-sandbox probe dir-${runSuffix}`
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedRoot}" && mkdir -p "${spacedRoot}" && echo seed > "${spacedRoot}/seed.txt"` })
+await probe({ distro, linuxCwd: '/', command: `rm -rf "${spacedRoot}" && mkdir -p "${spacedRoot}" && echo seed > "${spacedRoot}/seed.txt"` })
 const inSpaced = await confined(`echo written > "${spacedRoot}/inside.txt" && echo SPACED-OK`, { mode: 'workspace-write', workspaceLinuxRoot: spacedRoot, linuxCwd: spacedRoot })
 check('a write inside a space-named workspace succeeds', inSpaced.result.exitCode === 0 && inSpaced.result.stdout.includes('SPACED-OK'), `${inSpaced.result.exitCode} ${inSpaced.result.stderr}`)
 const outSpaced = await confined(`echo written > "${forbiddenPath}" && echo OUT-SPACED-OK`, { mode: 'workspace-write', workspaceLinuxRoot: spacedRoot })
@@ -794,7 +819,7 @@ console.log('\nworkspace path with ERE metacharacters (exemption-pattern escapin
 // builder escaped through escapeEre() and was unaffected, so the two runners
 // silently disagreed about the same fence.
 const metaRoot = `${home}/dsh-wsl-sandbox (v2)|probe-${runSuffix}`
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${metaRoot}" && mkdir -p "${metaRoot}" && echo seed > "${metaRoot}/seed.txt"` })
+await probe({ distro, linuxCwd: '/', command: `rm -rf "${metaRoot}" && mkdir -p "${metaRoot}" && echo seed > "${metaRoot}/seed.txt"` })
 const inMeta = await confined(`echo written > "${metaRoot}/inside.txt" && echo META-OK`, { mode: 'workspace-write', workspaceLinuxRoot: metaRoot, linuxCwd: metaRoot })
 check('a write inside a metacharacter-named workspace succeeds', inMeta.result.exitCode === 0 && inMeta.result.stdout.includes('META-OK'), `${inMeta.result.exitCode} ${inMeta.result.stderr}`)
 const outMeta = await confined(`echo written > ${forbiddenPath} && echo OUT-META-OK`, { mode: 'workspace-write', workspaceLinuxRoot: metaRoot })
@@ -811,8 +836,8 @@ console.log('\nspaced mount target outside the workspace (findmnt \\x20 decoding
 // target (unconfined setup, like the suites above), and the confined
 // read-only run must deny a write under its REAL path.
 const spacedMount = `${home}/mnt probe-${runSuffix}`
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
-const mountedCheck = await runWslShell({ distro, linuxCwd: '/', command: `findmnt -rno TARGET "${spacedMount}"` })
+await probe({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
+const mountedCheck = await probe({ distro, linuxCwd: '/', command: `findmnt -rno TARGET "${spacedMount}"` })
 check('the spaced bind target is mounted', mountedCheck.stdout.trim() === spacedMount || mountedCheck.stdout.trim().includes('probe'), `${JSON.stringify(mountedCheck.stdout)}`)
 // The options are read INSIDE the same namespace that fenced them: the sweep
 // remounts namespace-local mounts, so a findmnt from OUTSIDE this process sees
@@ -830,7 +855,7 @@ const spacedOptions = /OPTIONS:(.*)/.exec(spacedMountWrite.result.stdout)?.[1]?.
 check('the spaced mount target was remounted read-only inside the fence',
   /^ro(,|$)/.test(spacedOptions),
   `options=${JSON.stringify(spacedOptions)} stdout=${JSON.stringify(spacedMountWrite.result.stdout.slice(-200))}`)
-await runWslShell({ distro, linuxCwd: '/', command: `sudo -n umount "${spacedMount}" && rm -rf "${spacedMount}"` })
+await probe({ distro, linuxCwd: '/', command: `sudo -n umount "${spacedMount}" && rm -rf "${spacedMount}"` })
 
 console.log('\nread-only')
 const readOnlyWrite = await confined(`echo written > ${probeRoot}/readonly.txt && echo RO-OK`, { mode: 'read-only' })
@@ -884,7 +909,7 @@ check('a failed setup does not silently run the command anyway',
 console.log('\nprocess isolation')
 // A namespace is a different inode for /proc/self/ns/pid, not merely a
 // successful exit: `--pid` can be dropped and the command still exits 0.
-const outerNs = await runWslShell({ distro, linuxCwd: '/', command: 'readlink /proc/self/ns/pid' })
+const outerNs = await probe({ distro, linuxCwd: '/', command: 'readlink /proc/self/ns/pid' })
 const innerNs = await confined('readlink /proc/self/ns/pid', { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
 check('a PID namespace is entered',
   innerNs.result.stdout.trim().length > 0 && innerNs.result.stdout.trim() !== outerNs.stdout.trim(),
@@ -1050,14 +1075,12 @@ async function fixtureVersion(path) {
   await new Promise((resolve) => { setTimeout(resolve, 500) })
   return await ask()
 }
-/** The first non-empty line of a command's stderr, for a precondition that stays readable. */
-const firstLine = (text) => (text.trim().split('\n').find((line) => line.trim() !== '') ?? '').trim()
 if (FIXTURE_SOURCE_MNT === null) {
   skip(FIXTURE_LABELS,
     'the host temp directory has no /mnt spelling (' + FIXTURE_SOURCE_HOST + ')',
     'run the suite on the host, whose temp directory is a drive path the distribution mounts, or copy the shipped helper into the distribution by hand')
 } else {
-  const setupResult = await runWslShell({ distro, linuxCwd: '/', command: FIXTURE_SETUP, loginShell: false, timeoutMs: 120_000 })
+  const setupResult = await probe({ distro, linuxCwd: '/', command: FIXTURE_SETUP, loginShell: false, timeoutMs: 120_000 })
   if (!setupResult.stdout.includes('fixtures-ok')) {
     // The fixtures need a grant that can create root-owned files under /opt and
     // /root — a machine class, not a defect. The precondition names what the setup
@@ -1151,7 +1174,7 @@ if (FIXTURE_SOURCE_MNT === null) {
     sudoAt > gateBody.length, { sudoAt, gateLength: gateBody.length })
   check('both version fixtures are judged by the same gate text (only the path differs)',
     helperSelectionScript(HELPER_PATH).split(shellQuote(HELPER_PATH)).join('PATH') === helperSelectionScript(keep0755Path).split(shellQuote(keep0755Path)).join('PATH'))
-  const fixtureCleanup = await runWslShell({ distro, linuxCwd: '/', command: FIXTURE_CLEANUP + '; ls -d ' + FIXTURE_ROOT_TREE + ' ' + FIXTURE_PRIVATE_TREE + ' ' + FIXTURE_USER_TREE + ' 2>/dev/null; echo cleaned', loginShell: false, timeoutMs: 60_000 })
+  const fixtureCleanup = await probe({ distro, linuxCwd: '/', command: FIXTURE_CLEANUP + '; ls -d ' + FIXTURE_ROOT_TREE + ' ' + FIXTURE_PRIVATE_TREE + ' ' + FIXTURE_USER_TREE + ' 2>/dev/null; echo cleaned', loginShell: false, timeoutMs: 60_000 })
   check('the fixture trees are removed again (nothing is left in the distribution)',
     fixtureCleanup.stdout.trim() === 'cleaned', { stdout: fixtureCleanup.stdout.trim(), stderr: firstLine(fixtureCleanup.stderr) })
 }
@@ -1159,7 +1182,7 @@ rmSync(FIXTURE_SOURCE_DIR, { recursive: true, force: true })
 // Every fixture this suite creates is removed again, and quoted: two of them
 // carry spaces and ERE metacharacters — which is the point of the sections
 // above — so an unquoted rm would either miss them or be re-parsed.
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${shellQuote(probeRoot)} ${shellQuote(spacedRoot)} ${shellQuote(metaRoot)} ${shellQuote(forbiddenPath)} /tmp/dsh-wsl-tmp-${runSuffix}.txt` })
+await probe({ distro, linuxCwd: '/', command: `rm -rf ${shellQuote(probeRoot)} ${shellQuote(spacedRoot)} ${shellQuote(metaRoot)} ${shellQuote(forbiddenPath)} /tmp/dsh-wsl-tmp-${runSuffix}.txt` })
 // A skip is a check that did not run, and reporting it as a pass would make this
 // suite's green meaningless exactly where the shipped helper is the subject: exit
 // 2 is what verify-all renders as SKIP (the sibling suites' ruling, applied here).
