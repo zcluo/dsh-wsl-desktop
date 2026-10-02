@@ -31,6 +31,7 @@ const STANDALONE = [
   'verify-9p.mjs',
   'verify-9p-skip.mjs',
   'verify-confinement.mjs',
+  'verify-confinement-skip.mjs',
   'verify-terminal.mjs',
   'verify-pty-handle.mjs',
   'verify-client-ui.mjs',
