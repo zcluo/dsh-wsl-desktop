@@ -12,6 +12,12 @@
  * `@deepseek-ai/*`), so their base classes are checked structurally instead:
  * every `extends X` must name something the file imports.
  *
+ * The host-half import is the suite's own motivating check, and a machine where
+ * that import cannot run gets exit 2 (the convention verify-client-ui /
+ * verify-fs-fence / verify-9p use) — never a green run, because verify-all shows
+ * exit 2 as SKIP rather than as PASS. An import that silently did not run is the
+ * defect this file exists for; reporting it as a pass would reproduce it.
+ *
  * Run: node scripts/verify-modules.mjs
  */
 
@@ -25,6 +31,13 @@ const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
 
 let failures = 0
+let skipped = 0
+
+/** The two assertions the host-half import below performs — the skip COUNT is derived from it. */
+const HOST_HALF_CHECKS = [
+  'lib/index.js loads against the real host dependencies',
+  'the plugin exposes the host contract',
+]
 
 /**
  * Record one assertion.
@@ -73,14 +86,20 @@ for (const relative of PURE) {
 // never started. So when the host's dependencies are reachable, import the real
 // entry and assert the contract it must expose.
 {
+  // A COUNTED skip, not a note in the log: node_modules is absent in a clean
+  // checkout, and this is the one check that would catch an entry module which
+  // RESOLVES its imports but throws while evaluating — the class this suite was
+  // written for. Exit 2 makes that unverified state visible to verify-all (SKIP,
+  // never PASS) and the tail below stops the suite from calling itself green.
   const deps = process.env.DSH_WSL_DEPS ?? join(pluginRoot, 'node_modules')
   if (!existsSync(deps)) {
-    console.log(`  SKIP  host-half import (no dependencies at ${deps} — link the host node_modules there, or set DSH_WSL_DEPS)`)
+    skipped += HOST_HALF_CHECKS.length
+    console.log(`  SKIP  the host-half import — ${HOST_HALF_CHECKS.length} check(s) not evaluated, no dependencies at ${deps}; link the host node_modules there, or set DSH_WSL_DEPS`)
   } else {
     try {
       const host = await import(pathToFileURL(join(pluginRoot, 'lib/index.js')).href)
-      check('lib/index.js loads against the real host dependencies', true)
-      check('the plugin exposes the host contract',
+      check(HOST_HALF_CHECKS[0], true)
+      check(HOST_HALF_CHECKS[1],
         typeof host.name === 'string' && host.name.length > 0
           && typeof host.apply === 'function'
           && host.Config !== undefined,
@@ -389,5 +408,10 @@ for (const relative of ALL) {
   check('the declared client platform is web', pkg.dsh?.client?.platform === 'web', pkg.dsh?.client)
 }
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+// A skip is a check that did not run, and reporting it as a pass would make this
+// suite's green meaningless exactly where the import is the subject: exit 2 is
+// what verify-all renders as SKIP (the sibling suites' ruling, applied here).
+if (failures > 0) console.log(`\n${failures} CHECK(S) FAILED${skipped === 0 ? '' : `, ${skipped} CHECK(S) SKIPPED`}`)
+else if (skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+else console.log('\nALL CHECKS PASSED')
+process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0
