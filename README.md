@@ -151,6 +151,7 @@ lib/wsl/paths.js        UNC ↔ Linux ↔ 盘符 互译（纯函数）
 lib/wsl/world.js        发行版发现、wsl.exe 执行核、目录事实
 lib/wsl/shell.js        ShellExecutor 实现（WSL bash + 约束接入）
 lib/wsl/fs.js           LocalFileSystem 子类（9P 后端 + 路径方言）
+lib/wsl/publish.js      覆盖发布的等待边界（重试 + 实测尾部；纯模块，可独立测试）
 lib/wsl/subprocess.js  SubprocessRuntime 实现（管道 + 终端；委托宿主 subprocess）
 lib/wsl/pty.js         终端句柄：两个进程驱动发行版内的 PTY 桥
 lib/wsl/terminal-bridge.py 发行版内运行的 PTY 桥（python3 标准库，零安装）

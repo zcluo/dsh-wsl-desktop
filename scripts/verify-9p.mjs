@@ -26,7 +26,7 @@ import { realpathSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { canonicalHostPath, isUnderHost } from '../lib/wsl/fence.js'
-import { PUBLICATION_CEILING_MS, PUBLICATION_POLL_MS, publishReplace } from '../lib/wsl/publish.js'
+import { PUBLICATION_CEILING_MS, PUBLICATION_POLL_MS, PUBLICATION_TAIL_MS, publishReplace } from '../lib/wsl/publish.js'
 import { resolveDistro, resolveOtherDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 
@@ -334,12 +334,20 @@ fact('the overwrite publication at a dose of up to ' + PUBLICATION_DOSE + ' back
     `the publication returned ${code} after ${Date.now() - started} ms and the destination holds ${JSON.stringify(value)}`)
 }
 
-// The ceiling has to stay ABOVE the tail it was chosen for, or the wait becomes a
-// coin flip again: every clearing measured on this share took at most 82 ms (one
-// outlier; 8-49 ms otherwise), and the constant is asserted to keep at least 5x that.
+// The ceiling has to stay ABOVE the tail it was chosen for, or the wait becomes a coin flip
+// again — and the tail is READ from the module that owns it, never repeated here as a literal.
+// The earlier version of this row hardcoded "82 ms" from an older, smaller, UNLOADED record,
+// which made it certify a margin it did not measure: 5 x 82 = 410 would have accepted a 411 ms
+// ceiling, 1.10x the measured LOADED maximum of 373 ms — a worse margin than the 500 ms that
+// measurement itself rejected — and it was green under every mutation either investigation
+// named. A measurement hardcoded in a file the ceiling's owner does not own drifts the moment
+// either one moves, and the drift is invisible. What reddens this row now, and must:
+// dropping the ceiling below 5x the measured tail (measured: PUBLICATION_CEILING_MS = 500
+// reddens it), or raising the tail past ceiling/5 (measured: PUBLICATION_TAIL_MS = 1000
+// reddens it). Both mutations were run; see the R=1 section of the Tier 2 report.
 probe('the publication ceiling stays above the measured tail of the refusal',
-  PUBLICATION_CEILING_MS >= 5 * 82, 'available',
-  `ceiling=${PUBLICATION_CEILING_MS} ms, the worst clearing ever measured on this share was 82 ms`)
+  PUBLICATION_CEILING_MS >= 5 * PUBLICATION_TAIL_MS, 'available',
+  `ceiling=${PUBLICATION_CEILING_MS} ms against the measured tail of ${PUBLICATION_TAIL_MS} ms (5x = ${5 * PUBLICATION_TAIL_MS} ms)`)
 
 // ---------------------------------------------------------------------------
 // The BOUND: a refusal that does not clear must still surface

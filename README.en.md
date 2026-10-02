@@ -151,6 +151,7 @@ lib/wsl/paths.js        UNC ↔ Linux ↔ drive-letter translation (pure functio
 lib/wsl/world.js        Distro discovery, the wsl.exe execution core, directory facts
 lib/wsl/shell.js        ShellExecutor implementation (WSL bash + confinement hookup)
 lib/wsl/fs.js           LocalFileSystem subclass (9P backend + path dialects)
+lib/wsl/publish.js      The overwrite publication's wait bound (retry + measured tail; pure module, independently testable)
 lib/wsl/subprocess.js   SubprocessRuntime implementation (pipes + terminal; delegates to the host subprocess)
 lib/wsl/pty.js          Terminal handle: two processes driving the in-distro PTY bridge
 lib/wsl/terminal-bridge.py  The PTY bridge running inside the distro (python3 stdlib, zero install)
