@@ -227,8 +227,16 @@ function assertSkipContent(where, run, reasonMustName) {
     blockText.includes('DSH_WSL_OTHER_DISTRO') && blockText.includes('install a second WSL distribution'),
     blockText || `(the run printed no SKIP block); the run ends:\n${tailOf(run.out)}`)
   const tail = run.out.split('\n').find((entry) => entry.includes('WERE NOT MEASURED')) ?? ''
-  check(`${where}: the tail counts the unmeasured facts instead of declaring a clean profile`,
-    /\b3\b/.test(tail), tail || `(no line saying the facts were not measured); the run ends:\n${tailOf(run.out)}`)
+  // The count is DERIVED from the list that owns it and BOUND to the phrase it counts.
+  // The hardcoded `/\b3\b/` was satisfied by a 3 anywhere in the line — this tail also
+  // carries a CHECK count — so a tail whose share count no longer matched
+  // CROSS_SHARE_LABELS kept the row green: measured, with the tail printing "2 SHARE
+  // FACT(S) ... AND 3 CHECK(S) ...", the old boolean was TRUE. The fixture family below
+  // was already fixed for exactly this (a hardcoded count reddened it on the
+  // one-distribution class); this is the same defect one family over.
+  check(`${where}: the tail counts the ${CROSS_SHARE_LABELS.length} unmeasured facts instead of declaring a clean profile`,
+    new RegExp(`(^| )${CROSS_SHARE_LABELS.length} SHARE FACT\\(S\\) WERE NOT MEASURED`).test(tail),
+    tail || `(no line saying the facts were not measured); the run ends:\n${tailOf(run.out)}`)
   // The skip is NOT an early exit: the probe still runs, and the facts that need no
   // second share are still measured and printed, so a reader loses exactly the three
   // named rows. The two FACT lines asserted here are the ones no other precondition
