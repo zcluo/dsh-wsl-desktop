@@ -291,40 +291,6 @@ check('a path above the root is NOT contained',
 // The component the canonicalizer cannot see through
 //
 // The comparisons above decide on SPELLINGS, and the fence's canonicalizer is
-// `realpathSync.native` (`canonicalHostPath`). On this share that call is BLIND
-// to a Linux symlink: measured, it reports ENOENT for the link entry while
-// `lstat` reports EISDIR and `readdir` lists the entry, and `stat` (which
-// follows) reports ENOENT too — so the entry is invisible to every call that
-// resolves a path. The harness resolves targets with the same call
-// (`resolveLocalTarget`, fs-local/src/fsio.ts:161-210), so a target spelled
-// THROUGH such a link keeps the lexical spelling as its target key, the
-// comparison above authorizes it, and the publication that follows resolves it
-// anyway: its first step is `mkdir(directory, {recursive:true})`
-// (fs-local/src/fsio.ts:598), which CREATES the missing level AT THE LINK'S
-// TARGET — outside the writable root — and then fails. verify-9p.mjs measures
-// both halves of that on every run; the HAZARD it used to record for this gap
-// is now the assertion it carries, and the rule below is what closes it.
-//
-// The rule under test — the one the fence now implements: a target is authorized
-// only when every component strictly between the writable root and the target's
-// OWN NAME either does not exist on the share (`lstat` ENOENT/ENOTDIR) or
-// canonicalizes; a component that EXISTS but does not canonicalize refuses the
-// target. The target's own name is deliberately EXEMPT: a final-component link
-// is measured safe (the publication's rename replaces the link entry inside the
-// root and the link's target file is untouched) and it works today, so refusing
-// it would refuse a working legitimate write — and a rule that refuses
-// legitimate same-root writes is worse than the gap it closes.
-//
-// The fixture is built and removed with the distribution's own tools, because a
-// Linux symlink cannot be created from the Windows side (measured EPERM) and
-// cannot be deleted there either (measured unlink ENOENT, rm EISDIR, ENOTEMPTY
-// for a directory that holds one). Its targets are both sides of the rule:
-// `escape` points OUTSIDE the root, `inside-link` INSIDE it, `dangling`
-// nowhere, and `file-link` at a file outside (the exempt final component).
-// ---------------------------------------------------------------------------
-// The component the canonicalizer cannot see through
-//
-// The comparisons above decide on SPELLINGS, and the fence's canonicalizer is
 // `realpathSync.native` (`canonicalHostPath`). On this share that call is BLIND to
 // a Linux symlink: measured, it reports ENOENT for the link entry while `lstat`
 // reports EISDIR and `readdir` lists the entry, and `stat` (which follows) reports
