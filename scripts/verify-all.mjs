@@ -81,10 +81,11 @@ function outcomeOf(suite, run, elapsedMs) {
   return { suite, code: status, how: 'exited', note: '' }
 }
 
-/** Suites that run against the distribution and the source tree alone (verify-package needs only npm and the package root). */
+/** Suites that run against the distribution and the source tree alone (verify-package needs only npm and the package root; verify-diagrams only git and the diagram source). */
 const STANDALONE = [
   'verify-modules.mjs',
   'verify-package.mjs',
+  'verify-diagrams.mjs',
   'verify-fs-fence.mjs',
   'verify-fs-fence-skip.mjs',
   'verify-world.mjs',
@@ -155,6 +156,14 @@ const DECLARED_SKIPS = [
     suite: 'verify-package.mjs',
     branch: ['!npmUsable'],
     precondition: 'npm --version cannot be spawned, exits non-zero, or answers without a version, so the packed artifact cannot be produced or inspected here',
+  },
+  {
+    // verify-diagrams.mjs — the branch tests `gitWorks`, false when git cannot be started at
+    // all and when the tree is not a working tree (an exported tarball, a vendored copy):
+    // there is no history to evaluate the revision claim against, so no row can run.
+    suite: 'verify-diagrams.mjs',
+    branch: ['gitWorks'],
+    precondition: 'the checkout is not a git working tree, or git cannot be run here, so the revision claim the diagram renders cannot be evaluated against any history',
   },
   {
     // verify-fs-fence.mjs — the branch tests `publicationCode === null`, which a missing

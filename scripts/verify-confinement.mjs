@@ -914,8 +914,8 @@ const FIXTURE_SOURCE_MNT = windowsToMntPath(FIXTURE_SOURCE_HOST)
 // ancestor under /tmp, root-owned tree under /opt, untraversable 0700 root tree under
 // /root — so the suffix costs the section none of its subject, while the shared names
 // cost it everything: the setup below is a `set -e` script whose `rm -rf`/`mkdir`/`install`
-// sequence a concurrent run's identical sequence interleaves with, and the 20-check
-// table then skips on a fixture that was half-built rather than unbuildable.
+// sequence a concurrent run's identical sequence interleaves with, and the
+// whole fixture table then skips on a fixture that was half-built rather than unbuildable.
 const FIXTURE_USER_TREE = `/tmp/dsh-wsl-helper-fixtures-${runSuffix}`
 const FIXTURE_ROOT_TREE = `/opt/dsh-wsl-helper-fixtures-${runSuffix}`
 const FIXTURE_PRIVATE_TREE = `/root/dsh-wsl-helper-fixtures-${runSuffix}`
@@ -933,6 +933,21 @@ const user0555Path = FIXTURE_ROOT_TREE + '/user-0555'
 const stale0755Path = FIXTURE_ROOT_TREE + '/stale-0755'
 const privateKeepPath = FIXTURE_PRIVATE_TREE + '/keep-0755'
 const absentPath = FIXTURE_ROOT_TREE + '/absent'
+// The two shapes the gate's doc promises and the table had no row for: a DIRECTORY at the
+// grant path (a root:root 0755 directory satisfies -x, uid 0, no write bits and every
+// ancestor test, so only the type test refuses it) and a root-owned SYMLINK to an
+// acceptable file.
+const dirHelperPath = FIXTURE_ROOT_TREE + '/dir-helper'
+const linkToFile = FIXTURE_ROOT_TREE + '/link-to-file'
+// The symlinked ANCESTOR pair. The walk tests each LEXICAL component with '[ -w ]', which
+// FOLLOWS a symlink, so a link into a writable tree must refuse and a link into a
+// root-owned 0755 tree must not: the pair is what isolates "the walk sees through the
+// component" from "the component is a link".
+const linkIntoWritable = FIXTURE_ROOT_TREE + '/linkdir'
+const linkIntoSafe = FIXTURE_ROOT_TREE + '/linkdir-safe'
+const safeTreeDir = FIXTURE_ROOT_TREE + '/safe-tree'
+const viaWritableLink = linkIntoWritable + '/root-in-userdir'
+const viaSafeLink = linkIntoSafe + '/keep-0755'
 /**
  * Every fixture the gate is asked about, and the ownership answer it must give.
  * The third element is a clause: the labels below read "the ownership gate <clause>".
@@ -945,6 +960,10 @@ const FIXTURE_CASES = [
   [mode0775Path, 'no', 'refuses a root-owned 0775 file (the session user is not in group root, so [ -w ] alone would pass it)'],
   [mode0700Path, 'no', 'refuses a root-owned 0700 file (the pre-existing execute-bit rule)'],
   [privateKeepPath, 'no', 'refuses a 0755 root file the session user cannot even traverse'],
+  [dirHelperPath, 'no', 'refuses a DIRECTORY at the grant path (only the type test refuses it: -x, uid 0 and the mode bits all pass for a directory)'],
+  [linkToFile, 'no', 'refuses a root-owned SYMLINK to an acceptable file (the grant names a path, so the link is part of the trust decision)'],
+  [viaWritableLink, 'no', 'refuses a helper reached through a symlinked ancestor that resolves into a writable tree (the walk follows the component)'],
+  [viaSafeLink, 'yes', 'accepts a helper reached through a symlinked ancestor that resolves into a root-owned 0755 tree (the refusal above is the target, not the link)'],
   [stale0755Path, 'yes', 'accepts a stale-version copy (the version half is a separate pin)'],
   [keep0755Path, 'yes', 'accepts a root-owned 0755 file in a root-owned tree'],
   [absentPath, 'no', 'refuses a path that does not exist'],
@@ -974,11 +993,25 @@ const FIXTURE_SETUP = [
   'sudo -n install -m 0775 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + mode0775Path,
   'sudo -n install -m 0555 -o $(id -un) -g $(id -gn) ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + user0555Path,
   'sudo -n install -m 0755 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + privateKeepPath,
+  // The type shape: a root:root 0755 DIRECTORY at a grant path. Every other test passes for
+  // it (-x, uid 0, 755 has no write bits, no writable ancestor), so only '[ -f ]' refuses it.
+  'sudo -n mkdir -p ' + dirHelperPath + ' && sudo -n chmod 0755 ' + dirHelperPath,
+  // The link shape: a root-owned symlink whose target IS an acceptable file.
+  'sudo -n ln -s ' + keep0755Path + ' ' + linkToFile,
+  // The symlinked-ancestor pair: one link into the writable user tree, one into a root-owned
+  // 0755 tree that carries its own root:root 0755 file.
+  'sudo -n mkdir -p ' + safeTreeDir + ' && sudo -n chmod 0755 ' + safeTreeDir,
+  // The file goes to its REAL path first: the link is created after it, so the install
+  // cannot fail on a directory the setup has not made yet (measured: 'install: cannot
+  // create regular file .../linkdir-safe/keep-0755: No such file or directory').
+  'sudo -n install -m 0755 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + safeTreeDir + '/keep-0755',
+  'sudo -n ln -s ' + safeTreeDir + ' ' + linkIntoSafe,
+  'sudo -n ln -s ' + FIXTURE_USER_TREE + ' ' + linkIntoWritable,
   'sudo -n cp ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + FIXTURE_USER_TREE + '/stale.sh',
   "sudo -n sed -i " + shellQuote("s/^VERSION=.*$/VERSION='" + FIXTURE_STALE_VERSION + "'/") + ' ' + FIXTURE_USER_TREE + '/stale.sh',
   'sudo -n install -m 0755 -o root -g root ' + FIXTURE_USER_TREE + '/stale.sh ' + stale0755Path,
   'rm -f ' + FIXTURE_USER_TREE + '/stale.sh',
-  'for p in ' + [userCopyPath, rootInUserDirPath, root0777Path, keep0755Path, mode0700Path, mode0775Path, user0555Path, privateKeepPath, stale0755Path].join(' ') + '; do sudo -n stat -c "%u:%a %n" "$p"; done',
+  'for p in ' + [userCopyPath, rootInUserDirPath, root0777Path, keep0755Path, mode0700Path, mode0775Path, user0555Path, privateKeepPath, stale0755Path, dirHelperPath, linkToFile, linkIntoWritable, linkIntoSafe, viaSafeLink].join(' ') + '; do sudo -n stat -c "%u:%a %n" "$p"; done',
   'echo fixtures-ok',
 ].join('\n')
 const FIXTURE_CLEANUP = 'sudo -n rm -rf ' + FIXTURE_ROOT_TREE + ' ' + FIXTURE_PRIVATE_TREE + '; rm -rf ' + FIXTURE_USER_TREE
@@ -1052,6 +1085,15 @@ if (FIXTURE_SOURCE_MNT === null) {
       [mode0775Path, '0:775'],
       [privateKeepPath, '0:755'],
       [stale0755Path, '0:755'],
+      // The new shapes' own premise: the directory is a root-owned 0755 DIRECTORY, the two
+      // links are root-owned symlinks (stat does not follow, so 777 is the LINK's mode), and
+      // the file behind the safe link is a regular root:root 0755. Without this row a missing
+      // fixture would answer "no" to the refusal rows and they would pass vacuously.
+      [dirHelperPath, '0:755'],
+      [linkToFile, '0:777'],
+      [linkIntoWritable, '0:777'],
+      [linkIntoSafe, '0:777'],
+      [viaSafeLink, '0:755'],
     ]
     check('the fixtures carry the owner and mode the gate is asked about (uid:mode)',
       expectedStats.every(([path, want]) => fixtureStats.get(path) === want),
