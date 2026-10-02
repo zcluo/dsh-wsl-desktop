@@ -273,11 +273,29 @@ check('the host PowerShell tool works', (winStep('tools.pwsh')?.text ?? '').incl
 check('no bash tool exists in the host world', (winStep('tools.bash')?.text ?? '').includes('UNKNOWN_TOOL'), winStep('tools.bash')?.text?.slice(0, 160))
 
 console.log('\nworkspace dialog host contract')
+// The dialog drives THREE route methods, and each row now reads its OWN answer: the client
+// half calls `listDir` for the picker, `resolveHome` for the prefill and `checkPath` for
+// the validation (lib/client.js:300/363/387). This block used to read all of it from
+// `workspaceFlow` — a suite-only composite that runs resolve → listDir → checkPath →
+// registry.create → registry.delete inside ONE call — so a single throw left every field
+// unset and the block printed FOUR failures. Measured on this machine: the listing answered
+// with 35 entries and `checkPath` then timed out at 30s, and the suite reported FAIL on
+// "the dialog's directory listing works" — a row whose own step had already succeeded. The
+// composite is still the only method that registers AND removes a workspace, so the two rows
+// that need exactly that keep using it, and name the step when it throws.
+const listing = await call('listDir', { distro, path: '/' }).catch((error) => ({ error: error.message }))
+check('the dialog\'s directory listing works', Array.isArray(listing.entries), listing)
+if (Array.isArray(listing.entries)) console.log(`        ${listing.entries.length} entries in /`)
+const facts = await call('checkPath', { distro, path: '/' }).catch((error) => ({ error: error.message }))
+check('the chosen directory is validated as a directory', facts.isDirectory === true, facts)
 const flow = await call('workspaceFlow', { distro, linuxPath: '/' }).catch((error) => ({ error: error.message }))
-check('the dialog\'s directory listing works', typeof flow.directoryEntries === 'number', flow)
-check('the chosen directory is validated as a directory', flow.isDirectory === true, flow)
-check('a workspace is registered under the UNC spelling', String(flow.workspacePath ?? '').startsWith('\\\\wsl.localhost\\'), flow.workspacePath)
-check('the verification workspace is removed again', flow.deleted === true, flow)
+// Both remaining rows come from that one composite, so a throw fails both and the detail has
+// to say so: the error text names the step (无法列出/无法检查 = a probe, otherwise the registry).
+const flowStep = flow.error === undefined
+  ? null
+  : `${flow.error} — workspaceFlow is ONE route call (resolve → listDir → checkPath → registry.create → registry.delete), so this row is red because a step inside it threw; the error above names the step`
+check('a workspace is registered under the UNC spelling', String(flow.workspacePath ?? '').startsWith('\\\\wsl.localhost\\'), flowStep ?? flow.workspacePath)
+check('the verification workspace is removed again', flow.deleted === true, flowStep ?? flow.deleted)
 const resolvedHome = await call('resolveHome', { distro }).catch((error) => ({ error: error.message }))
 check('the dialog can resolve the default user and home',
   typeof resolvedHome?.user === 'string' && resolvedHome.user.length > 0

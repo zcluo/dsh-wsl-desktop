@@ -270,6 +270,125 @@ check('a failed probe and an absent user do not read the same',
   && !absent.detail.includes('退出码 0'),
   `failed probe: ${absent.detail}\n        absent user: ${absentUser.detail}`)
 
+console.log('\nthe documented probe policy: a 60s ceiling and one retry after a timeout')
+// README.md states the policy for exactly these probes: 探针超时 60s + 超时后一次透明重试 ——
+// 桌面重启后的首个 wsl.exe 冷启动可以超过短上限 —— and it names listLinuxDir, checkLinuxPath
+// and resolveDistroHome in the same sentence. The confinement and PTY probes implemented it
+// (resolveIdentity / detectRunner / noNewPrivs / python3); these three did not, so a wsl.exe
+// stall longer than their 30s ceiling threw straight out of checkLinuxPath into lib/index.js's
+// workspaceFlow — ONE throw that the acceptance suite then reported as FOUR red rows, including
+// 'the dialog's directory listing works', whose own step had already answered. The stall is not
+// hypothetical: measured on this machine as 无法检查 /：（探针超时） after 30.4s and 30.5s on two
+// consecutive calls while the shared VM ran at load ~11 with its swap 95% full — and the same
+// transient was already recorded in this suite's own history as 'measured once in six full runs'.
+//
+// The policy is asserted BEHAVIOURALLY, through the injected runner: a probe that times out must
+// be repeated exactly once, and the answer must come from the repeat. A source pin on the
+// timeoutMs value would be satisfied by a probe that never retried.
+const timedOutProbe = { exitCode: null, stdout: '', stderr: '', timedOut: true }
+/**
+ * A runner that replays scripted outcomes and records every request it was handed.
+ * @param {Array<object|Error>} outcomes - one outcome per call, in order.
+ * @returns {{ run: (options: object) => Promise<object>, calls: object[] }} the runner and its requests.
+ */
+function scriptedRunner(outcomes) {
+  const calls = []
+  return {
+    calls,
+    run: async (options) => {
+      calls.push(options)
+      const next = outcomes.shift()
+      if (next === undefined) throw new Error('scriptedRunner: no outcome left for this call')
+      if (next instanceof Error) throw next
+      return next
+    },
+  }
+}
+/**
+ * Run one scripted probe and report its outcome instead of throwing.
+ *
+ * These checks exist to redden a MISSING retry, and a missing retry is exactly what
+ * makes the call throw — so an uncaught throw here would kill the suite before it
+ * printed the row that names the defect (the same reason `homeOf` above reports its
+ * outcome rather than letting a transient abort every check after it).
+ * @param {() => Promise<object>} work - the probe to run.
+ * @returns {Promise<object>} the value, or `{ error }` when it threw.
+ */
+async function settle(work) {
+  try {
+    return await work()
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
+}
+const pathRetry = scriptedRunner([timedOutProbe, { exitCode: 0, stdout: 'dir\n', stderr: '', timedOut: false }])
+const pathFacts = await settle(() => checkLinuxPath(distro, '/', { run: pathRetry.run }))
+check('checkLinuxPath repeats a timed-out probe exactly once and answers from the repeat',
+  pathRetry.calls.length === 2 && pathFacts.isDirectory === true,
+  { calls: pathRetry.calls.length, facts: pathFacts })
+check('checkLinuxPath asks for the documented 60s ceiling',
+  pathRetry.calls.every((call) => call.timeoutMs === 60_000),
+  pathRetry.calls.map((call) => call.timeoutMs))
+// The listing's own protocol is NUL-framed and raw, so the scripted answer is a Buffer exactly
+// as runWslShell returns one: a string here would pass through toString('utf8') unchanged and
+// stop testing the framing.
+const listingRetry = scriptedRunner([
+  timedOutProbe,
+  { exitCode: 0, stdout: Buffer.from('f\talpha.txt\0d\tbeta\0', 'utf8'), stderr: '', timedOut: false },
+])
+const listingFacts = await settle(() => listLinuxDir(distro, '/', { run: listingRetry.run }))
+check('listLinuxDir repeats a timed-out probe exactly once and answers from the repeat',
+  listingRetry.calls.length === 2 && listingFacts.entries.length === 2
+  && listingFacts.entries.some((entry) => entry.name === 'alpha.txt' && entry.kind === 'file'),
+  { calls: listingRetry.calls.length, facts: listingFacts })
+check('listLinuxDir asks for the documented 60s ceiling and keeps its raw framing',
+  listingRetry.calls.every((call) => call.timeoutMs === 60_000 && call.raw === true),
+  listingRetry.calls.map((call) => ({ timeoutMs: call.timeoutMs, raw: call.raw })))
+// resolveDistroHome makes TWO probes and either can stall: the login-name probe before the
+// getent one, and the getent probe itself. Both halves are pinned separately, because a retry
+// added to only the first would leave the second exactly the stall it always was.
+const userProbeRetry = scriptedRunner([
+  timedOutProbe,
+  { exitCode: 0, stdout: 'zcluo\n', stderr: '', timedOut: false },
+  { exitCode: 0, stdout: '/home/zcluo\n', stderr: '', timedOut: false },
+])
+const userProbeFacts = await settle(() => resolveDistroHome(distro, undefined, { run: userProbeRetry.run }))
+// The repeated request must be the SAME probe, so the assertion is on the commands, not only
+// on the count: 'id -un' twice and then the home probe once, with the user coming from the
+// repeat. A retry that asked a different question would satisfy a bare count.
+const userProbeCommands = userProbeRetry.calls.map((call) => call.command)
+check('resolveDistroHome repeats a timed-out login-name probe exactly once',
+  userProbeRetry.calls.length === 3
+  && userProbeCommands[0] === 'id -un' && userProbeCommands[1] === 'id -un'
+  && userProbeFacts.user === 'zcluo',
+  { calls: userProbeRetry.calls.length, commands: userProbeCommands, facts: userProbeFacts })
+const homeProbeRetry = scriptedRunner([
+  { exitCode: 0, stdout: 'zcluo\n', stderr: '', timedOut: false },
+  timedOutProbe,
+  { exitCode: 0, stdout: '/home/zcluo\n', stderr: '', timedOut: false },
+])
+const homeProbeFacts = await settle(() => resolveDistroHome(distro, undefined, { run: homeProbeRetry.run }))
+const homeProbeCommands = homeProbeRetry.calls.map((call) => call.command)
+check('resolveDistroHome repeats a timed-out home probe exactly once and answers from the repeat',
+  homeProbeRetry.calls.length === 3
+  && homeProbeCommands[0] === 'id -un'
+  && homeProbeCommands[1] === homeProbeCommands[2] && homeProbeCommands[1] !== 'id -un'
+  && homeProbeFacts.home === '/home/zcluo',
+  { calls: homeProbeRetry.calls.length, commands: homeProbeCommands, facts: homeProbeFacts })
+check('resolveDistroHome asks for the documented 60s ceiling on both probes',
+  homeProbeRetry.calls.every((call) => call.timeoutMs === 60_000),
+  homeProbeRetry.calls.map((call) => call.timeoutMs))
+// The retry must not launder a persistent stall into an answer: two timeouts still throw, and
+// the message still carries the probe's own evidence rather than a guess about the path.
+let twiceTimedOut = ''
+try {
+  await checkLinuxPath(distro, '/', { run: scriptedRunner([timedOutProbe, timedOutProbe]).run })
+} catch (error) {
+  twiceTimedOut = error instanceof Error ? error.message : String(error)
+}
+check('a probe that times out twice still fails loudly, naming the timeout',
+  twiceTimedOut.includes('探针超时') && twiceTimedOut.includes('/'),
+  twiceTimedOut || '(no error was thrown — a persistent stall was reported as an answer)')
 console.log('\nthe selftest default workspace (the default PATH has to be exercised, not assumed)')
 // Finding 2. `resolveDistroHome(undefined, ...)` cannot run at all: wsl.exe cannot
 // be handed an undefined distribution name, so the expression the selftest default
