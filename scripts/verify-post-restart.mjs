@@ -211,56 +211,66 @@ console.log('\nsession-level acceptance')
 // 24 runs). A fixed name here also means one run's opening `rm -rf` deletes another run's
 // scratch while that run is still measuring it.
 const wslScratch = `${home}/.dsh-wsl-selftest-${process.pid}`
-await call('execInWsl', { cwd: home, distro, command: `rm -rf ${wslScratch} && mkdir -p ${wslScratch}` })
-const selftest = await call('selftest', { preset: 'wsl-standard', cwd: `\\\\wsl.localhost\\${distro}${wslScratch}` }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
-const step = (name) => selftest.steps.find((entry) => entry.name === name)
-const created = step('create')
-// The service-level agents.create does not honor meta.agentPreset (that seam
-// belongs to the session-controller, which the browser half uses); the
-// selftest's explicit select is its designed fallback. Assert the OUTCOME —
-// the session ends up running the confined realm.
-const boundAtCreate = created?.composed === 'wsl-standard'
-const boundAtSelect = step('select')?.composed === 'wsl-standard'
-check('a session is created and bound to the WSL preset', boundAtCreate || boundAtSelect, created)
-const shellRun = step('shell.run')
-check('the session shell runs inside the distribution', shellRun?.exitCode === 0 && (shellRun.stdoutText?.[0] ?? shellRun.stdout?.[0]) === 'Linux', shellRun)
-check('confinement reports its real completeness, not a claim of full', shellRun?.sandbox?.enforcement === 'partial', shellRun?.sandbox)
-const fsRoundtrip = step('fs.roundtrip')
-check('the file tools address Linux paths', fsRoundtrip?.processPath?.startsWith('/'), fsRoundtrip)
-check('file URIs are built in the execution world', String(fsRoundtrip?.fileUrl ?? '').startsWith('file:///'), fsRoundtrip?.fileUrl)
-const confined = step('shell.confined')
-check('a write outside the workspace is refused', confined?.sandbox?.denied === true, confined)
-const probe = step('subprocess.probe')
-check('the subprocess provider reports a POSIX environment', probe?.environment?.platform === 'posix', probe)
-// The selftest reports each tool outcome as a bounded JSON string, so the
-// assertions read the raw text rather than re-parsing a possibly truncated
-// document.
-const bashText = step('tools.bash')?.text ?? ''
-check('the bash tool runs inside the distribution', bashText.includes('"isError":false') && bashText.includes('Linux'), bashText.slice(0, 200))
-const readText = step('tools.read')?.text ?? ''
-check('the read tool addresses a Linux path', readText.includes('"isError":false') && readText.includes(`${wslScratch}/dsh-wsl-selftest.txt`), readText.slice(0, 200))
-const pwshText = step('tools.pwsh')?.text ?? ''
-check('the session exposes no PowerShell tool', pwshText.includes('UNKNOWN_TOOL'), pwshText.slice(0, 200))
-const sandboxMode = /"sandbox":\{"mode":"([^"]+)"/.exec(bashText)?.[1]
-if (sandboxMode !== undefined) {
-  console.log(`        tool-layer sandbox mode: ${sandboxMode} (a session resolves this from its permission preset)`)
-}
-const confinedTool = step('tools.bashConfined')
-check('the tool layer confines a write outside the workspace', confinedTool?.sandbox?.denied === true, confinedTool)
-check('the tool layer reports the same completeness', confinedTool?.sandbox?.enforcement === 'partial', confinedTool?.sandbox)
+// The scratch directory is OWNED here, for the same reason as the temp root below: the block
+// between its creation and its removal can throw (this commit's own run saw a Wsaetimedout
+// transient), and a pid-suffixed name left behind by a dead pid is one no later run cleans.
+// The success-path removal below still REPORTS its own outcome; this `finally` is the abort
+// path, and it is deliberately best-effort so a cleanup fault cannot mask the original throw.
+try {
+  await call('execInWsl', { cwd: home, distro, command: `rm -rf ${wslScratch} && mkdir -p ${wslScratch}` })
+  const selftest = await call('selftest', { preset: 'wsl-standard', cwd: `\\\\wsl.localhost\\${distro}${wslScratch}` }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
+  const step = (name) => selftest.steps.find((entry) => entry.name === name)
+  const created = step('create')
+  // The service-level agents.create does not honor meta.agentPreset (that seam
+  // belongs to the session-controller, which the browser half uses); the
+  // selftest's explicit select is its designed fallback. Assert the OUTCOME —
+  // the session ends up running the confined realm.
+  const boundAtCreate = created?.composed === 'wsl-standard'
+  const boundAtSelect = step('select')?.composed === 'wsl-standard'
+  check('a session is created and bound to the WSL preset', boundAtCreate || boundAtSelect, created)
+  const shellRun = step('shell.run')
+  check('the session shell runs inside the distribution', shellRun?.exitCode === 0 && (shellRun.stdoutText?.[0] ?? shellRun.stdout?.[0]) === 'Linux', shellRun)
+  check('confinement reports its real completeness, not a claim of full', shellRun?.sandbox?.enforcement === 'partial', shellRun?.sandbox)
+  const fsRoundtrip = step('fs.roundtrip')
+  check('the file tools address Linux paths', fsRoundtrip?.processPath?.startsWith('/'), fsRoundtrip)
+  check('file URIs are built in the execution world', String(fsRoundtrip?.fileUrl ?? '').startsWith('file:///'), fsRoundtrip?.fileUrl)
+  const confined = step('shell.confined')
+  check('a write outside the workspace is refused', confined?.sandbox?.denied === true, confined)
+  const probe = step('subprocess.probe')
+  check('the subprocess provider reports a POSIX environment', probe?.environment?.platform === 'posix', probe)
+  // The selftest reports each tool outcome as a bounded JSON string, so the
+  // assertions read the raw text rather than re-parsing a possibly truncated
+  // document.
+  const bashText = step('tools.bash')?.text ?? ''
+  check('the bash tool runs inside the distribution', bashText.includes('"isError":false') && bashText.includes('Linux'), bashText.slice(0, 200))
+  const readText = step('tools.read')?.text ?? ''
+  check('the read tool addresses a Linux path', readText.includes('"isError":false') && readText.includes(`${wslScratch}/dsh-wsl-selftest.txt`), readText.slice(0, 200))
+  const pwshText = step('tools.pwsh')?.text ?? ''
+  check('the session exposes no PowerShell tool', pwshText.includes('UNKNOWN_TOOL'), pwshText.slice(0, 200))
+  const sandboxMode = /"sandbox":\{"mode":"([^"]+)"/.exec(bashText)?.[1]
+  if (sandboxMode !== undefined) {
+    console.log(`        tool-layer sandbox mode: ${sandboxMode} (a session resolves this from its permission preset)`)
+  }
+  const confinedTool = step('tools.bashConfined')
+  check('the tool layer confines a write outside the workspace', confinedTool?.sandbox?.denied === true, confinedTool)
+  check('the tool layer reports the same completeness', confinedTool?.sandbox?.enforcement === 'partial', confinedTool?.sandbox)
 
-// The scratch workspace is removed again, so a run leaves nothing behind in the
-// home — the fixture file it holds lives inside it. The removal REPORTS its own outcome: the
-// previous `.catch(() => ({ exitCode: -1 }))` turned every failure into a value nobody read, so
-// "nothing is left behind" was a claim with no evidence and no owner.
-const scratchCleanup = await call('execInWsl', {
-  cwd: home,
-  distro,
-  command: `rm -rf "${wslScratch}" && test ! -e "${wslScratch}" && echo SCRATCH-REMOVED`,
-}).catch((error) => ({ exitCode: -1, error: error.message }))
-check('the selftest scratch directory is removed again, and the removal says so',
-  scratchCleanup.exitCode === 0 && String(scratchCleanup.stdout ?? '').includes('SCRATCH-REMOVED'),
-  scratchCleanup)
+  // The scratch workspace is removed again, so a run leaves nothing behind in the
+  // home — the fixture file it holds lives inside it. The removal REPORTS its own outcome: the
+  // previous `.catch(() => ({ exitCode: -1 }))` turned every failure into a value nobody read, so
+  // "nothing is left behind" was a claim with no evidence and no owner.
+  const scratchCleanup = await call('execInWsl', {
+    cwd: home,
+    distro,
+    command: `rm -rf "${wslScratch}" && test ! -e "${wslScratch}" && echo SCRATCH-REMOVED`,
+  }).catch((error) => ({ exitCode: -1, error: error.message }))
+  check('the selftest scratch directory is removed again, and the removal says so',
+    scratchCleanup.exitCode === 0 && String(scratchCleanup.stdout ?? '').includes('SCRATCH-REMOVED'),
+    scratchCleanup)
+} finally {
+  await call('execInWsl', { cwd: home, distro, command: `rm -rf "${wslScratch}"` })
+    .catch((error) => { console.log(`        the scratch directory could not be removed after a throw: ${error.message}`) })
+}
 
 // The other half of "one process, two worlds": a Windows workspace must keep the
 // host execution world. Selecting the host preset explicitly is what the GUI
