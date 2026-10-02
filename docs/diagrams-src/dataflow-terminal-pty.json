@@ -3,7 +3,6 @@
   "diagram_type": "dataflow",
   "meta": {
     "title": "终端双通道：字节流与 PTY 控制协议",
-    "locale": "zh-CN",
     "output": "docs/dataflow-terminal-pty.html",
     "quality_profile": "showcase",
     "views": [

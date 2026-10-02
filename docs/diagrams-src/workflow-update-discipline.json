@@ -1,11 +1,14 @@
 {
-  "schema_version": 2,
+  "schema_version": 1,
   "diagram_type": "workflow",
   "meta": {
     "title": "桌面更新纪律（强制）",
-    "locale": "zh-CN",
     "output": "docs/workflow-update-discipline.html",
     "quality_profile": "showcase",
+    "viewBox": [
+      844,
+      480
+    ],
     "views": [
       {
         "id": "happy-path",
@@ -74,7 +77,7 @@
     {
       "id": "update",
       "lane": "operator",
-      "col": 0,
+      "col": 1,
       "type": "external",
       "label": "更新 DSH Desktop",
       "sublabel": "新版可能断裂内部 API",
@@ -97,7 +100,7 @@
       "type": "external",
       "label": "继续使用",
       "sublabel": "仅在全绿后",
-      "width": 132
+      "width": 110
     },
     {
       "id": "diagnose",
@@ -111,11 +114,11 @@
     {
       "id": "repair",
       "lane": "fix",
-      "col": 4,
+      "col": 5,
       "type": "security",
       "label": "修复适配",
       "sublabel": "任何一次红都先修再干",
-      "width": 132
+      "width": 110
     }
   ],
   "edges": [
@@ -141,6 +144,8 @@
       "from": "postrestart",
       "to": "diagnose",
       "label": "任何一红",
+      "labelDx": -20,
+      "labelDy": 14,
       "variant": "security",
       "role": "error"
     },
@@ -148,7 +153,8 @@
       "id": "diagnose-repair",
       "from": "diagnose",
       "to": "repair",
-      "variant": "default"
+      "variant": "default",
+      "route": "straight"
     },
     {
       "id": "repair-rerun",
@@ -172,8 +178,8 @@
       "dot": "rose",
       "title": "红的含义",
       "items": [
-        "非 selftest 的 bindingLog 条目 = 有人绕过创建接缝",
-        "静默降级成宿主世界是最大风险"
+        "红 = 预设 · 世界 · 绑定 · 隔离 · 对话框五类契约里，至少一类在活宿主上不再成立",
+        "自动化全绿仍留两个浏览器步骤 PENDING，要人工点过才算走完"
       ]
     }
   ]

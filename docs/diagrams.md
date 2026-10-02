@@ -22,6 +22,10 @@
 
   architecture 声明了仓库证据（component `sources`），validate/deliver 需追加 `--repo-root <仓库根>`。
 
+- workflow 图在源里显式写了 `meta.viewBox`（844×480）。本机 Archify 的 workflow 默认画布是 720×528，宽高比 1.364 低于查看器的 `WIDE_RATIO = 1.55`：低于它就没有 data-reader-layout，自适应阅读宽度整套不生效，1440×900 起页面纵向滚动。改回默认值即可复现该溢出，所以这一行不是可选装饰。
+
 ## 浏览器证据
 
 `*.visual-check.json` 为逐图的自动化浏览器回执（containment / readability / viewerChrome 三项），`*.visual-check.<viewport>.<theme>.png` 为对应截图，`*.visual-check.html` 为证据聚合页。感知层人工复核仍建议在常用浏览器里过一遍。
+
+本机没有 Google Chrome/Chromium，而 Archify 的 `findChrome` 只认这两个（win32 下没有 Edge 候选），所以重新收集这些回执时必须显式指向本机的 Edge：`$env:ARCHIFY_CHROME = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'`。不设置时命令以 exit 2 退出、回执为 skipped，并会删掉已有截图。

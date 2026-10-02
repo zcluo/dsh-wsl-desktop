@@ -3,7 +3,6 @@
   "diagram_type": "lifecycle",
   "meta": {
     "title": "PTY 分配生命周期：从 spawn 到回收",
-    "locale": "zh-CN",
     "output": "docs/lifecycle-pty.html",
     "viewBox": [
       980,

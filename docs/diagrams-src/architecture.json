@@ -3,7 +3,6 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "dsh-wsl-desktop 架构总览",
-    "locale": "zh-CN",
     "output": "docs/architecture.html",
     "quality_profile": "showcase",
     "views": [
@@ -42,9 +41,7 @@
     ],
     "repository": {
       "url": "https://github.com/zcluo/dsh-wsl-desktop",
-      "provider": "github",
-      "link_mode": "web",
-      "revision": "6deff93845029594a2a056d0fa3183e85ab1043b"
+      "revision": "da0344e44668616aaae8d126d88822cc30805969"
     }
   },
   "components": [

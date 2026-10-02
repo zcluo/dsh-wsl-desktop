@@ -3,7 +3,6 @@
   "diagram_type": "sequence",
   "meta": {
     "title": "WSL 会话创建：在创建请求里命名执行世界",
-    "locale": "zh-CN",
     "output": "docs/sequence-session-create.html",
     "viewBox": [
       1040,
