@@ -836,17 +836,37 @@ console.log('\nspaced mount target outside the workspace (findmnt \\x20 decoding
 // target (unconfined setup, like the suites above), and the confined
 // read-only run must deny a write under its REAL path.
 const spacedMount = `${home}/mnt probe-${runSuffix}`
-// NOT through `probe`: this chain's FIRST step is `rm -rf` on a path its OWN last step can
-// turn into a live bind mount of `${home}`. The retry's trigger is a timeout, and the stall it
-// exists for is "the command completed, the relay hung" — in which case the repeat re-runs the
-// `rm -rf` against the mount it just made. Measured in a private mount namespace: GNU `rm`
-// does not stop at a mount point (only the final rmdir fails EBUSY), so that repeat deletes the
-// CONTENTS of the session user's home. A repeat is only safe in front of an idempotent command;
-// this one is not. The ceiling is `runWslShell`'s own default, exactly as before the retry was
-// put in front of it.
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
+/**
+ * A shell prefix that makes `rm -rf` safe on a path that may itself be a MOUNT TARGET.
+ *
+ * The bind below mounts `${home}` ONTO `${home}/mnt probe-<pid>`. A repeat of that setup — or a
+ * previous run killed between its `mount` and its `umount` — can leave the target mounted, and
+ * GNU `rm` does NOT stop at a mount point: MEASURED in a private mount namespace, `rm -rf` on a
+ * live bind mount emptied the SOURCE and only the final rmdir failed EBUSY. So every removal of a
+ * possible target first unmounts every layer this suite could have stacked (two `mount --bind`s
+ * onto one target stack; a single `umount` leaves one — also measured), and it FAILS CLOSED
+ * (non-zero, before any `rm`) if `mountpoint(1)` is missing or a layer survives: "I cannot tell
+ * whether this is a mount" must never be read as "there is nothing to unmount".
+ * @param {string} target - the path that is about to be removed.
+ * @returns {string} the guard, whose failure exits before the caller's `rm`.
+ */
+function unmountBeforeRemove(target) {
+  return 'command -v mountpoint >/dev/null 2>&1 || { echo "SUITE: mountpoint(1) is missing; refusing to remove a possible mount target" >&2; exit 91; }; '
+    + `i=0; while mountpoint -q "${target}"; do sudo -n umount "${target}" || break; i=$((i+1)); [ "$i" -ge 17 ] && break; done; `
+    + `mountpoint -q "${target}" && { echo "SUITE: ${target} is still a mount target; refusing to rm through it" >&2; exit 92; }; true`
+}
+// Through `probe` (the documented ceiling + one repeat), and safe to repeat ONLY because of that
+// guard: a repeat of this chain must not run its `rm -rf` against the mount the first attempt
+// made. Guarded, the whole chain is idempotent — unmount every layer, remove, recreate, mount
+// once — so a stalled relay costs a second attempt and nothing else.
+await probe({ distro, linuxCwd: '/', timeoutMs: 60_000, command: `${unmountBeforeRemove(spacedMount)}; rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
 const mountedCheck = await probe({ distro, linuxCwd: '/', command: `findmnt -rno TARGET "${spacedMount}"` })
-check('the spaced bind target is mounted', mountedCheck.stdout.trim() === spacedMount || mountedCheck.stdout.trim().includes('probe'), `${JSON.stringify(mountedCheck.stdout)}`)
+// ONE target, not "some line mentions probe": two stacked binds onto this target print the
+// target TWICE, and a setup that stacks them is not the setup the rows below measure.
+const mountedTargets = mountedCheck.stdout.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '')
+check('the spaced bind target is mounted exactly once (a stacked pair is not a working setup)',
+  mountedTargets.length === 1 && mountedTargets[0].includes('probe'),
+  `${JSON.stringify(mountedCheck.stdout)}`)
 // The options are read INSIDE the same namespace that fenced them: the sweep
 // remounts namespace-local mounts, so a findmnt from OUTSIDE this process sees
 // the original `rw` — the previous check ran out there and could only ever have
@@ -863,7 +883,10 @@ const spacedOptions = /OPTIONS:(.*)/.exec(spacedMountWrite.result.stdout)?.[1]?.
 check('the spaced mount target was remounted read-only inside the fence',
   /^ro(,|$)/.test(spacedOptions),
   `options=${JSON.stringify(spacedOptions)} stdout=${JSON.stringify(spacedMountWrite.result.stdout.slice(-200))}`)
-await probe({ distro, linuxCwd: '/', command: `sudo -n umount "${spacedMount}" && rm -rf "${spacedMount}"` })
+// The cleanup unmounts EVERY layer and only then removes — the same guard as the setup, so a
+// retry here (or a stack left by a stalled earlier attempt) cannot survive as a machine-global
+// bind mount of `${home}`, and cannot be `rm -rf`'d through.
+await probe({ distro, linuxCwd: '/', timeoutMs: 60_000, command: `${unmountBeforeRemove(spacedMount)}; rm -rf "${spacedMount}"` })
 
 console.log('\nread-only')
 const readOnlyWrite = await confined(`echo written > ${probeRoot}/readonly.txt && echo RO-OK`, { mode: 'read-only' })
