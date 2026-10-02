@@ -33,7 +33,7 @@
 | **WSL1** | mount namespace 语义完全不同（syscall 翻译层），未测试，明确不支持。插件要求 WSL2。 |
 | **NixOS-WSL** | 无 /usr 语义与不同的 profile 管理，未测试。 |
 | **busybox-only 极简镜像** | 缺 util-linux（setpriv/findmnt）与 bash；安装 util-linux-misc + bash 后可用（Alpine 实测即此形态）。 |
-| **setpriv < 2.32（无 --no-new-privs）** | 受限模式**不运行**：direct runner 测到 `false` 即拒绝（`NO_NEW_PRIVS_UNSUPPORTED`），而 helper 的降权用同一个标志、同样失败关闭（exit 97），所以安装 helper 不构成绕过；修法是升级发行版的 util-linux。`enforcement: 'partial'` 不是这一条的 caveat——它对每次受限运行都成立（见 README 对应条目）。 |
+| **setpriv < 2.32（无 --no-new-privs）** | 受限模式**不运行**：direct runner 测到 `false` 即拒绝（`NO_NEW_PRIVS_UNSUPPORTED`），而 helper 的降权用同一个标志、同样失败关闭——但**不是 exit 97**：helper 没有该标志的预检（`--no-new-privs` 在 `dsh-wsl-confine.sh` 只出现一次，就是那条无条件的 `exec setpriv --no-new-privs …`，实测），旧 setpriv 在选项解析处即失败，**exit 1** 且不打印 `dsh-wsl-sandbox: setup failed` 标记，所以 `shell.js` 的 `runnerFailed`（退出码 97 **且** 带标记）把它归为**普通命令失败**而不是 setup 失败。命令确实没有运行，因此安装 helper 不构成绕过；修法是升级发行版的 util-linux。`enforcement: 'partial'` 不是这一条的 caveat——它对每次受限运行都成立（见 README 对应条目，读到的是同一事实）。 |
 | **容器内运行插件行** | 矩阵验证的是发行版 userland 与插件的兼容性；插件的 WSL 服务（fs-wsl 等）运行在真实 WSL 发行版内，不在容器里。 |
 
 ## 新增发行版家族的检查单
