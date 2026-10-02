@@ -10,9 +10,12 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
-import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, probeEvidence, hostExecutable, planWsl, buildWslExecArgv, decodeWslOutput } from '../lib/wsl/world.js'
+import { listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, resolveLoginShell, defaultWorkspaceUnc, probeEvidence, hostExecutable, planWsl, buildWslExecArgv, decodeWslOutput } from '../lib/wsl/world.js'
 import {
   parseWslUnc,
   joinWslUnc,
@@ -22,6 +25,7 @@ import {
   shellQuote,
 } from '../lib/wsl/paths.js'
 import { detailText } from './detail.mjs'
+import { blankLiterals } from './source-text.mjs'
 
 let failures = 0
 
@@ -145,6 +149,19 @@ const utf16Diagnostic = 'Wsl/Service/WSL_E_DISTRO_NOT_FOUND'
 check('UTF-16LE diagnostics still decode',
   decodeWslOutput(Buffer.from(utf16Diagnostic, 'utf16le')) === utf16Diagnostic,
   JSON.stringify(decodeWslOutput(Buffer.from(utf16Diagnostic, 'utf16le'))))
+// The class the UTF-16LE fallback actually counts. Its predicate tests
+// `buffer[i + 1] === 0` with no constraint on the LOW byte, so EVERY code unit below
+// U+0100 counts — Latin-1 included, not only ASCII. The doc said "only ASCII code
+// units contribute a NUL high byte", which understated the class; the real one is
+// pinned by DECODING a Latin-1-only buffer, not by reading the sentence.
+const latin1Only = '\u00e9\u00e9\u00e9\u00e9\u00ff\u00ff'
+check('a Latin-1-only UTF-16LE buffer is read as UTF-16LE (the class is U+0100, not ASCII)',
+  decodeWslOutput(Buffer.from(latin1Only, 'utf16le')) === latin1Only,
+  JSON.stringify(decodeWslOutput(Buffer.from(latin1Only, 'utf16le'))))
+const nulFramedAscii = 'alpha.txt\u0000beta.txt\u0000'
+check('the control: NUL-framed ASCII data is NOT read as UTF-16LE',
+  decodeWslOutput(Buffer.from(nulFramedAscii, 'utf8')) === nulFramedAscii,
+  JSON.stringify(decodeWslOutput(Buffer.from(nulFramedAscii, 'utf8'))))
 const missingDistro = await runWslShell({ distro: 'dsh-wsl-no-such-distro', linuxCwd: '/', command: 'true', loginShell: false, timeoutMs: 30_000 })
 check('a wsl.exe-level failure decodes to readable text, not mojibake',
   missingDistro.exitCode !== 0 && /Wsl\/Service|WSL_E_/i.test(missingDistro.stdout + missingDistro.stderr),
@@ -241,6 +258,161 @@ check('a failed probe and an absent user do not read the same',
   && !absent.detail.includes('退出码 0'),
   `failed probe: ${absent.detail}\n        absent user: ${absentUser.detail}`)
 
+console.log('\nthe selftest default workspace (the default PATH has to be exercised, not assumed)')
+// Finding 2. `resolveDistroHome(undefined, ...)` cannot run at all: wsl.exe cannot
+// be handed an undefined distribution name, so the expression the selftest default
+// used threw before any probe — and the {user, home} object that call would have
+// returned is not a path while resolveLocation requires a non-empty string. Both
+// legs are pinned, and then the REPLACEMENT is exercised for real: a default that
+// no suite ever resolves is exactly how the old one stayed broken while every suite
+// passed, because they all pass cwd.
+let undefinedDistroError = ''
+try {
+  await resolveDistroHome(undefined, undefined)
+} catch (error) {
+  undefinedDistroError = error instanceof Error ? error.message : String(error)
+}
+check('resolveDistroHome(undefined, ...) refuses before any probe (the distribution name is validated)',
+  /非法的发行版名/.test(undefinedDistroError), { error: undefinedDistroError })
+// The host half is not importable here (its harness dependencies are absent, which is
+// why verify-modules SKIPs that import), so the selftest default is pinned as SOURCE —
+// over comment- and literal-blanked text, because the fixed line's own comment names
+// the old expression and a raw match would have been satisfied by that comment.
+const indexRaw = await readFile(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+const indexCode = blankLiterals(indexRaw)
+const resolveLocationAt = indexCode.indexOf('async function resolveLocation')
+const resolveLocationRawAt = indexRaw.indexOf('async function resolveLocation')
+check('resolveLocation refuses a non-string location (so the old default had two ways to die)',
+  resolveLocationAt >= 0
+    && /typeof location !== (?:''|'string')/.test(indexCode.slice(resolveLocationAt, resolveLocationAt + 700))
+    && resolveLocationRawAt >= 0
+    && /缺少路径/.test(indexRaw.slice(resolveLocationRawAt, resolveLocationRawAt + 700)),
+  { blanked: indexCode.slice(resolveLocationAt, resolveLocationAt + 200), raw: indexRaw.slice(resolveLocationRawAt, resolveLocationRawAt + 200) })
+check('index.js no longer hands an undefined distribution to resolveDistroHome',
+  /resolveDistroHome\(undefined/.test(indexCode) === false,
+  indexCode.slice(Math.max(0, indexCode.indexOf('defaultWorkspaceUnc') - 200), indexCode.indexOf('defaultWorkspaceUnc') + 200))
+check('index.js builds its selftest default from defaultWorkspaceUnc()',
+  /defaultWorkspaceUnc\(/.test(indexCode), indexCode.slice(Math.max(0, indexCode.indexOf('selftest') - 100), indexCode.indexOf('selftest') + 400))
+// The default itself, called for real. A probe failure is REPORTED rather than thrown,
+// so one transient does not stop every check after it (the same ruling homeOf() makes).
+const defaultOutcome = await (async () => {
+  try {
+    return { ok: true, value: await defaultWorkspaceUnc() }
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
+  }
+})()
+const defaultWorkspace = defaultOutcome.ok ? defaultOutcome.value : null
+check('the default workspace resolves through the DEFAULT distribution, not an undefined name',
+  defaultWorkspace !== null && typeof defaultWorkspace.distro === 'string' && defaultWorkspace.distro === await defaultDistro(),
+  defaultOutcome.detail ?? defaultWorkspace)
+const defaultHome = defaultWorkspace === null ? null : (await homeOf(defaultWorkspace.distro)).value ?? null
+check('its Linux path is that distribution home',
+  defaultWorkspace !== null && defaultHome !== null && defaultWorkspace.linuxPath === defaultHome.home,
+  { linuxPath: defaultWorkspace?.linuxPath, home: defaultHome?.home })
+const parsedDefault = defaultWorkspace === null ? null : parseWslUnc(defaultWorkspace.uncPath)
+check('its UNC spelling round-trips to the same distribution and path',
+  defaultWorkspace !== null && parsedDefault !== null
+    && parsedDefault.distro === defaultWorkspace.distro && parsedDefault.linuxPath === defaultWorkspace.linuxPath,
+  { uncPath: defaultWorkspace?.uncPath, parsed: parsedDefault })
+check('the default is not under /tmp (the fence refuses a workspace rooted there)',
+  defaultWorkspace !== null && defaultWorkspace.linuxPath.startsWith('/tmp') === false,
+  defaultWorkspace?.linuxPath)
+// The point of the finding: this default is USED, so it has to be usable — a
+// directory that really exists and lists.
+const defaultListing = defaultWorkspace === null ? null : await listLinuxDir(defaultWorkspace.distro, defaultWorkspace.linuxPath)
+check('the default workspace is a real, listable directory in that distribution',
+  defaultListing !== null && defaultListing.entries.length > 0,
+  { path: defaultListing?.path, entries: defaultListing?.entries.length })
+
+console.log('\nthe configured wsl.exe path reaches every spawn site')
+// Finding 4. buildWslExecArgv honoured `options.wslPath` while runWslShell and
+// listDistros spawned the literal 'wsl.exe' — and so did every probe. The proof is
+// mechanical: point the configured path at a file that does not exist. A site that
+// honours the configuration must FAIL; a site that ignores it keeps working, which is
+// the split brain the finding describes (working spawns, failing probes, confined
+// modes ending in SandboxUnavailableError).
+const bogusWsl = join(tmpdir(), 'dsh-wsl-no-such-wsl.exe')
+/** Resolve one promise into an outcome instead of throwing. */
+const attempt = async (work) => {
+  try {
+    return { ok: true, value: await work() }
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
+  }
+}
+const bogusRun = await attempt(() => runWslShell({ distro, linuxCwd: '/', command: 'echo should-not-run', loginShell: false, timeoutMs: 30_000, wslPath: bogusWsl }))
+check('runWslShell FAILS on a configured path that does not exist', bogusRun.ok === false, bogusRun)
+const defaultRun = await attempt(() => runWslShell({ distro, linuxCwd: '/', command: 'echo __WSLPATH_OK__', loginShell: false, timeoutMs: 60_000 }))
+check('the control: the default path still runs the command',
+  defaultRun.ok === true && defaultRun.value.stdout.includes('__WSLPATH_OK__'), defaultRun)
+check('and reports argv[0] as the executable it used',
+  defaultRun.ok === true && defaultRun.value.argv[0] === 'wsl.exe',
+  defaultRun.ok ? { argv: defaultRun.value.argv.slice(0, 2) } : defaultRun)
+const namedRun = await attempt(() => runWslShell({ distro, linuxCwd: '/', command: 'echo hi', loginShell: false, timeoutMs: 60_000, wslPath: 'wsl.exe' }))
+check('an explicitly configured wsl.exe is reported as argv[0]',
+  namedRun.ok === true && namedRun.value.argv[0] === 'wsl.exe',
+  namedRun.ok ? { argv: namedRun.value.argv.slice(0, 2) } : namedRun)
+const bogusList = await attempt(() => listDistros({ wslPath: bogusWsl }))
+check('listDistros FAILS on a configured path that does not exist', bogusList.ok === false, bogusList)
+const realList = await attempt(() => listDistros())
+check('listDistros with no argument still lists this machine',
+  realList.ok === true && Array.isArray(realList.value) && realList.value.length > 0, realList)
+// The half that broke the confined modes: the probes. Each is named individually,
+// so a failure detail says WHICH probe kept ignoring the configuration.
+const probeRows = [
+  ['resolveDistroHome', () => resolveDistroHome(distro, undefined, { wslPath: bogusWsl })],
+  ['listLinuxDir', () => listLinuxDir(distro, '/', { wslPath: bogusWsl })],
+  ['checkLinuxPath', () => checkLinuxPath(distro, '/', { wslPath: bogusWsl })],
+  ['resolveLoginShell', () => resolveLoginShell(distro, undefined, { wslPath: bogusWsl })],
+  ['defaultWorkspaceUnc', () => defaultWorkspaceUnc({ wslPath: bogusWsl })],
+]
+for (const [name, work] of probeRows) {
+  const row = await attempt(work)
+  check(`${name} FAILS on a configured path that does not exist`, row.ok === false, row)
+}
+console.log('\nthe configured path is threaded at every call site (source pins, comments blanked)')
+/** One lib file, with comment and string bodies blanked: a pin must read CODE, not prose about it. */
+const readBlanked = async (relative) => blankLiterals(await readFile(fileURLToPath(new URL(`../${relative}`, import.meta.url)), 'utf8'))
+const shellCode = await readBlanked('lib/wsl/shell.js')
+check('shell.js threads its config wslPath into the probe runner',
+  /runWslShell\(\{ \.\.\.options, wslPath: this\.config\.wslPath \}\)/.test(shellCode),
+  shellCode.slice(Math.max(0, shellCode.indexOf('probeOptions') - 100), shellCode.indexOf('probeOptions') + 300))
+check('index.js configures a wsl.exe path',
+  /wslPath: z\.string\(\)\.default\(''\)/.test(indexCode) && /wslPath: z\.string\(\)\.default\('wsl\.exe'\)/.test(indexRaw),
+  indexCode.slice(Math.max(0, indexCode.indexOf('wslPath:') - 80), indexCode.indexOf('wslPath:') + 120))
+check('index.js keeps the configured path where the route methods read it',
+  /routeWslPath = config\.wslPath/.test(indexCode),
+  indexCode.slice(Math.max(0, indexCode.indexOf('routeWslPath') - 80), indexCode.indexOf('routeWslPath') + 200))
+// Per SITE, not a total: a total cannot tell which site lost the option, and a
+// threshold lets one site drop out while the number stays high. The price is stated
+// rather than hidden: ADDING a probe site has to add its row here, or this check
+// reddens — which is the intent, because a new site without the option is exactly
+// the defect this pins.
+const countOf = (pattern) => (indexCode.match(pattern) ?? []).length
+const indexSites = [
+  ['listDistros', /listDistros\(\{ wslPath: routeWslPath \}\)/g, 1],
+  ['listLinuxDir', /listLinuxDir\([^)]*\{ wslPath: routeWslPath \}\)/g, 2],
+  ['checkLinuxPath', /checkLinuxPath\([^)]*\{ wslPath: routeWslPath \}\)/g, 3],
+  ['resolveDistroHome', /resolveDistroHome\([^)]*\{ wslPath: routeWslPath \}\)/g, 1],
+  ['defaultWorkspaceUnc', /defaultWorkspaceUnc\(\{ wslPath: routeWslPath \}\)/g, 1],
+  ['execInWsl runWslShell', /wslPath: routeWslPath,\s*\n\s*\}\)/g, 1],
+]
+check('index.js passes the configured path at every probe site',
+  indexSites.every(([, pattern, want]) => countOf(pattern) === want),
+  { sites: indexSites.map(([name, pattern, want]) => `${name}=${countOf(pattern)}/${want}`) })
+const subprocessCode = await readBlanked('lib/wsl/subprocess.js')
+const lookupAt = subprocessCode.indexOf('runWslShell(')
+check('subprocess.js threads it into the executable-lookup probe',
+  lookupAt >= 0 && /wslPath: this\.config\.wslPath/.test(subprocessCode.slice(lookupAt, lookupAt + 500)),
+  subprocessCode.slice(lookupAt, lookupAt + 400))
+const loginShellCalls = (subprocessCode.match(/resolveLoginShell\(plan\.distro, this\.config\.username, \{ wslPath: this\.config\.wslPath \}\)/g) ?? []).length
+check('subprocess.js threads it into both resolveLoginShell calls',
+  loginShellCalls >= 2, { loginShellCalls })
+const ptyCode = await readBlanked('lib/wsl/pty.js')
+check('pty.js threads it into the bridge-runtime probe',
+  /\.\.\.options\.wslPath !== undefined && options\.wslPath !== '' \? \{ wslPath: options\.wslPath \} : \{\}/.test(ptyCode),
+  ptyCode.slice(Math.max(0, ptyCode.indexOf('requireBridgeRuntime') - 100), ptyCode.indexOf('requireBridgeRuntime') + 500))
 console.log('\nexec-boundary validation')
 let threw = false
 try {

@@ -18,7 +18,10 @@
  * Run: node scripts/verify-confinement.mjs [distro]
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runWslShell } from '../lib/wsl/world.js'
 import {
@@ -32,11 +35,20 @@ import {
   assertWorkspaceSpelling,
   buildConfinedCommand,
   detectRunner,
+  helperOwnershipScript,
+  helperSelectionScript,
   resetConfinementCache,
   resolveIdentity,
   workspaceUnderPrivateTmp,
 } from '../lib/wsl/confinement.js'
+// The no-new-privs probe and its refusal decision are read through the NAMESPACE
+// rather than as named imports: a named import of an export that has been renamed
+// or removed is a module-load SyntaxError, so the suite would end with a stack
+// trace instead of the labelled FAIL that names the missing symbol. The check
+// below is about the symbol's EXISTENCE, so it has to survive its absence.
+import * as noNewPrivsProbe from '../lib/wsl/confinement.js'
 import { shellQuote, windowsToMntPath } from '../lib/wsl/paths.js'
+import { blankLiterals } from './source-text.mjs'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { detailText } from './detail.mjs'
 
@@ -319,6 +331,103 @@ check('an empty or unset SUDO_USER is refused rather than skipping the identity 
     && callerAssignments.length >= 2
     && callerAssignments.every((line) => line.includes('CALLER_RECORD') && /cut -d: -f[0-9]/.test(line)),
   'the guard must refuse on the VALUE (empty or unset) ahead of the comparison, the comparison must be reachable unconditionally AND keep its own fail-closed `-z "$CALLER_UID"` clause, and every CALLER_UID/CALLER_GID value must be derived from the getent record: `[[ -v SUDO_USER ]]`, a wrapped comparison, or a synthesized record each re-opens the hole this closes')
+console.log('\nno-new-privs: three states, and two of them refuse (offline)')
+// Finding 1: the probe answered null for "could not run" while the detector
+// coerced it with `?? false`, so "this setpriv cannot set NO_NEW_PRIVS" (a
+// measured limitation of the machine) and "I have no idea" (an unknown boundary)
+// were the SAME value — and the caller then built the drop WITHOUT the flag while
+// still describing `enforcement: 'partial'`. The three states are asserted apart,
+// and the refusal they drive is asserted as a DECISION: a healthy machine cannot
+// produce the unmeasured state (the probe answers yes or no whenever it runs),
+// which is why the refusal was extracted into a pure exported function instead of
+// staying three lines only a broken distribution could reach.
+//
+// The injected `run` is the probe's own seam, so these rows need no distribution
+// and no drive path: they are the same rows the finding was proved with, and they
+// are what reddens when `detectNoNewPrivs` starts answering with a boolean again.
+const detectNoNewPrivs = noNewPrivsProbe.detectNoNewPrivs
+const noNewPrivsRefusal = noNewPrivsProbe.noNewPrivsRefusal
+if (typeof detectNoNewPrivs !== 'function' || typeof noNewPrivsRefusal !== 'function') {
+  check('confinement.js exports the no-new-privs probe and the refusal decision shell.js throws with',
+    false, { detectNoNewPrivs: typeof detectNoNewPrivs, noNewPrivsRefusal: typeof noNewPrivsRefusal })
+} else {
+  resetConfinementCache()
+  let notRunCalls = 0
+  const notMeasured = await detectNoNewPrivs({
+    distro,
+    run: async () => { notRunCalls += 1; throw new Error('wsl.exe: 发行版未注册') },
+  })
+  check('a probe that did not run reports NOT MEASURED (null), not "unsupported" (false)',
+    notMeasured === null, { got: notMeasured })
+  check('the unmeasured probe was retried once, so one hiccup does not become a refusal',
+    notRunCalls === 2, { attempts: notRunCalls })
+  // The shape a distro-level wsl.exe failure has: a non-zero exit and EMPTY stdout.
+  // A probe that answered nothing has not answered "no". The empty-answer class is
+  // what `answer !== 'yes' -> false` got wrong.
+  resetConfinementCache()
+  const silentProbe = await detectNoNewPrivs({
+    distro,
+    run: async () => ({ exitCode: 258, stdout: '', stderr: 'no such distribution' }),
+  })
+  check('a non-zero probe with an empty answer is NOT MEASURED too',
+    silentProbe === null, { got: silentProbe })
+  // The measurements that ARE answers stay answers, and a measured answer is cached:
+  // re-probing a decided machine on every confined command is the cost the cache exists
+  // to avoid, while an UNMEASURED result must not be cached (it would freeze an unknown
+  // into a decision).
+  resetConfinementCache()
+  let noCalls = 0
+  const saidNo = await detectNoNewPrivs({ distro, run: async () => { noCalls += 1; return { stdout: 'no\n' } } })
+  check('the probe answering "no" reports false (a MEASURED unsupported setpriv)',
+    saidNo === false, { got: saidNo })
+  const againNo = await detectNoNewPrivs({ distro, run: async () => { noCalls += 1; return { stdout: 'no\n' } } })
+  check('a measured answer is cached, so the next command does not re-probe it',
+    againNo === false && noCalls === 1, { got: againNo, probes: noCalls })
+  resetConfinementCache()
+  const saidYes = await detectNoNewPrivs({ distro, run: async () => ({ stdout: 'yes\n' }) })
+  check('the probe answering "yes" reports true (measured supported)', saidYes === true, { got: saidYes })
+  resetConfinementCache()
+  let unmeasuredCalls = 0
+  await detectNoNewPrivs({ distro, run: async () => { unmeasuredCalls += 1; throw new Error('boom') } })
+  await detectNoNewPrivs({ distro, run: async () => { unmeasuredCalls += 1; throw new Error('boom') } })
+  check('an unmeasured probe is NOT cached: the next command re-probes instead of reusing an unknown',
+    unmeasuredCalls === 4, { attempts: unmeasuredCalls })
+  // The refusal itself. Two DISTINGUISHABLE texts: one is a property of the machine
+  // (install the helper, or a newer util-linux) and the other is not (retry). A single
+  // text for both would make an operator chase the wrong remedy, and would re-conflate
+  // the two states at the point the operator actually reads.
+  const unsupported = noNewPrivsRefusal(false)
+  const unmeasured = noNewPrivsRefusal(null)
+  check('a measured-supported setpriv is not refused', noNewPrivsRefusal(true) === null, { got: noNewPrivsRefusal(true) })
+  check('a measured-unsupported setpriv is refused', typeof unsupported === 'string' && unsupported.length > 0, { got: unsupported })
+  check('an UNMEASURED setpriv is refused TOO (the finding: the flag was dropped and the command still ran)',
+    typeof unmeasured === 'string' && unmeasured.length > 0, { got: unmeasured })
+  check('the two refusals are DIFFERENT texts, so a log grep can tell the states apart',
+    unsupported !== unmeasured, { unsupported, unmeasured })
+  check('both refusals are wsl-sandbox errors',
+    String(unsupported).startsWith('wsl-sandbox:') && String(unmeasured).startsWith('wsl-sandbox:'),
+    { unsupported, unmeasured })
+  check('the unsupported text names an unsupported setpriv, not a failed probe',
+    /不支持/.test(unsupported ?? '') && !/无法测量/.test(unsupported ?? ''), { unsupported })
+  check('the unmeasured text names a probe that could not be measured, not an unsupported setpriv',
+    /无法测量/.test(unmeasured ?? '') && !/不支持/.test(unmeasured ?? ''), { unmeasured })
+  // The refusal is only load-bearing if the EXECUTOR consults it. shell.js is the host
+  // half and its harness imports do not resolve in this checkout (verify-modules SKIPs
+  // its host-half import for that reason), so this half is a SOURCE pin over comment-
+  // and literal-blanked text — the same technique verify-world.mjs's finding-4 pins use,
+  // and the reason the finding's own first version of this pin matched a COMMENT that
+  // named the call instead of the call.
+  const shellCode = blankLiterals(await readFile(fileURLToPath(new URL('../lib/wsl/shell.js', import.meta.url)), 'utf8'))
+  const decisionAt = shellCode.indexOf('noNewPrivsRefusal(')
+  const buildAt = shellCode.indexOf('buildConfinedCommand(', decisionAt < 0 ? 0 : decisionAt)
+  check('shell.js consults the exported refusal decision before it builds the command',
+    decisionAt >= 0 && buildAt > decisionAt, { decisionAt, buildAt })
+  check('shell.js THROWS SandboxUnavailableError on a refusal (the direct runner refuses like its siblings)',
+    decisionAt >= 0 && /throw new SandboxUnavailableError\(/.test(shellCode.slice(decisionAt, decisionAt + 900)),
+    { window: shellCode.slice(decisionAt, decisionAt + 400) })
+  check('shell.js no longer assigns the raw probe result to the drop flag',
+    !/noNewPrivs\s*=\s*await detectNoNewPrivs\(/.test(shellCode))
+}
 // The structural pin can only read text; these RUN the shipped helper, which is an
 // assertion no spelling can satisfy. Unprivileged and deterministic: the refusal
 // precedes every privileged step, so no grant is needed (the same pattern as the
@@ -747,6 +856,222 @@ check('a PID namespace is entered',
 const pidns = await confined('echo PID=$$; ps -e --no-headers 2>/dev/null | wc -l', { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
 console.log(`        ${pidns.result.stdout.trim().replace(/\n/g, ' | ')}`)
 
+console.log('\nthe helper selection gate, measured against fixtures the session user can replace')
+// Finding 3's subject is a PATH, not a predicate: "the sudoers grant names a path
+// the session user can replace" is only measured by building such paths and asking
+// the shipped probe about them. These are the fixtures the finding was reproduced
+// with — a session-user-owned copy, a root-owned copy under a writable ancestor, a
+// root-owned 0777 copy, and a session-user-OWNED 0555 file under a root-owned tree
+// (nothing about it is writable, so ONLY the owner check refuses it; the first
+// fixture set could not distinguish that check, which is how the gap was found).
+//
+// The helper's BYTES are written to the host temp directory rather than read from
+// the checkout: the fixtures need the shipped file reachable from inside the
+// distribution, and a temp path has a /mnt spelling even where the checkout does
+// not (the precondition the drive-path checks above skip on). The host tree and
+// the fixture trees are removed in the same run.
+const FIXTURE_SOURCE_DIR = mkdtempSync(join(tmpdir(), 'dsh-wsl-helper-fixtures-'))
+const FIXTURE_SOURCE_HOST = join(FIXTURE_SOURCE_DIR, 'dsh-wsl-confine.sh')
+writeFileSync(FIXTURE_SOURCE_HOST, helperSource)
+const FIXTURE_SOURCE_MNT = windowsToMntPath(FIXTURE_SOURCE_HOST)
+const FIXTURE_USER_TREE = '/tmp/dsh-wsl-helper-fixtures'
+const FIXTURE_ROOT_TREE = '/opt/dsh-wsl-helper-fixtures'
+const FIXTURE_PRIVATE_TREE = '/root/dsh-wsl-helper-fixtures'
+// A version the detector cannot accept, DERIVED from the current one so it can never
+// become it: a literal would silently turn into the current version the day
+// HELPER_VERSION moved to that string, and the row would then fail on a correct helper.
+const FIXTURE_STALE_VERSION = 'dsh-wsl-confine ' + HELPER_VERSION + '-stale'
+const userCopyPath = FIXTURE_USER_TREE + '/user-copy'
+const rootInUserDirPath = FIXTURE_USER_TREE + '/root-in-userdir'
+const root0777Path = FIXTURE_USER_TREE + '/root-0777'
+const keep0755Path = FIXTURE_ROOT_TREE + '/keep-0755'
+const mode0700Path = FIXTURE_ROOT_TREE + '/mode-0700'
+const mode0775Path = FIXTURE_ROOT_TREE + '/mode-0775'
+const user0555Path = FIXTURE_ROOT_TREE + '/user-0555'
+const stale0755Path = FIXTURE_ROOT_TREE + '/stale-0755'
+const privateKeepPath = FIXTURE_PRIVATE_TREE + '/keep-0755'
+const absentPath = FIXTURE_ROOT_TREE + '/absent'
+/**
+ * Every fixture the gate is asked about, and the ownership answer it must give.
+ * The third element is a clause: the labels below read "the ownership gate <clause>".
+ */
+const FIXTURE_CASES = [
+  [userCopyPath, 'no', 'refuses a session-user-owned copy under /tmp'],
+  [rootInUserDirPath, 'no', 'refuses a root-owned copy under a writable ancestor'],
+  [root0777Path, 'no', 'refuses a group/other-writable copy on its mode bits'],
+  [user0555Path, 'no', 'refuses a session-user-OWNED 0555 file even though nothing about it is writable (the owner can chmod it back)'],
+  [mode0775Path, 'no', 'refuses a root-owned 0775 file (the session user is not in group root, so [ -w ] alone would pass it)'],
+  [mode0700Path, 'no', 'refuses a root-owned 0700 file (the pre-existing execute-bit rule)'],
+  [privateKeepPath, 'no', 'refuses a 0755 root file the session user cannot even traverse'],
+  [stale0755Path, 'yes', 'accepts a stale-version copy (the version half is a separate pin)'],
+  [keep0755Path, 'yes', 'accepts a root-owned 0755 file in a root-owned tree'],
+  [absentPath, 'no', 'refuses a path that does not exist'],
+]
+const OWNERSHIP_LABELS = FIXTURE_CASES.map(([, , clause]) => 'the ownership gate ' + clause)
+const SELECTION_REFUSAL_LABELS = FIXTURE_CASES.filter(([, want]) => want === 'no')
+  .map(([, , clause]) => 'the selection probe ' + clause)
+/** The two selection rows whose version half has to reach a fixture path through sudo. */
+const SELECTION_GRANTED_LABELS = [
+  'the selection probe accepts a root-owned 0755 file in a root-owned tree',
+  'the selection probe refuses a stale version even though its ownership half passes',
+]
+const FIXTURE_LABELS = [...OWNERSHIP_LABELS, ...SELECTION_REFUSAL_LABELS, ...SELECTION_GRANTED_LABELS]
+const FIXTURE_SETUP = [
+  'set -e',
+  'rm -rf ' + FIXTURE_USER_TREE,
+  'sudo -n rm -rf ' + FIXTURE_ROOT_TREE + ' ' + FIXTURE_PRIVATE_TREE,
+  'mkdir -p ' + FIXTURE_USER_TREE,
+  'cp ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + userCopyPath + ' && chmod 0755 ' + userCopyPath,
+  'sudo -n install -m 0755 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + rootInUserDirPath,
+  'sudo -n install -m 0777 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + root0777Path,
+  'sudo -n mkdir -p ' + FIXTURE_ROOT_TREE + ' ' + FIXTURE_PRIVATE_TREE,
+  'sudo -n chmod 0755 ' + FIXTURE_ROOT_TREE,
+  'sudo -n chmod 0700 ' + FIXTURE_PRIVATE_TREE,
+  'sudo -n install -m 0755 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + keep0755Path,
+  'sudo -n install -m 0700 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + mode0700Path,
+  'sudo -n install -m 0775 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + mode0775Path,
+  'sudo -n install -m 0555 -o $(id -un) -g $(id -gn) ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + user0555Path,
+  'sudo -n install -m 0755 -o root -g root ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + privateKeepPath,
+  'sudo -n cp ' + shellQuote(FIXTURE_SOURCE_MNT) + ' ' + FIXTURE_USER_TREE + '/stale.sh',
+  "sudo -n sed -i " + shellQuote("s/^VERSION=.*$/VERSION='" + FIXTURE_STALE_VERSION + "'/") + ' ' + FIXTURE_USER_TREE + '/stale.sh',
+  'sudo -n install -m 0755 -o root -g root ' + FIXTURE_USER_TREE + '/stale.sh ' + stale0755Path,
+  'rm -f ' + FIXTURE_USER_TREE + '/stale.sh',
+  'for p in ' + [userCopyPath, rootInUserDirPath, root0777Path, keep0755Path, mode0700Path, mode0775Path, user0555Path, privateKeepPath, stale0755Path].join(' ') + '; do sudo -n stat -c "%u:%a %n" "$p"; done',
+  'echo fixtures-ok',
+].join('\n')
+const FIXTURE_CLEANUP = 'sudo -n rm -rf ' + FIXTURE_ROOT_TREE + ' ' + FIXTURE_PRIVATE_TREE + '; rm -rf ' + FIXTURE_USER_TREE
+/**
+ * The answer one probe script gives: the gate prints exactly one word, yes or no.
+ *
+ * A third outcome is possible and is NOT an answer. `wsl.exe` itself can fail —
+ * the same transient `resolveDistroHome` retries for (measured there once in six
+ * full runs) — which leaves stdout empty, and that reads exactly like "the gate
+ * answered something else". An inconclusive answer is retried ONCE, the ruling the
+ * identity and runner probes already follow; a script that never answers still
+ * fails its row, with the second answer as the evidence.
+ * @param {string} scriptText - the gate script.
+ * @returns {Promise<string>} the gate's answer, 'yes' or 'no' when it answered at all.
+ */
+async function fixtureAnswer(scriptText) {
+  const ask = async () => (await runWslShell({ distro, linuxCwd: '/', command: scriptText, loginShell: false, timeoutMs: 60_000 })).stdout.trim()
+  const first = await ask()
+  if (first === 'yes' || first === 'no') return first
+  await new Promise((resolve) => { setTimeout(resolve, 500) })
+  return await ask()
+}
+/**
+ * The version a fixture's helper reports, through the grant.
+ *
+ * Retried only when it answered NOTHING — a transient `wsl.exe` failure — never when
+ * it answered a version: a grant that does not cover the path answers nothing here, and
+ * that is the measured premise the accept rows are gated on.
+ * @param {string} path - the fixture path.
+ * @returns {Promise<string>} the reported version, or '' when sudo did not run it.
+ */
+async function fixtureVersion(path) {
+  const ask = async () => (await runWslShell({ distro, linuxCwd: '/', command: 'sudo -n ' + shellQuote(path) + ' --version 2>/dev/null', loginShell: false, timeoutMs: 60_000 })).stdout.trim()
+  const first = await ask()
+  if (first !== '') return first
+  await new Promise((resolve) => { setTimeout(resolve, 500) })
+  return await ask()
+}
+/** The first non-empty line of a command's stderr, for a precondition that stays readable. */
+const firstLine = (text) => (text.trim().split('\n').find((line) => line.trim() !== '') ?? '').trim()
+if (FIXTURE_SOURCE_MNT === null) {
+  skip(FIXTURE_LABELS,
+    'the host temp directory has no /mnt spelling (' + FIXTURE_SOURCE_HOST + ')',
+    'run the suite on the host, whose temp directory is a drive path the distribution mounts, or copy the shipped helper into the distribution by hand')
+} else {
+  const setupResult = await runWslShell({ distro, linuxCwd: '/', command: FIXTURE_SETUP, loginShell: false, timeoutMs: 120_000 })
+  if (!setupResult.stdout.includes('fixtures-ok')) {
+    // The fixtures need a grant that can create root-owned files under /opt and
+    // /root — a machine class, not a defect. The precondition names what the setup
+    // itself answered, so the skip cannot send the operator after the wrong thing.
+    skip(FIXTURE_LABELS,
+      'the fixtures could not be built in the distribution (setup exit ' + setupResult.exitCode + ': ' + firstLine(setupResult.stderr) + ')',
+      'this section needs a sudo grant that can create root-owned files in /opt and /root (sudo -n -l); grant it, or run the suite where the grant is (ALL) NOPASSWD: ALL')
+  } else {
+    // The premise the gate's answers are only meaningful against: a fixture that
+    // silently failed to get its owner or mode would make the rows below pass for the
+    // wrong reason, and the fixture set itself is where that class of gap was found.
+    const fixtureStats = new Map()
+    for (const line of setupResult.stdout.trim().split('\n')) {
+      const match = /^(\d+):(\w+) (.+)$/.exec(line.trim())
+      if (match !== null) fixtureStats.set(match[3], match[1] + ':' + match[2])
+    }
+    const uid = identity?.uid ?? '?'
+    const expectedStats = [
+      [userCopyPath, uid + ':755'],
+      [rootInUserDirPath, '0:755'],
+      [root0777Path, '0:777'],
+      [user0555Path, uid + ':555'],
+      [keep0755Path, '0:755'],
+      [mode0700Path, '0:700'],
+      [mode0775Path, '0:775'],
+      [privateKeepPath, '0:755'],
+      [stale0755Path, '0:755'],
+    ]
+    check('the fixtures carry the owner and mode the gate is asked about (uid:mode)',
+      expectedStats.every(([path, want]) => fixtureStats.get(path) === want),
+      { expected: expectedStats.map(([path, want]) => path + ' want ' + want + ' got ' + String(fixtureStats.get(path))), stderr: firstLine(setupResult.stderr) })
+    for (const [path, wantOwnership, clause] of FIXTURE_CASES) {
+      const gotOwnership = await fixtureAnswer(helperOwnershipScript(path))
+      check('the ownership gate ' + clause, gotOwnership === wantOwnership, { path, want: wantOwnership, got: gotOwnership })
+      // The refusal cases never reach sudo: the gate refuses FIRST, which is the
+      // property the finding is about. They are therefore measurable under any grant.
+      if (wantOwnership === 'no') {
+        const gotSelection = await fixtureAnswer(helperSelectionScript(path))
+        check('the selection probe ' + clause, gotSelection === 'no', { path, got: gotSelection })
+      }
+    }
+    // The accept side of the FULL probe has to reach a fixture path through sudo,
+    // and a sudoers file narrowed to the installed helper (what the README
+    // recommends) does not cover the fixture tree. The premise is measured, not
+    // assumed: where it holds both rows run, and where it does not they are counted
+    // skips rather than rows that would pass or fail for the wrong reason.
+    const grantProbe = await fixtureVersion(keep0755Path)
+    if (grantProbe === 'dsh-wsl-confine ' + HELPER_VERSION) {
+      check(SELECTION_GRANTED_LABELS[0], await fixtureAnswer(helperSelectionScript(keep0755Path)) === 'yes', { path: keep0755Path })
+      const staleAnswer = await fixtureVersion(stale0755Path)
+      const staleSelection = await fixtureAnswer(helperSelectionScript(stale0755Path))
+      check(SELECTION_GRANTED_LABELS[1],
+        staleAnswer === FIXTURE_STALE_VERSION && staleSelection === 'no',
+        { path: stale0755Path, reportedVersion: staleAnswer, wanted: FIXTURE_STALE_VERSION, selection: staleSelection })
+    } else {
+      skip(SELECTION_GRANTED_LABELS,
+        'the sudoers grant does not cover the fixture tree (sudo -n <fixture> --version answered ' + JSON.stringify(grantProbe) + ')',
+        'add a NOPASSWD grant for the fixture path, or run this suite where the grant is (ALL) NOPASSWD: ALL')
+    }
+    // The same two properties on the deployment's OWN helper: the file the grant
+    // names must be accepted, or the hardened runner could never be selected. No
+    // skip is recorded when the detected runner is the direct path — there is no
+    // installed helper then, so no check is missing (the ruling the drift check
+    // above states for the same branch).
+    if (runner === RUNNER_HELPER) {
+      check('the ownership gate accepts the installed helper', await fixtureAnswer(helperOwnershipScript(HELPER_PATH)) === 'yes', { path: HELPER_PATH })
+      check('the selection probe accepts the installed helper', await fixtureAnswer(helperSelectionScript(HELPER_PATH)) === 'yes', { path: HELPER_PATH })
+    }
+  }
+  // The structural half of the same finding: sudo must sit AFTER the gate, so a
+  // path the session user can replace never reaches it. Anchored on the gate's OWN
+  // text (everything before its final echo) rather than on a line that a rewrite
+  // would remove, so the ordering assertion cannot pass vacuously on a gate whose
+  // anchor line is gone.
+  const ownershipText = helperOwnershipScript(HELPER_PATH)
+  const gateBody = ownershipText.slice(0, ownershipText.lastIndexOf('echo "$ok"'))
+  const selectionText = helperSelectionScript(HELPER_PATH)
+  const sudoAt = selectionText.indexOf('sudo -n')
+  check('the ownership gate never invokes sudo (its answer holds under a narrowed grant)',
+    gateBody.length > 0 && !/sudo/.test(gateBody), { gate: ownershipText })
+  check('the full probe asks sudo only AFTER the gate, so a replaceable path never reaches it',
+    sudoAt > gateBody.length, { sudoAt, gateLength: gateBody.length })
+  check('both version fixtures are judged by the same gate text (only the path differs)',
+    helperSelectionScript(HELPER_PATH).split(shellQuote(HELPER_PATH)).join('PATH') === helperSelectionScript(keep0755Path).split(shellQuote(keep0755Path)).join('PATH'))
+  const fixtureCleanup = await runWslShell({ distro, linuxCwd: '/', command: FIXTURE_CLEANUP + '; ls -d ' + FIXTURE_ROOT_TREE + ' ' + FIXTURE_PRIVATE_TREE + ' ' + FIXTURE_USER_TREE + ' 2>/dev/null; echo cleaned', loginShell: false, timeoutMs: 60_000 })
+  check('the fixture trees are removed again (nothing is left in the distribution)',
+    fixtureCleanup.stdout.trim() === 'cleaned', { stdout: fixtureCleanup.stdout.trim(), stderr: firstLine(fixtureCleanup.stderr) })
+}
+rmSync(FIXTURE_SOURCE_DIR, { recursive: true, force: true })
 // Every fixture this suite creates is removed again, and quoted: two of them
 // carry spaces and ERE metacharacters — which is the point of the sections
 // above — so an unquoted rm would either miss them or be re-parsed.

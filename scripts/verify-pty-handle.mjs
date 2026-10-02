@@ -14,7 +14,8 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { spawnWslTerminal } from '../lib/wsl/pty.js'
-import { planWsl } from '../lib/wsl/world.js'
+import { planWsl, runWslShell } from '../lib/wsl/world.js'
+import { shellQuote } from '../lib/wsl/paths.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { detailText } from './detail.mjs'
 import { blankLiterals } from './source-text.mjs'
@@ -316,5 +317,161 @@ if (bounded !== null) {
   await Promise.race([bounded.terminate(), new Promise((resolve) => setTimeout(() => resolve(false), 8000))])
 }
 
+// --- the control FIFO, and the teardown paths that must not leave one behind ----
+//
+// Finding 7. terminal-bridge.py unlinks /tmp/dsh-pty-<uuid>.fifo in its `finally`,
+// which does NOT run when the bridge is killed — and the host kills it on teardown:
+// terminate() calls data.terminate() right after the bridge's own terminate reply,
+// racing that clean exit. The name carries a fresh uuid per allocation, so nothing
+// else ever removes the orphan. A host-side `rm -f` on every path that ends a session
+// is the only cleanup that survives a SIGKILL, and it is what these rows measure.
+//
+// Scenario A reproduces the SIGKILL shape deterministically (the data process is
+// hard-killed while the session is live, so the bridge's finally cannot run), scenario
+// B is the ordinary close, and scenario C is an allocation that fails AFTER the bridge
+// announced the session — the shape every post-announce failure takes.
+const fifoChildren = []
+/**
+ * The subprocess adapter this section uses: the suite's own shape, plus a record of
+ * every child it started and the SIGKILL the first scenario needs. The close outcome
+ * is REMEMBERED, because a process that has already exited must settle immediately —
+ * the suite's adapter re-arms a 'close' listener, which never fires for a dead child.
+ * @param {object} spec - argv, cwd, stdio.
+ * @returns {object} a subprocess handle.
+ */
+function fifoAdapter(spec) {
+  const stdio = [
+    spec.stdio?.stdin === 'ignore' ? 'ignore' : 'pipe',
+    spec.stdio?.stdout === 'ignore' ? 'ignore' : 'pipe',
+    spec.stdio?.stderr === 'ignore' ? 'ignore' : 'pipe',
+  ]
+  const child = spawn(spec.argv[0], spec.argv.slice(1), {
+    cwd: spec.cwd,
+    stdio,
+    windowsHide: true,
+    ...spec.env !== undefined ? { env: { ...process.env, ...spec.env } } : {},
+  })
+  fifoChildren.push({ child, argv: spec.argv, stderr: '' })
+  const record = fifoChildren[fifoChildren.length - 1]
+  child.stderr?.on('data', (chunk) => { record.stderr += String(chunk) })
+  let settled = null
+  const waiters = []
+  const settle = (outcome) => {
+    if (settled !== null) return
+    settled = outcome
+    for (const waiter of waiters.splice(0)) waiter()
+  }
+  child.on('close', (code, signal) => { settle({ exitCode: code, signal }) })
+  child.on('error', () => { settle({ exitCode: null, signal: null }) })
+  return {
+    stdin: child.stdin,
+    stdout: child.stdout,
+    stderr: child.stderr,
+    done: settled !== null ? Promise.resolve(settled) : new Promise((resolve) => child.on('close', () => resolve(settled))),
+    terminate: () => { child.kill() },
+    waitForExit: () => settled !== null ? Promise.resolve(true) : new Promise((resolve) => waiters.push(() => resolve(true))),
+  }
+}
+/** Every /tmp/dsh-pty-*.fifo currently inside the distribution. */
+async function fifos() {
+  const result = await runWslShell({ distro, linuxCwd: '/', command: 'ls /tmp/dsh-pty-*.fifo 2>/dev/null; echo END', loginShell: false, timeoutMs: 60_000 })
+  return result.stdout.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('/tmp/dsh-pty-'))
+}
+// The suite's own `until` takes a synchronous predicate; these rows ask the
+// distribution, so the poll has to await.
+/** Poll until an async predicate holds or the ceiling passes. */
+async function untilAsync(predicate, ceilingMs) {
+  const deadline = Date.now() + ceilingMs
+  while (Date.now() < deadline) {
+    if (await predicate()) return true
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  return await predicate()
+}
+/** Allocate one terminal on a fresh interactive shell, through the recording adapter. */
+function allocateFifoTerminal(spawnImpl = fifoAdapter) {
+  return spawnWslTerminal({
+    local: { spawn: spawnImpl },
+    plan,
+    bridgeSource,
+    argv: ['/bin/bash', '--noprofile', '--norc', '-i'],
+    cols: 80,
+    rows: 24,
+    graceMs: 500,
+    controlTimeoutMs: 30_000,
+  })
+}
+console.log('\nscenario A: the data process is KILLED (the bridge finally cannot run)')
+const fifoBaseline = await fifos()
+const terminalA = await allocateFifoTerminal()
+const fifoLiveA = (await fifos()).filter((path) => fifoBaseline.includes(path) === false)
+check('the live session created its FIFO (so the row below cannot pass vacuously)',
+  fifoLiveA.length === 1, { live: fifoLiveA, baseline: fifoBaseline })
+const dataChild = fifoChildren.find((entry) => entry.argv.some((arg) => arg === 'python3'))
+check('the data process is a python3 bridge',
+  dataChild !== undefined, { spawns: fifoChildren.map((entry) => entry.argv[0] + ' ' + entry.argv[1]) })
+if (dataChild !== undefined) dataChild.child.kill('SIGKILL')
+await Promise.race([terminalA.done, new Promise((resolve) => setTimeout(resolve, 20_000))])
+const fifoGoneA = await untilAsync(async () => (await fifos()).includes(fifoLiveA[0] ?? '/nonexistent') === false, 15_000)
+check('after a KILLED bridge the session FIFO is gone',
+  fifoLiveA.length === 1 && fifoGoneA === true,
+  { fifo: fifoLiveA[0], stillThere: (await fifos()).filter((path) => fifoLiveA.includes(path)) })
+try { await terminalA.terminate() } catch { /* the session is already over */ }
+
+console.log('scenario B: the ordinary close')
+const fifoBeforeB = await fifos()
+const terminalB = await allocateFifoTerminal()
+const fifoLiveB = (await fifos()).filter((path) => fifoBeforeB.includes(path) === false)
+check('the second session created its FIFO (so the row below cannot pass vacuously)',
+  fifoLiveB.length === 1, { live: fifoLiveB })
+await Promise.race([terminalB.terminate(), new Promise((resolve) => setTimeout(resolve, 20_000))])
+const fifoGoneB = await untilAsync(async () => (await fifos()).includes(fifoLiveB[0] ?? '/nonexistent') === false, 15_000)
+check('after terminate() the session FIFO is gone',
+  fifoLiveB.length === 1 && fifoGoneB === true,
+  { fifo: fifoLiveB[0], stillThere: (await fifos()).filter((path) => fifoLiveB.includes(path)) })
+
+console.log('scenario C: the allocation fails AFTER the bridge made its FIFO')
+// The control writer is the second spawn; making it throw exercises the failed-
+// allocation path with a LIVE bridge, which that path's own teardown then kills.
+const fifoBeforeC = await fifos()
+const injected = []
+let terminalC = null
+let failureC = null
+try {
+  terminalC = await allocateFifoTerminal((spec) => {
+    if (spec.argv.some((arg) => String(arg).includes('exec 3>'))) {
+      injected.push(spec.argv)
+      throw new Error('the control writer could not be started (injected)')
+    }
+    return fifoAdapter(spec)
+  })
+} catch (error) {
+  failureC = error instanceof Error ? error.message : String(error)
+}
+const controlSpawn = injected[0]
+const fifoC = controlSpawn === undefined ? null : controlSpawn[controlSpawn.length - 1]
+check('the failed allocation is reported as a failure', failureC !== null, { failureC })
+check('the control spawn was attempted with the session FIFO as its argument',
+  fifoC !== null && fifoC.startsWith('/tmp/dsh-pty-'), { fifoC })
+// json.dumps writes {"event": "started", ...} with a space after the colon.
+const announcedC = fifoChildren.some((entry) => entry.stderr.includes('"event": "started"') || entry.stderr.includes('"event":"started"'))
+check('the bridge announced the session, so that FIFO existed (the row below is not vacuous)',
+  announcedC === true, { spawns: fifoChildren.length })
+const fifoGoneC = await untilAsync(async () => (await fifos()).includes(fifoC ?? '/nonexistent') === false, 15_000)
+check('a FAILED allocation leaves no FIFO behind',
+  fifoC !== null && fifoGoneC === true,
+  { fifo: fifoC, stillThere: (await fifos()).filter((path) => path === fifoC), before: fifoBeforeC })
+if (terminalC !== null) { try { await terminalC.terminate() } catch { /* already gone */ } }
+
+// Cleanup is scoped to what THIS section created: an unconditional
+// `rm -f /tmp/dsh-pty-*.fifo` would also unlink the control channel of a terminal a
+// running desktop owns, which is a side effect on the operator's machine, not a fixture.
+const createdFifos = [...fifoLiveA, ...fifoLiveB, ...(fifoC === null ? [] : [fifoC])]
+const leftoverFifos = (await fifos()).filter((path) => createdFifos.includes(path))
+check('no FIFO of these sessions is left behind', leftoverFifos.length === 0, { createdFifos, leftoverFifos })
+for (const path of leftoverFifos) {
+  await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
+}
+for (const entry of fifoChildren) { try { entry.child.kill() } catch { /* already gone */ } }
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1
