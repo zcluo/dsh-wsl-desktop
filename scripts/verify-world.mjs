@@ -398,6 +398,84 @@ check('a probe that times out twice still fails loudly, naming the timeout, afte
   twiceRetry.calls.length === 2
   && twiceTimedOut.includes('探针超时') && twiceTimedOut.includes('/'),
   `${twiceRetry.calls.length} attempt(s); ${twiceTimedOut || '(no error was thrown — a persistent stall was reported as an answer)'}`)
+console.log('\nthe login-shell probe: the same 60s ceiling and one repeat, and a stall is never an answer')
+// The ONE probe whose fallback is a VALUE rather than an error. resolveLoginShell
+// returns '/bin/bash' whenever the parse does not start with '/', and a probe that never
+// answered parses to '' — so a stalled relay was reported as a real shell, a value the
+// caller cannot tell from a distribution that genuinely uses bash. It was also the only
+// parsed-output probe left with no runner seam, which is why the quiet wrong answer could
+// not be pinned behaviourally: these rows drive the policy through the INJECTED runner,
+// exactly as the three probes above, and the attempt COUNT is the assertion.
+const loginShellRetry = scriptedRunner([
+  timedOutProbe,
+  { exitCode: 0, stdout: '/bin/zsh\n', stderr: '', timedOut: false },
+])
+const loginShellFacts = await settle(() => resolveLoginShell(distro, undefined, { run: loginShellRetry.run }))
+const loginShellCommands = loginShellRetry.calls.map((call) => call.command)
+check('resolveLoginShell repeats a timed-out probe exactly once, asking the SAME question, and answers from the repeat',
+  loginShellRetry.calls.length === 2
+  && loginShellCommands[0] === loginShellCommands[1]
+  && loginShellFacts === '/bin/zsh',
+  { calls: loginShellRetry.calls.length, commands: loginShellCommands, facts: loginShellFacts })
+check('resolveLoginShell asks for the documented 60s ceiling on both attempts',
+  loginShellRetry.calls.length === 2 && loginShellRetry.calls.every((call) => call.timeoutMs === 60_000),
+  loginShellRetry.calls.map((call) => call.timeoutMs))
+// The username is part of the QUESTION at both layers ('-u' and the getent argument), so
+// the repeat has to carry it: a retry that dropped it would answer about the distribution
+// DEFAULT user instead of the session's.
+const namedLoginShell = scriptedRunner([
+  timedOutProbe,
+  { exitCode: 0, stdout: '/bin/bash\n', stderr: '', timedOut: false },
+])
+await settle(() => resolveLoginShell(distro, 'zcluo', { run: namedLoginShell.run }))
+check('the repeat of a NAMED-user login-shell probe keeps the username, so it asks about the same user',
+  namedLoginShell.calls.length === 2
+  && namedLoginShell.calls.every((call) => call.username === 'zcluo' && String(call.command).includes("'zcluo'")),
+  namedLoginShell.calls.map((call) => ({ username: call.username, command: call.command })))
+// THE defect: a stall that survives the repeat. '/bin/bash' is a plausible shell for this
+// distribution, so returning it here is a wrong ANSWER the caller cannot distinguish from a
+// real one — not an error. A timeout is not an answer (checkLinuxPath refuses it for the
+// same reason), so this must redden, and the count proves the repeat ran before the failure.
+const loginShellTwice = scriptedRunner([timedOutProbe, timedOutProbe])
+const loginShellStall = await settle(() => resolveLoginShell(distro, undefined, { run: loginShellTwice.run }))
+check('a login-shell probe that times out twice fails loudly after exactly two attempts, instead of answering /bin/bash',
+  loginShellTwice.calls.length === 2
+  && typeof loginShellStall.error === 'string'
+  && loginShellStall.error.includes('探针超时')
+  && loginShellStall.error.includes(distro)
+  && loginShellStall.error.includes('/bin/bash') === false,
+  { calls: loginShellTwice.calls.length, outcome: loginShellStall })
+// Even a timed-out probe whose stream happens to carry something path-shaped must not be
+// trusted: a killed process is cut mid-write, and '/bin/bash' truncated to '/bin' still
+// starts with '/'. The answer here is the timeout itself, so the repeat does not launder it.
+const truncatedStall = scriptedRunner([
+  { exitCode: null, stdout: '/bin/bas', stderr: '', timedOut: true },
+  timedOutProbe,
+])
+const truncatedFacts = await settle(() => resolveLoginShell(distro, undefined, { run: truncatedStall.run }))
+check('a timed-out login-shell probe is refused even when its truncated stream looks like a path',
+  truncatedStall.calls.length === 2 && typeof truncatedFacts.error === 'string',
+  { calls: truncatedStall.calls.length, outcome: truncatedFacts })
+// The control: a probe that RAN and exited 0 with an empty field IS the documented fallback
+// (a user whose passwd field 7 is empty, or a distribution without getent). Without this row
+// the fix could "pass" by refusing every empty answer, breaking the promised fallback.
+const ranEmpty = scriptedRunner([{ exitCode: 0, stdout: '\n', stderr: '', timedOut: false }])
+const ranEmptyFacts = await settle(() => resolveLoginShell(distro, undefined, { run: ranEmpty.run }))
+check('the control: a probe that RAN and exited 0 with an empty field still falls back to /bin/bash, in one attempt',
+  ranEmpty.calls.length === 1 && ranEmptyFacts === '/bin/bash',
+  { calls: ranEmpty.calls.length, facts: ranEmptyFacts })
+// A non-zero exit with no answer is the third way a probe fails to answer, and it used to
+// read as the same '/bin/bash'. It is refused WITH the probe's own evidence, so an operator
+// can tell "the distribution failed" from "this user has no login shell".
+const failedLoginShell = scriptedRunner([
+  { exitCode: 258, stdout: '', stderr: 'Wsl/Service/WSL_E_DISTRO_NOT_FOUND', timedOut: false },
+])
+const failedLoginShellFacts = await settle(() => resolveLoginShell(distro, undefined, { run: failedLoginShell.run }))
+check('a login-shell probe that exited non-zero is refused with its evidence, not answered /bin/bash',
+  failedLoginShell.calls.length === 1
+  && typeof failedLoginShellFacts.error === 'string'
+  && failedLoginShellFacts.error.includes('Wsl/Service/WSL_E_DISTRO_NOT_FOUND'),
+  { calls: failedLoginShell.calls.length, outcome: failedLoginShellFacts })
 console.log('\nthe selftest default workspace (the default PATH has to be exercised, not assumed)')
 // Finding 2. `resolveDistroHome(undefined, ...)` cannot run at all: wsl.exe cannot
 // be handed an undefined distribution name, so the expression the selftest default
