@@ -315,7 +315,31 @@ const flowStep = flow.error === undefined
   ? null
   : `${flow.error} — workspaceFlow is ONE route call (resolve → listDir → checkPath → registry.create → registry.delete), so this row is red because a step inside it threw; the error above names the step`
 check('a workspace is registered under the UNC spelling', String(flow.workspacePath ?? '').startsWith('\\\\wsl.localhost\\'), flowStep ?? flow.workspacePath)
-check('the verification workspace is removed again', flow.deleted === true, flowStep ?? flow.deleted)
+/**
+ * Did THIS run's workspace get removed?
+ *
+ * Scoped to what the composite can actually tell apart. A leftover registered at the UNC root
+ * makes `workspaceFlow` answer `created:false, deleted:null` (lib/index.js:731-735:
+ * `created = existing === undefined`, `if (created) deleted = await registry.delete(…)`), and
+ * this suite has no route method that could remove a workspace it did not create — so a row
+ * asserting `deleted === true` reddens on a condition the operator cannot act on, while
+ * claiming something about a removal. A leftover is therefore DISCLOSED, and a genuine removal
+ * failure (this run created it and it is still there) still reddens. The decision table is
+ * pinned offline below, because exercising a leftover would mean deliberately leaving a
+ * registered workspace on the operator's machine.
+ */
+const workspaceRemoved = (flow) => flow.created === false || flow.deleted === true
+if (flow.created === false) {
+  console.log(`  DISCLOSED  a workspace was ALREADY registered at ${String(flow.workspacePath ?? 'the UNC root')}; this run did not create it, so it could not be the one to remove it — reported, not read as a removal failure`)
+}
+check('the verification workspace is removed again when this run created it',
+  workspaceRemoved(flow), flowStep ?? { created: flow.created, deleted: flow.deleted })
+check('the workspace-removal rule: a leftover this run did not create is disclosed, not a failure, and a real removal failure still reddens',
+  workspaceRemoved({ created: false, deleted: null }) === true
+  && workspaceRemoved({ created: true, deleted: true }) === true
+  && workspaceRemoved({ created: true, deleted: null }) === false
+  && workspaceRemoved({ error: 'workspaceFlow: 无法检查 /' }) === false,
+  { leftover: workspaceRemoved({ created: false, deleted: null }), removed: workspaceRemoved({ created: true, deleted: true }), notRemoved: workspaceRemoved({ created: true, deleted: null }), threw: workspaceRemoved({ error: 'x' }) })
 const resolvedHome = await call('resolveHome', { distro }).catch((error) => ({ error: error.message }))
 check('the dialog can resolve the default user and home',
   typeof resolvedHome?.user === 'string' && resolvedHome.user.length > 0
