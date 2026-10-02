@@ -56,6 +56,38 @@ const distro = resolveDistro(process.argv[2])
 const home = resolveLinuxHome(distro)
 const run = (options) => runWslShell(options)
 
+// Every scratch path this suite owns is made UNIQUE TO THIS PROCESS. They were all
+// machine-global — `<home>/dsh-wsl-sandbox-probe`, `<home>/dsh-wsl-sandbox probe dir`,
+// `<home>/dsh-wsl-sandbox (v2)|probe`, `<home>/mnt probe`, `<home>/dsh-wsl-forbidden.txt`,
+// and the `/tmp`, `/opt` and `/root` fixture trees — so two runs overlapping in time
+// destroyed each other: each run's OPENING `rm -rf` deletes the other's fixture, and one
+// run's CLEANUP deletes a tree the other is still measuring. Measured with two
+// overlapping runs of this suite: 24 of 24 runs exited 1, against 0 of 1 alone. The
+// chdir into the shared workspace probe appears in ALL 24 (`chdir(<home>/dsh-wsl-sandbox-probe)
+// failed 2`), `a PID namespace is entered` reports an EMPTY inner namespace in 20, and
+// 8 runs lost the whole 20-check fixture table to a half-built `/opt` tree because the
+// other run's `rm -rf` landed between this run's `mkdir` and its `install`
+// (`install: cannot create regular file '/opt/dsh-wsl-helper-fixtures/keep-0755': No such
+// file or directory`). The pid is enough and is what verify-9p.mjs settled on:
+// concurrent processes never share one, and a reused pid finds only its own leftover,
+// which the opening `rm -rf` removes anyway.
+//
+// NO PATH HERE HAS TO BE MACHINE-GLOBAL FOR WHAT THE SUITE PROVES. Every containment a
+// fixture depends on is a property of the path's PREFIX or of its SPELLING, never of its
+// full name, so a `-<pid>` suffix leaves all of them intact:
+//   - the workspace probes must sit OUTSIDE /tmp (the fence refuses a writable workspace
+//     at or below /tmp — pinned below) and under the session home; the space- and
+//     metacharacter-named workspaces must still CARRY a space, a paren and a pipe;
+//   - the spaced mount target must still carry a space, and must be outside the workspace;
+//   - the user fixture tree must sit under /tmp, so that its ANCESTOR is writable (that
+//     is the "root-owned copy under a writable ancestor" case);
+//   - the root fixture tree must sit in a root-owned, non-writable tree (/opt);
+//   - the private fixture tree must sit in a 0700 root tree the session user cannot
+//     traverse (/root).
+// The suffix keeps the CONFINEMENT assertions exactly as strong as they were; it changes
+// only which name each run gives its own copy of the fixture.
+const runSuffix = process.pid
+
 let failures = 0
 let skipped = 0
 
@@ -653,7 +685,11 @@ check('an ordinary workspace with a space and a paren is still accepted',
 }
 
 resetConfinementCache()
-const probeRoot = `${home}/dsh-wsl-sandbox-probe`
+const probeRoot = `${home}/dsh-wsl-sandbox-probe-${runSuffix}`
+// The path every "outside the workspace" probe tries to write. It carries the pid too:
+// the tail removes it, and an unconfined `rm -rf` of a name another run owns is the same
+// cross-run delete as the trees above.
+const forbiddenPath = `${home}/dsh-wsl-forbidden-${runSuffix}.txt`
 await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${probeRoot} && mkdir -p ${probeRoot} && echo seed > ${probeRoot}/seed.txt` })
 
 console.log(`probing confinement in ${distro}\n`)
@@ -721,10 +757,10 @@ console.log(`        uid=${identity?.uid} gid=${identity?.gid}`)
 console.log('\nworkspace-write')
 const inside = await confined(`echo written > ${probeRoot}/inside.txt && echo INSIDE-OK`, { mode: 'workspace-write', workspaceLinuxRoot: probeRoot, linuxCwd: probeRoot })
 check('a write inside the workspace succeeds', inside.result.exitCode === 0 && inside.result.stdout.includes('INSIDE-OK'), `${inside.result.exitCode} ${inside.result.stderr}`)
-const outside = await confined(`echo written > ${home}/dsh-wsl-forbidden.txt && echo OUTSIDE-OK`, { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
+const outside = await confined(`echo written > ${forbiddenPath} && echo OUTSIDE-OK`, { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
 check('a write outside the workspace is denied', !outside.result.stdout.includes('OUTSIDE-OK'), `${outside.result.exitCode} ${outside.result.stdout}`)
 check('the denial carries a known signature', DENIAL_SIGNATURES.some((signature) => outside.result.stderr.includes(signature)), outside.result.stderr)
-const scratch = await confined('echo written > /tmp/dsh-wsl-tmp.txt && echo TMP-OK', { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
+const scratch = await confined(`echo written > /tmp/dsh-wsl-tmp-${runSuffix}.txt && echo TMP-OK`, { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
 check('the private scratch space stays writable', scratch.result.stdout.includes('TMP-OK'), `${scratch.result.exitCode} ${scratch.result.stderr}`)
 const who = await confined('id -u; id -g', { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
 check('the command runs as the session user, not root', who.result.stdout.trim().split(/\s+/)[0] === identity?.uid, who.result.stdout)
@@ -738,11 +774,11 @@ console.log('\nworkspace path with whitespace')
 // `|| true` swallowed the failure, and BOTH the sweep and the postcondition
 // iterated zero times — reporting success while every mount except / stayed
 // writable.
-const spacedRoot = `${home}/dsh-wsl-sandbox probe dir`
+const spacedRoot = `${home}/dsh-wsl-sandbox probe dir-${runSuffix}`
 await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedRoot}" && mkdir -p "${spacedRoot}" && echo seed > "${spacedRoot}/seed.txt"` })
 const inSpaced = await confined(`echo written > "${spacedRoot}/inside.txt" && echo SPACED-OK`, { mode: 'workspace-write', workspaceLinuxRoot: spacedRoot, linuxCwd: spacedRoot })
 check('a write inside a space-named workspace succeeds', inSpaced.result.exitCode === 0 && inSpaced.result.stdout.includes('SPACED-OK'), `${inSpaced.result.exitCode} ${inSpaced.result.stderr}`)
-const outSpaced = await confined(`echo written > "${home}/dsh-wsl-forbidden.txt" && echo OUT-SPACED-OK`, { mode: 'workspace-write', workspaceLinuxRoot: spacedRoot })
+const outSpaced = await confined(`echo written > "${forbiddenPath}" && echo OUT-SPACED-OK`, { mode: 'workspace-write', workspaceLinuxRoot: spacedRoot })
 check('a write outside a space-named workspace is still denied',
   !outSpaced.result.stdout.includes('OUT-SPACED-OK') && DENIAL_SIGNATURES.some((signature) => outSpaced.result.stderr.includes(signature)),
   `${outSpaced.result.exitCode} ${outSpaced.result.stderr}`)
@@ -757,11 +793,11 @@ console.log('\nworkspace path with ERE metacharacters (exemption-pattern escapin
 // — while starting to match paths that were never granted. The in-process
 // builder escaped through escapeEre() and was unaffected, so the two runners
 // silently disagreed about the same fence.
-const metaRoot = `${home}/dsh-wsl-sandbox (v2)|probe`
+const metaRoot = `${home}/dsh-wsl-sandbox (v2)|probe-${runSuffix}`
 await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${metaRoot}" && mkdir -p "${metaRoot}" && echo seed > "${metaRoot}/seed.txt"` })
 const inMeta = await confined(`echo written > "${metaRoot}/inside.txt" && echo META-OK`, { mode: 'workspace-write', workspaceLinuxRoot: metaRoot, linuxCwd: metaRoot })
 check('a write inside a metacharacter-named workspace succeeds', inMeta.result.exitCode === 0 && inMeta.result.stdout.includes('META-OK'), `${inMeta.result.exitCode} ${inMeta.result.stderr}`)
-const outMeta = await confined(`echo written > ${home}/dsh-wsl-forbidden.txt && echo OUT-META-OK`, { mode: 'workspace-write', workspaceLinuxRoot: metaRoot })
+const outMeta = await confined(`echo written > ${forbiddenPath} && echo OUT-META-OK`, { mode: 'workspace-write', workspaceLinuxRoot: metaRoot })
 check('a write outside a metacharacter-named workspace is still denied',
   !outMeta.result.stdout.includes('OUT-META-OK') && DENIAL_SIGNATURES.some((signature) => outMeta.result.stderr.includes(signature)),
   `${outMeta.result.exitCode} ${outMeta.result.stderr}`)
@@ -774,7 +810,7 @@ console.log('\nspaced mount target outside the workspace (findmnt \\x20 decoding
 // fail-closed exit 97 never fired. The bind below creates a REAL spaced mount
 // target (unconfined setup, like the suites above), and the confined
 // read-only run must deny a write under its REAL path.
-const spacedMount = `${home}/mnt probe`
+const spacedMount = `${home}/mnt probe-${runSuffix}`
 await runWslShell({ distro, linuxCwd: '/', command: `rm -rf "${spacedMount}" && mkdir -p "${spacedMount}" && sudo -n mount --bind "${home}" "${spacedMount}"` })
 const mountedCheck = await runWslShell({ distro, linuxCwd: '/', command: `findmnt -rno TARGET "${spacedMount}"` })
 check('the spaced bind target is mounted', mountedCheck.stdout.trim() === spacedMount || mountedCheck.stdout.trim().includes('probe'), `${JSON.stringify(mountedCheck.stdout)}`)
@@ -874,9 +910,15 @@ const FIXTURE_SOURCE_DIR = mkdtempSync(join(tmpdir(), 'dsh-wsl-helper-fixtures-'
 const FIXTURE_SOURCE_HOST = join(FIXTURE_SOURCE_DIR, 'dsh-wsl-confine.sh')
 writeFileSync(FIXTURE_SOURCE_HOST, helperSource)
 const FIXTURE_SOURCE_MNT = windowsToMntPath(FIXTURE_SOURCE_HOST)
-const FIXTURE_USER_TREE = '/tmp/dsh-wsl-helper-fixtures'
-const FIXTURE_ROOT_TREE = '/opt/dsh-wsl-helper-fixtures'
-const FIXTURE_PRIVATE_TREE = '/root/dsh-wsl-helper-fixtures'
+// All three carry the pid. What the gate's answers depend on is the PREFIX — writable
+// ancestor under /tmp, root-owned tree under /opt, untraversable 0700 root tree under
+// /root — so the suffix costs the section none of its subject, while the shared names
+// cost it everything: the setup below is a `set -e` script whose `rm -rf`/`mkdir`/`install`
+// sequence a concurrent run's identical sequence interleaves with, and the 20-check
+// table then skips on a fixture that was half-built rather than unbuildable.
+const FIXTURE_USER_TREE = `/tmp/dsh-wsl-helper-fixtures-${runSuffix}`
+const FIXTURE_ROOT_TREE = `/opt/dsh-wsl-helper-fixtures-${runSuffix}`
+const FIXTURE_PRIVATE_TREE = `/root/dsh-wsl-helper-fixtures-${runSuffix}`
 // A version the detector cannot accept, DERIVED from the current one so it can never
 // become it: a literal would silently turn into the current version the day
 // HELPER_VERSION moved to that string, and the row would then fail on a correct helper.
@@ -1075,7 +1117,7 @@ rmSync(FIXTURE_SOURCE_DIR, { recursive: true, force: true })
 // Every fixture this suite creates is removed again, and quoted: two of them
 // carry spaces and ERE metacharacters — which is the point of the sections
 // above — so an unquoted rm would either miss them or be re-parsed.
-await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${shellQuote(probeRoot)} ${shellQuote(spacedRoot)} ${shellQuote(metaRoot)} ${shellQuote(`${home}/dsh-wsl-forbidden.txt`)} /tmp/dsh-wsl-tmp.txt` })
+await runWslShell({ distro, linuxCwd: '/', command: `rm -rf ${shellQuote(probeRoot)} ${shellQuote(spacedRoot)} ${shellQuote(metaRoot)} ${shellQuote(forbiddenPath)} /tmp/dsh-wsl-tmp-${runSuffix}.txt` })
 // A skip is a check that did not run, and reporting it as a pass would make this
 // suite's green meaningless exactly where the shipped helper is the subject: exit
 // 2 is what verify-all renders as SKIP (the sibling suites' ruling, applied here).
