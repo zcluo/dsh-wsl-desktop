@@ -16,11 +16,20 @@
 - 修改 spec 后用 Archify 重新校验与交付：
 
   ```bash
+  # 四张没有仓库证据的图（sequence / dataflow / lifecycle / workflow）：
   archify validate <type> docs/diagrams-src/<spec>.json --quality showcase --json
   archify deliver  <type> docs/diagrams-src/<spec>.json docs/<output>.html --quality showcase --json
+
+  # architecture 声明了仓库证据（component `sources`），必须追加 `--repo-root <仓库根>`：
+  archify validate architecture docs/diagrams-src/architecture.json --quality showcase --repo-root . --json
+  archify deliver  architecture docs/diagrams-src/architecture.json docs/architecture.html --quality showcase --repo-root . --json
   ```
 
-  architecture 声明了仓库证据（component `sources`），validate/deliver 需追加 `--repo-root <仓库根>`。
+  **两条分支是硬性的，不是风格差异（逐条实测 exit code）**：architecture 不带 `--repo-root` 时 validate
+  以 exit 1 失败（`repository-evidence/root-required`："This diagram declares source evidence. Pass
+  --repo-root <repository> so Archify can verify it before rendering."）；反过来，把 `--repo-root` 用在另外四张图上
+  则以 exit 2 失败（"--repo-root is currently supported for architecture diagrams only."）。validate 与 deliver
+  的分支规则相同，两条路径都实测过，所以不要"统一加一个参数"——上面四条命令是按图分别给出的。
 
 - workflow 图在源里显式写了 `meta.viewBox`（844×480）。本机 Archify 的 workflow 默认画布是 720×528，宽高比 1.364 低于查看器的 `WIDE_RATIO = 1.55`：低于它就没有 data-reader-layout，自适应阅读宽度整套不生效，1440×900 起页面纵向滚动。改回默认值即可复现该溢出，所以这一行不是可选装饰。
 
