@@ -450,9 +450,10 @@ if (typeof detectNoNewPrivs !== 'function' || typeof noNewPrivsRefusal !== 'func
   check('an unmeasured probe is NOT cached: the next command re-probes instead of reusing an unknown',
     unmeasuredCalls === 4, { attempts: unmeasuredCalls })
   // The refusal itself. Two DISTINGUISHABLE texts: one is a property of the machine
-  // (install the helper, or a newer util-linux) and the other is not (retry). A single
-  // text for both would make an operator chase the wrong remedy, and would re-conflate
-  // the two states at the point the operator actually reads.
+  // (a newer util-linux — NOT the helper, whose drop needs the same setpriv flag and
+  // fails closed without it) and the other is not (retry). A single text for both would
+  // make an operator chase the wrong remedy, and would re-conflate the two states at the
+  // point the operator actually reads.
   const unsupported = noNewPrivsRefusal(false)
   const unmeasured = noNewPrivsRefusal(null)
   check('a measured-supported setpriv is not refused', noNewPrivsRefusal(true) === null, { got: noNewPrivsRefusal(true) })
@@ -468,6 +469,23 @@ if (typeof detectNoNewPrivs !== 'function' || typeof noNewPrivsRefusal !== 'func
     /不支持/.test(unsupported ?? '') && !/无法测量/.test(unsupported ?? ''), { unsupported })
   check('the unmeasured text names a probe that could not be measured, not an unsupported setpriv',
     /无法测量/.test(unmeasured ?? '') && !/不支持/.test(unmeasured ?? ''), { unmeasured })
+  // Defect B, refined by this round's independent review: the unsupported text used to
+  // send the operator to the helper, which cannot help. The measured shape is NOT a
+  // setup-failure marker (exit 97): the helper has no pre-flight for the flag at all — it
+  // execs `setpriv --no-new-privs` unconditionally (dsh-wsl-confine.sh) — and setpriv
+  // rejects the unknown option with an ordinary exit 1, so the command simply does not run.
+  // README.md:129 records that measured exit 1; a message repeating the old "exit 97"
+  // framing would describe a classification the runner never makes. Only a newer
+  // util-linux is a remedy, so the text must name it, must state what the helper really
+  // does, and must NOT tell the operator to install it.
+  check('the unsupported text names a remedy that can work (a newer util-linux) and states what the helper actually does',
+    /util-linux/.test(unsupported ?? '')
+      && /不是绕过/.test(unsupported ?? '')
+      && /同一个标志/.test(unsupported ?? '')
+      && /预检/.test(unsupported ?? '')
+      && !/请安装/.test(unsupported ?? '')
+      && !/97/.test(unsupported ?? ''),
+    { unsupported })
   // The refusal is only load-bearing if the EXECUTOR consults it. shell.js is the host
   // half and its harness imports do not resolve in this checkout (verify-modules SKIPs
   // its host-half import for that reason), so this half is a SOURCE pin over comment-
