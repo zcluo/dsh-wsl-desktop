@@ -147,16 +147,30 @@ check('the token comparison is length- and value-checked',
   && tokenMatches(undefined, 'abc', (l, r) => l.equals(r)) === false)
 check('the host half uses the same header name', DEV_TOKEN_HEADER === HOST_TOKEN_HEADER)
 
-const probeFile = '/tmp/dsh-wsl-fence-probe.txt'
-rmSync(`${shareRoot}${probeFile}`, { force: true })
+// The probe path is UNIQUE TO THIS PROCESS. It was the fixed machine-global
+// `/tmp/dsh-wsl-fence-probe.txt`, so a CONCURRENT run's pre-removal could land between the POST
+// and the existence check below and report a real escape as contained. The pre-removal stays —
+// it can now only remove this process's own path — and the ABSENCE is asserted before the POST
+// as well, so the check after it is a change this run made, not an absence that was already
+// there. `existsSync` under the share root is the only channel the fence check has, so the
+// positive control further down proves that channel can see this write at all.
+const probeFile = `/tmp/dsh-wsl-fence-probe-${process.pid}.txt`
+const probeHostPath = `${shareRoot}${probeFile}`
+rmSync(probeHostPath, { force: true })
+const probeAbsentBefore = !existsSync(probeHostPath)
+check('the escape probe starts from an absent path, so its absence below is a change this run made',
+  probeAbsentBefore, `path=${probeHostPath} exists=${!probeAbsentBefore}`)
 
 console.log('\ntransport fence (live host)')
 const unauthenticated = await post({ method: 'execInWsl', params: { cwd: '/tmp', command: `echo BYPASSED > ${probeFile}` } }, {
   contentType: 'text/plain',
 })
 check('an unauthenticated text/plain POST is refused', unauthenticated.status === 401, unauthenticated.status)
-const escaped = existsSync(`${shareRoot}${probeFile}`)
-check('and the command it carried did not run', escaped === false, `probe file exists: ${escaped}`)
+const escaped = existsSync(probeHostPath)
+check('and the command it carried did not run',
+  escaped === false && probeAbsentBefore,
+  `probe file exists: ${escaped} (absent before the POST: ${probeAbsentBefore}); path=${probeHostPath}`)
+rmSync(probeHostPath, { force: true })
 
 const unauthenticatedJson = await post({ method: 'listDistros', params: {} })
 check('the fence covers the read-only methods too', unauthenticatedJson.status === 401, unauthenticatedJson.status)
@@ -166,6 +180,19 @@ const token = await ensureDevToken()
 const authorized = await post({ method: 'listDistros', params: {} }, { token })
 check('a caller holding the token reaches the acceptance surface',
   authorized.status === 200 && authorized.json?.ok === true, `${authorized.status} ${authorized.text.slice(0, 120)}`)
+// POSITIVE CONTROL for the transport-fence pair above, and what makes that pair evidence rather
+// than a blind spot: "the file is absent" only means "the command did not run" if the SAME write
+// is observable through the SAME measurement when it DOES run. An admitted caller (developer
+// token, served authority) sends the same shape, and the file must appear under the share root.
+const controlFile = `/tmp/dsh-wsl-fence-control-${process.pid}.txt`
+const controlHostPath = `${shareRoot}${controlFile}`
+rmSync(controlHostPath, { force: true })
+const admitted = await post({ method: 'execInWsl', params: { distro, cwd: '/tmp', command: `echo ADMITTED > ${controlFile}` } }, { token })
+const controlLanded = existsSync(controlHostPath)
+check('LIVE, positive control: an ADMITTED caller writing the same shape DOES land where the fence check looks',
+  admitted.status === 200 && controlLanded,
+  `${admitted.status} exists=${controlLanded} path=${controlHostPath} ${admitted.text.slice(0, 120)}`)
+rmSync(controlHostPath, { force: true })
 // The token is a credential for the browser-authentication arm ONLY. No case
 // posted a VALID token with a foreign Host, which is how the route came to skip
 // both arms for a token holder. 403 AND a bodyless refusal: a JSON envelope
