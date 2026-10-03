@@ -12,7 +12,7 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 import { detailText } from './detail.mjs'
@@ -214,6 +214,96 @@ for (const name of ['README.md', 'README.en.md']) {
   check(`${name} documents the accessor the code reads`, text.includes(WORKSPACE_ACCESSOR),
     `${name} never names ${WORKSPACE_ACCESSOR}`)
 }
+
+// The loop above asserts that EACH README contains the accessor spelling. What it
+// cannot see is a change mirrored into one README and not the other: the same edit
+// lands on the pair silently. Two translated READMEs can never be textually equal, and
+// their PROSE is expected to differ — but the ARTIFACTS they name are not a matter of
+// language. A README that tells the reader about `scripts/x.mjs` and a README that
+// never mentions it document different repositories. This asserts the NAMED-ARTIFACT
+// SETS are equal.
+//
+// Identity is the artifact's basename, because README prose names one script both
+// `scripts/verify-all.mjs` (in a command) and `verify-all.mjs` (in a sentence); raw
+// token comparison would report that orthography as a pair difference while the two
+// documents name the same file. Basename identity is only sound while no two
+// references are genuinely different files, so that is asserted rather than assumed:
+// references sharing a basename must be suffix-compatible on a `/` boundary
+// (`fs-local/src/fsio.ts` inside the checkout, `packages/fs/fs-local/src/fsio.ts`
+// in the repo — the same file). Same-basename references that are NOT suffix-
+// compatible make the identity undecidable, and the row fails CLOSED naming the two
+// spellings, instead of comparing them equal and letting a one-sided edit pass.
+//
+// One exclusion, and it is the only asymmetry inherent to being a translation pair:
+// each README carries the language switch to the other, so README.md can only name
+// README.en.md and README.en.md can only name README.md. Requiring those two names to
+// agree would require a document to link to itself. Every other artifact name counts,
+// including the pair's own prose references.
+const README_PAIR = ['README.md', 'README.en.md']
+const README_SELF_NAMES = new Set(README_PAIR)
+// The regex literals in this block spell backtick and the quote characters as
+// \x60 / \x22 / \x27 on purpose: `blankLiterals` — this repository's one owner for
+// comments and string bodies — does not recognise a regex literal, so a BARE backtick
+// inside one reads as the start of a template literal and blanks the rest of the file.
+// Measured: with a bare backtick here, the aggregate's stale-declaration check could no
+// longer see this suite's exit-2 expression and failed a healthy tree. The escapes are
+// load-bearing, not decoration.
+const ARTIFACT_TOKEN = /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:mjs|cjs|js|ts|tsx|json|md|sh|ps1|ya?ml)$/
+
+/**
+ * Repository artifacts a README NAMES, keyed by basename.
+ * @param {string} text - the README text.
+ * @returns {Map<string, Set<string>>} basename -> the path spellings used for it.
+ */
+function namedArtifacts(text) {
+  const named = new Map()
+  let inFence = false
+  for (const line of text.split('\n')) {
+    if (/^\s*\x60\x60\x60/.test(line)) { inFence = !inFence; continue }
+    const spans = []
+    if (inFence) spans.push(line)
+    else {
+      for (const match of line.matchAll(/\x60([^\x60\n]+)\x60/g)) spans.push(match[1])
+      for (const match of line.matchAll(/\]\(([^)\s]+)\)/g)) spans.push(match[1])
+      for (const match of line.matchAll(/\*\*([^*\n]+)\*\*/g)) spans.push(match[1])
+    }
+    for (const span of spans) {
+      // `:31-37` and `:333,346` are line references on one artifact; shell
+      // punctuation separates the artifacts on a recorded command line.
+      for (const word of span.split(/[\s|()\x22\x27\x60,;:]+/)) {
+        const token = word.replace(/^(?:\.\/|\$)/, '')
+        if (!ARTIFACT_TOKEN.test(token)) continue
+        const name = basename(token)
+        if (README_SELF_NAMES.has(name)) continue
+        if (!named.has(name)) named.set(name, new Set())
+        if (token.includes('/')) named.get(name).add(token)
+      }
+    }
+  }
+  return named
+}
+
+const namedIn = new Map()
+for (const name of README_PAIR) {
+  namedIn.set(name, namedArtifacts(await readFile(join(pluginRoot, name), 'utf8')))
+}
+const [leftName, rightName] = README_PAIR
+const leftNamed = namedIn.get(leftName)
+const rightNamed = namedIn.get(rightName)
+const suffixOf = (one, other) => one === other || one.endsWith(`/${other}`) || other.endsWith(`/${one}`)
+const undecidable = []
+for (const name of new Set([...leftNamed.keys(), ...rightNamed.keys()])) {
+  const spellings = [...new Set([...(leftNamed.get(name) ?? []), ...(rightNamed.get(name) ?? [])])]
+  if (spellings.length > 1 && !spellings.every((one) => suffixOf(one, spellings[0]))) {
+    undecidable.push(`${name}: ${spellings.join(' / ')}`)
+  }
+}
+const onlyLeft = [...leftNamed.keys()].filter((name) => !rightNamed.has(name)).sort()
+const onlyRight = [...rightNamed.keys()].filter((name) => !leftNamed.has(name)).sort()
+check('the two READMEs name the same repository artifacts',
+  undecidable.length === 0 && onlyLeft.length === 0 && onlyRight.length === 0,
+  `${leftName} only: [${onlyLeft.join(', ')}] ${rightName} only: [${onlyRight.join(', ')}]`
+  + (undecidable.length === 0 ? '' : ` — undecidable basename(s): ${undecidable.join('; ')}`))
 check('discards responses of a superseded directory listing', picker.includes('token !== state.token'))
 check('gates browsing on the entered user, then lands in their home',
   picker.includes("state.phase = 'browse'")
