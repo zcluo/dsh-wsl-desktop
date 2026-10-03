@@ -34,7 +34,7 @@
  * rather than a suite that failed a check of its own. A suite this pin RUNS can fail a
  * check of its own for a reason this pin does not measure (the VM is shared with a sibling
  * distribution), so every suite run below is repeated once when its own summary reports
- * failing checks — runSuiteConclusive, the ruling README.md states for probes.
+ * failing checks — runSuiteConclusive, the ruling docs/CONFINEMENT.md states for probes.
  *
  * THE TOLERANCE THAT BUYS IS DISCLOSED, NOT HIDDEN, AND THE AGGREGATION IS STATED. One
  * runSuiteConclusive returns its FIRST run when that run is clean, and its SECOND only when the
@@ -212,7 +212,7 @@ function reportsFailedChecks(out) {
  * one of them ends a run with `1 CHECK(S) FAILED` while the drive-path SKIP is intact —
  * and every assertion below would then read the wrong subject. MEASURED: one unrelated
  * failing check inside the mutant reddened "and it declares a clean profile" while the
- * mutant's own count behaviour was correct all along. README.md states the ruling for
+ * mutant's own count behaviour was correct all along. docs/CONFINEMENT.md states the ruling for
  * exactly this kind of probe (探针超时 60s + 超时后一次透明重试), and fixtureAnswer and
  * detectRunner already follow it: the run is repeated once, both attempts are disclosed,
  * and the assertions read the conclusive attempt. A run contaminated TWICE is a real
@@ -585,7 +585,7 @@ if (!isInnerRun) {
 if (!isInnerRun) {
   console.log('\nthe probe policy the suite reads its probes through (scripts/wsl-probe.mjs)')
   // Driven through the SEAM, not read from source: each arm hands `probeWithRetry` a stub
-  // runner and counts what it was asked for. The policy is README.md's (探针超时 60s +
+  // runner and counts what it was asked for. The policy is docs/CONFINEMENT.md's (探针超时 60s +
   // 超时后一次透明重试), and the two arms that matter are the ones a stall and a REFUSAL
   // produce: a probe that TIMED OUT is repeated once and the caller reads the SECOND attempt;
   // a probe that ANSWERED — a refusal included — is asked for exactly once, because a refusal

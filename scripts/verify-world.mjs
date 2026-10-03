@@ -271,7 +271,7 @@ check('a failed probe and an absent user do not read the same',
   `failed probe: ${absent.detail}\n        absent user: ${absentUser.detail}`)
 
 console.log('\nthe documented probe policy: a 60s ceiling and one retry after a timeout')
-// README.md states the policy for exactly these probes: 探针超时 60s + 超时后一次透明重试 ——
+// docs/CONFINEMENT.md states the policy for exactly these probes: 探针超时 60s + 超时后一次透明重试 ——
 // 桌面重启后的首个 wsl.exe 冷启动可以超过短上限 —— and it names listLinuxDir, checkLinuxPath
 // and resolveDistroHome in the same sentence. The confinement and PTY probes implemented it
 // (resolveIdentity / detectRunner / noNewPrivs / python3); these three did not, so a wsl.exe
@@ -768,8 +768,8 @@ check('subprocess.js translates an unresolved login shell — and only there —
   && (subprocessCode.match(/cause: error/g) ?? []).length === 1,
   { windowsFallbackAt, loginShellGuardAt, loginShellTranslateAt, siblingLookupThrowAt,
     window: subprocessCode.slice(Math.max(0, windowsFallbackAt - 40), windowsFallbackAt + 500) })
-// The executable lookup is the FOURTH probe the documented sentence names (README.md:132 /
-// README.en.md:132 — 探针超时 60s + 超时后一次透明重试), and it is output-parsed: its empty
+// The executable lookup is the FOURTH probe the documented sentence names (docs/CONFINEMENT.md:36,
+// 探针超时 60s + 超时后一次透明重试), and it is output-parsed: its empty
 // answer is read below as "no such executable", a class the terminal controller catches to
 // SKIP a shell candidate. Its policy is a SOURCE pin, like the shell.js rows above, because
 // subprocess.js imports @deepseek-ai/* — unresolvable in this checkout, so no executor-level

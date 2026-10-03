@@ -155,7 +155,7 @@ console.log(`containment comparison (distro: ${distro})`)
 // and the cross-distribution pin below passed without comparing a single
 // ancestor. The subject is therefore CREATED, in the distribution's /tmp:
 // a scratch name unique to this run, and one that exists on THIS share only —
-// which is what the cross-distribution answer needs. (README, "Measured fence
+// which is what the cross-distribution answer needs. (docs/FS-FENCE.md, "Measured fence
 // facts": F3 measured the two shares reporting the SAME (dev,ino) for /tmp and
 // /, so a root that exists on one share only is the fixture whose foreign
 // denial is a real denial rather than a collision.) It never touches a real
@@ -236,7 +236,7 @@ check('a path below the root is contained', isLexicallyUnderHost(inside, root))
 // The pin that used to sit here ("comparison is case-insensitive") asserted the
 // fold was INTENDED for the whole string. Half of it is: the UNC host and the
 // distribution segment are Windows spellings, and Windows folds them. The Linux
-// portion is not - the share resolves it with Linux semantics (README, "Measured
+// portion is not - the share resolves it with Linux semantics (docs/FS-FENCE.md, "Measured
 // fence facts": /TMP -> ENOENT, so PROJ and proj are different directories) - and
 // folding it authorized a sibling of the workspace root, which the inherited
 // publication then CREATED with mkdir({recursive:true}) after the check passed.

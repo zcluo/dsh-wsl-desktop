@@ -71,14 +71,14 @@ const run = (options) => runWslShell(options)
  * @returns {string} its first non-empty line, trimmed.
  */
 const firstLine = (text) => String(text ?? '').trim().split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
-// The runner THIS suite's own probes get (README.md:132 — 探针超时 60s + 超时后一次透明重试).
+// The runner THIS suite's own probes get (docs/CONFINEMENT.md:36 — 探针超时 60s + 超时后一次透明重试).
 // Every `wsl.exe` call below goes through it except the two inside `fixtureAnswer`/
 // `fixtureVersion`, which already carry their own 60s ceiling and their own documented repeat.
 // A REFUSAL is an immediate answer, never a timeout, so the repeat cannot turn one into a pass;
 // a genuinely missing path is answered in one attempt for the same reason. What the repeat must
 // not do is hide a persistent stall: the caller sees the SECOND attempt, `timedOut` included.
 const probe = (request) => probeWithRetry(run, request, {
-  onRetry: (retried) => console.log(`        probe timed out at its ${(retried.timeoutMs ?? 60_000) / 1000}s ceiling; repeating the same request once (README: 探针超时 60s + 超时后一次透明重试): ${firstLine(typeof retried.command === 'string' ? retried.command : '(non-string command)')}`),
+  onRetry: (retried) => console.log(`        probe timed out at its ${(retried.timeoutMs ?? 60_000) / 1000}s ceiling; repeating the same request once (docs/CONFINEMENT.md: 探针超时 60s + 超时后一次透明重试): ${firstLine(typeof retried.command === 'string' ? retried.command : '(non-string command)')}`),
 })
 
 // Every scratch path this suite owns is made UNIQUE TO THIS PROCESS. They were all
@@ -474,7 +474,7 @@ if (typeof detectNoNewPrivs !== 'function' || typeof noNewPrivsRefusal !== 'func
   // setup-failure marker (exit 97): the helper has no pre-flight for the flag at all — it
   // execs `setpriv --no-new-privs` unconditionally (dsh-wsl-confine.sh) — and setpriv
   // rejects the unknown option with an ordinary exit 1, so the command simply does not run.
-  // README.md:129 records that measured exit 1; a message repeating the old "exit 97"
+  // docs/CONFINEMENT.md:33 records that measured exit 1; a message repeating the old "exit 97"
   // framing would describe a classification the runner never makes. Only a newer
   // util-linux is a remedy, so the text must name it, must state what the helper really
   // does, and must NOT tell the operator to install it.
@@ -781,7 +781,7 @@ if (runner === RUNNER_HELPER) {
     const [installedSum, shippedSum] = sums.stdout.trim().split('\n').map((line) => line.split(/\s+/)[0])
     check(INSTALLED_HELPER_LABEL,
       typeof installedSum === 'string' && installedSum !== '' && installedSum === shippedSum,
-      `installed=${String(installedSum)} shipped=${String(shippedSum)} — the suite is exercising the installed copy; reinstall it per README: install -m 0755 -o root -g root <lib/wsl/dsh-wsl-confine.sh> ${HELPER_PATH}`)
+      `installed=${String(installedSum)} shipped=${String(shippedSum)} — the suite is exercising the installed copy; reinstall it per docs/CONFINEMENT.md: install -m 0755 -o root -g root <lib/wsl/dsh-wsl-confine.sh> ${HELPER_PATH}`)
   }
 }
 // Guarded exactly like the identical probe inside `confined()` above:
@@ -1217,7 +1217,7 @@ if (FIXTURE_SOURCE_MNT === null) {
       }
     }
     // The accept side of the FULL probe has to reach a fixture path through sudo,
-    // and a sudoers file narrowed to the installed helper (what the README
+    // and a sudoers file narrowed to the installed helper (what docs/CONFINEMENT.md
     // recommends) does not cover the fixture tree. The premise is measured, not
     // assumed: where it holds both rows run, and where it does not they are counted
     // skips rather than rows that would pass or fail for the wrong reason.

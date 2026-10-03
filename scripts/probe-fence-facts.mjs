@@ -6,7 +6,7 @@
  * whether two distributions' shares report colliding (dev,ino), and whether the
  * fixture root the fs-fence suite assumes already exists — and not properties of
  * this repository. A fix written against a guessed answer is a fix for a
- * different machine, so the answers are measured and recorded (README,
+ * different machine, so the answers are measured and recorded (docs/FS-FENCE.md,
  * "Measured fence facts") before anything is changed.
  *
  * Read-only by construction: every probe is a stat, a realpath or a read, and

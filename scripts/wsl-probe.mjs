@@ -1,7 +1,7 @@
 /**
- * The probe policy README.md states, as a runner the suites can share.
+ * The probe policy docs/CONFINEMENT.md states, as a runner the suites can share.
  *
- * README.md:132 — 探针超时 60s + 超时后一次透明重试 — one probe at a 60s ceiling, repeated
+ * docs/CONFINEMENT.md:36 — 探针超时 60s + 超时后一次透明重试 — one probe at a 60s ceiling, repeated
  * ONCE when it TIMED OUT. The reason it exists is the MACHINE, not the command: every
  * distribution shares one WSL2 VM, so a sibling distribution's load can stall a probe that
  * answered in 300ms a moment earlier (measured on this host: ~300ms, then 30.4s and 30.5s on

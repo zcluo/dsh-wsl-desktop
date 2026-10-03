@@ -86,6 +86,7 @@ const STANDALONE = [
   'verify-modules.mjs',
   'verify-package.mjs',
   'verify-diagrams.mjs',
+  'verify-docs.mjs',
   'verify-fs-fence.mjs',
   'verify-fs-fence-skip.mjs',
   'verify-world.mjs',

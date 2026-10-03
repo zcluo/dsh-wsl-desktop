@@ -12,7 +12,7 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 import { detailText } from './detail.mjs'
@@ -192,8 +192,10 @@ check('the create carries the preset through the remote contract',
 // reader is most likely to omit is the one that fails SILENTLY: written as
 // `ctx.workspaces.path` the lookup yields undefined and the whole feature does
 // nothing while every check still passes — which is exactly how it first
-// shipped. The README is this repo's contract record, so it is pinned to the
-// spelling the code reads rather than left to drift.
+// shipped. The contract record is the document that OWNS the claim, not a fixed
+// filename: this mechanism lived in README.md and now lives in docs/ARCHITECTURE.md
+// (the README was trimmed to an entry document), so the pin moved with the claim
+// rather than being deleted or left pointing at a file that no longer makes it.
 //
 // The code pin reads the BLANKED source, and matches the optional-chaining
 // spelling. The raw text also carries this path inside the `console.warn`
@@ -209,101 +211,17 @@ const WORKSPACE_ACCESSOR = 'ctx.workspaces.list'
 // it was written to catch.
 check('the client half reads the workspace source off `list`',
   /ctx\.workspaces\?\.list(?![A-Za-z0-9_$])/.test(code))
-for (const name of ['README.md', 'README.en.md']) {
-  const text = await readFile(join(pluginRoot, name), 'utf8')
-  check(`${name} documents the accessor the code reads`, text.includes(WORKSPACE_ACCESSOR),
-    `${name} never names ${WORKSPACE_ACCESSOR}`)
+{
+  const doc = 'docs/ARCHITECTURE.md'
+  const text = await readFile(join(pluginRoot, doc), 'utf8')
+  check(`${doc} documents the accessor the code reads`, text.includes(WORKSPACE_ACCESSOR),
+    `${doc} never names ${WORKSPACE_ACCESSOR}`)
 }
 
-// The loop above asserts that EACH README contains the accessor spelling. What it
-// cannot see is a change mirrored into one README and not the other: the same edit
-// lands on the pair silently. Two translated READMEs can never be textually equal, and
-// their PROSE is expected to differ — but the ARTIFACTS they name are not a matter of
-// language. A README that tells the reader about `scripts/x.mjs` and a README that
-// never mentions it document different repositories. This asserts the NAMED-ARTIFACT
-// SETS are equal.
-//
-// Identity is the artifact's basename, because README prose names one script both
-// `scripts/verify-all.mjs` (in a command) and `verify-all.mjs` (in a sentence); raw
-// token comparison would report that orthography as a pair difference while the two
-// documents name the same file. Basename identity is only sound while no two
-// references are genuinely different files, so that is asserted rather than assumed:
-// references sharing a basename must be suffix-compatible on a `/` boundary
-// (`fs-local/src/fsio.ts` inside the checkout, `packages/fs/fs-local/src/fsio.ts`
-// in the repo — the same file). Same-basename references that are NOT suffix-
-// compatible make the identity undecidable, and the row fails CLOSED naming the two
-// spellings, instead of comparing them equal and letting a one-sided edit pass.
-//
-// One exclusion, and it is the only asymmetry inherent to being a translation pair:
-// each README carries the language switch to the other, so README.md can only name
-// README.en.md and README.en.md can only name README.md. Requiring those two names to
-// agree would require a document to link to itself. Every other artifact name counts,
-// including the pair's own prose references.
-const README_PAIR = ['README.md', 'README.en.md']
-const README_SELF_NAMES = new Set(README_PAIR)
-// The regex literals in this block spell backtick and the quote characters as
-// \x60 / \x22 / \x27 on purpose: `blankLiterals` — this repository's one owner for
-// comments and string bodies — does not recognise a regex literal, so a BARE backtick
-// inside one reads as the start of a template literal and blanks the rest of the file.
-// Measured: with a bare backtick here, the aggregate's stale-declaration check could no
-// longer see this suite's exit-2 expression and failed a healthy tree. The escapes are
-// load-bearing, not decoration.
-const ARTIFACT_TOKEN = /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:mjs|cjs|js|ts|tsx|json|md|sh|ps1|ya?ml)$/
-
-/**
- * Repository artifacts a README NAMES, keyed by basename.
- * @param {string} text - the README text.
- * @returns {Map<string, Set<string>>} basename -> the path spellings used for it.
- */
-function namedArtifacts(text) {
-  const named = new Map()
-  let inFence = false
-  for (const line of text.split('\n')) {
-    if (/^\s*\x60\x60\x60/.test(line)) { inFence = !inFence; continue }
-    const spans = []
-    if (inFence) spans.push(line)
-    else {
-      for (const match of line.matchAll(/\x60([^\x60\n]+)\x60/g)) spans.push(match[1])
-      for (const match of line.matchAll(/\]\(([^)\s]+)\)/g)) spans.push(match[1])
-      for (const match of line.matchAll(/\*\*([^*\n]+)\*\*/g)) spans.push(match[1])
-    }
-    for (const span of spans) {
-      // `:31-37` and `:333,346` are line references on one artifact; shell
-      // punctuation separates the artifacts on a recorded command line.
-      for (const word of span.split(/[\s|()\x22\x27\x60,;:]+/)) {
-        const token = word.replace(/^(?:\.\/|\$)/, '')
-        if (!ARTIFACT_TOKEN.test(token)) continue
-        const name = basename(token)
-        if (README_SELF_NAMES.has(name)) continue
-        if (!named.has(name)) named.set(name, new Set())
-        if (token.includes('/')) named.get(name).add(token)
-      }
-    }
-  }
-  return named
-}
-
-const namedIn = new Map()
-for (const name of README_PAIR) {
-  namedIn.set(name, namedArtifacts(await readFile(join(pluginRoot, name), 'utf8')))
-}
-const [leftName, rightName] = README_PAIR
-const leftNamed = namedIn.get(leftName)
-const rightNamed = namedIn.get(rightName)
-const suffixOf = (one, other) => one === other || one.endsWith(`/${other}`) || other.endsWith(`/${one}`)
-const undecidable = []
-for (const name of new Set([...leftNamed.keys(), ...rightNamed.keys()])) {
-  const spellings = [...new Set([...(leftNamed.get(name) ?? []), ...(rightNamed.get(name) ?? [])])]
-  if (spellings.length > 1 && !spellings.every((one) => suffixOf(one, spellings[0]))) {
-    undecidable.push(`${name}: ${spellings.join(' / ')}`)
-  }
-}
-const onlyLeft = [...leftNamed.keys()].filter((name) => !rightNamed.has(name)).sort()
-const onlyRight = [...rightNamed.keys()].filter((name) => !leftNamed.has(name)).sort()
-check('the two READMEs name the same repository artifacts',
-  undecidable.length === 0 && onlyLeft.length === 0 && onlyRight.length === 0,
-  `${leftName} only: [${onlyLeft.join(', ')}] ${rightName} only: [${onlyRight.join(', ')}]`
-  + (undecidable.length === 0 ? '' : ` — undecidable basename(s): ${undecidable.join('; ')}`))
+// The document-pair parity rule ("the two editions of a document name the same repository
+// artifacts") moved to scripts/verify-docs.mjs: it outgrew a single pair once `docs/` became
+// bilingual, and a rule about documents belongs in the document suite. What stays here is the
+// accessor pin above — a claim about the CLIENT code, pinned in the one document that owns it.
 check('discards responses of a superseded directory listing', picker.includes('token !== state.token'))
 check('gates browsing on the entered user, then lands in their home',
   picker.includes("state.phase = 'browse'")
