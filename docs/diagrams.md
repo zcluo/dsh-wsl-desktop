@@ -13,6 +13,7 @@
 ## 源与再生成
 
 - 源 spec：[`diagrams-src/*.json`](diagrams-src)——图与文案的唯一事实来源。
+- **`sources` 是证据行，钉在 `meta.repository.revision` 这个提交上**：被引用文件一改（**只改注释也算**），就要重钉到包含该改动的提交并重新交付，否则页面上的链接指向旧代码。`scripts/verify-diagrams.mjs` 按这条逐条校验；它只保证"变了会被看见"，图仍然成不成立要人重新读一遍。
 - 修改 spec 后用 Archify 重新校验与交付：
 
   ```bash

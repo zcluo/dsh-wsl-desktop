@@ -225,6 +225,14 @@
       "size": [
         150,
         64
+      ],
+      "sources": [
+        {
+          "path": "lib/wsl/confinement.js"
+        },
+        {
+          "path": "lib/wsl/dsh-wsl-confine.sh"
+        }
       ]
     }
   ],
@@ -406,14 +414,6 @@
       "items": [
         "preset 在会话创建请求里命名，创建时组合",
         "isolate realm 隔离 shell · fs · subprocess；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe"
-      ]
-    },
-    {
-      "dot": "violet",
-      "title": "验证口径",
-      "items": [
-        "sources 是证据行，钉在 meta.repository.revision 这个提交上：被引用文件一改，就要重钉到包含该改动的提交，否则链接指向旧代码",
-        "重新校验：archify validate <type> <spec> --quality showcase --json；本图带 source evidence，还要加 --repo-root .，另外四张不用"
       ]
     }
   ]
