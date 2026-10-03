@@ -38,6 +38,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
 /** The diagram source whose meta.repository.revision the delivered HTML renders. */
 const SOURCE_PATH = join(pluginRoot, 'docs', 'diagrams-src', 'architecture.json')
+/** The delivered artifact itself: the built page that renders that revision as evidence. */
+const HTML_PATH = join(pluginRoot, 'docs', 'architecture.html')
 
 let failures = 0
 let skipped = 0
@@ -108,12 +110,69 @@ function citedPaths(node, found = []) {
   return found
 }
 
+/**
+ * Every `href` string in the rendered evidence, wherever the schema nests it.
+ *
+ * Recursive for the same reason `citedPaths` is: the blob's node groups are the artifact's
+ * own schema, and a link that a restructure moved out of one shape would silently stop being
+ * checked. `href` is taken from the blob, not from the source JSON — the source has no hrefs
+ * at all, which is exactly why a broken one could not be seen there.
+ * @param {unknown} node - one JSON node.
+ * @param {string[]} [found] - the hrefs collected so far.
+ * @returns {string[]} the hrefs, in document order, without duplicates.
+ */
+function renderedHrefs(node, found = []) {
+  if (Array.isArray(node)) {
+    for (const entry of node) renderedHrefs(entry, found)
+    return found
+  }
+  if (node === null || typeof node !== 'object') return found
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'href' && typeof value === 'string') {
+      if (!found.includes(value)) found.push(value)
+      continue
+    }
+    renderedHrefs(value, found)
+  }
+  return found
+}
+
+/** The archify source-evidence block: the renderer's one JSON payload, matched by its script id (the surrounding markup is generated, not ours to parse). */
+const EVIDENCE_BLOCK = /<script id="archify-source-evidence-data" type="application\/json">([\s\S]*?)<\/script>/
+
 /** The assertions that need only the source file; they run before the git precondition is measured. */
 const BASE_CHECKS = [
   'the diagram source is readable JSON',
   'the source declares a repository revision and cites at least one path',
   'the declared revision is a commit in this repository',
   'the control: a path no commit carries is refused by the same rule',
+]
+/**
+ * The assertions about the DELIVERED PAGE. They need only the two artifact files, so they
+ * run before the git precondition is measured and are not in GIT_CHECKS.
+ *
+ * The measured defect they exist for (88355c8's own report): the re-pin moved the evidence
+ * blob's `revision` — and all 8 hrefs — to 51d84e5 but left `shortRevision` at 90424d2, and
+ * THIS suite was green through it, because it reads the JSON source only and the JSON carries
+ * no `shortRevision` field to compare. The renderer prints `shortRevision` as the repository
+ * link's VISIBLE text (:7625) and in every per-source aria-label (:7634), while that same
+ * link's href (:7624) uses `revision` — so the page named one revision and opened another with
+ * no owner. Putting the check at generation time instead would be a code path in the archify
+ * generator that no run of this repository exercises; the artifact is committed, and this
+ * suite is what runs against what was committed.
+ *
+ * The rules, all read from the page: the rendered revision must be the revision its own source
+ * declares (the page is built FROM that source); the short form must be that revision's first
+ * seven characters (the entire content of the claim); and every href must open that revision,
+ * since a link to another commit is the same defect one layer down. The href rule requires at
+ * least one href — `[].every(...)` is true, so a blob carrying no links would satisfy a bare
+ * `every` while establishing nothing (the vacuous-pass class this suite refuses by name).
+ */
+const HTML_CHECKS = [
+  'the delivered page carries a readable archify source-evidence block',
+  'the page renders the revision its own source declares',
+  'the rendered short revision is the revision it names',
+  'every rendered source link opens the revision the page names',
 ]
 
 let source = null
@@ -127,6 +186,32 @@ check(BASE_CHECKS[0], source !== null, `${SOURCE_PATH} is not readable JSON: ${p
 
 const revision = typeof source?.meta?.repository?.revision === 'string' ? source.meta.repository.revision.trim() : ''
 const paths = source === null ? [] : citedPaths(source)
+
+// The delivered page, parsed from its own evidence blob. A page that cannot be read is a
+// FAILED check, not a skip: the artifact is committed beside the source, and "it is not here"
+// would otherwise be the one state in which the page's claims go unchecked while the run stays
+// green. The two artifact rules below hold whatever git can do.
+let rendered = null
+let renderedProblem = ''
+try {
+  const block = readFileSync(HTML_PATH, 'utf8').match(EVIDENCE_BLOCK)
+  if (block === null) renderedProblem = 'no <script id="archify-source-evidence-data" type="application/json"> block'
+  else rendered = JSON.parse(block[1])
+} catch (error) {
+  renderedProblem = String(error?.message ?? error)
+}
+check(HTML_CHECKS[0], rendered !== null, `${HTML_PATH}: ${renderedProblem}`)
+const renderedRevision = typeof rendered?.repository?.revision === 'string' ? rendered.repository.revision.trim() : ''
+const renderedShort = typeof rendered?.repository?.shortRevision === 'string' ? rendered.repository.shortRevision.trim() : ''
+const renderedLinks = rendered === null ? [] : renderedHrefs(rendered)
+check(HTML_CHECKS[1], source !== null && renderedRevision !== '' && renderedRevision === revision,
+  { jsonRevision: revision, pageRevision: renderedRevision })
+check(HTML_CHECKS[2], renderedShort !== '' && renderedShort === renderedRevision.slice(0, 7),
+  { shortRevision: renderedShort, revision: renderedRevision, expected: renderedRevision.slice(0, 7) })
+check(HTML_CHECKS[3], renderedRevision !== '' && renderedLinks.length > 0
+  && renderedLinks.every((href) => href.includes(renderedRevision)),
+  { revision: renderedRevision, hrefs: renderedLinks.length,
+    wrongRevision: renderedLinks.filter((href) => !href.includes(renderedRevision)).slice(0, 3) })
 /** One label per cited path — the set the SKIP names, from the same list the rows print. */
 const PATH_LABELS = paths.map((path) => `the last commit that changed ${path} is an ancestor of the declared revision`)
 /**
