@@ -287,8 +287,15 @@ console.log('\nwindows workspace unaffected')
 // root is created by THIS suite under the system temp, so a run that throws must still not
 // leave it behind — `rmSync`/'rm' nowhere else in this file touched it before.
 const windowsRoot = join(tmpdir(), `dsh-wsl-win-selftest-${process.pid}`)
-await mkdir(windowsRoot, { recursive: true })
 try {
+  // INSIDE the try, not before it: this suite creates the directory, so the try/finally that
+  // removes it has to own the creation too. Before this the mkdir sat one statement above the
+  // try, and a throw in between — anything, including an out-of-memory or the mkdir's own
+  // rejection being reported by a caller — left the directory behind with NO owner, which the
+  // reviewer confirmed as this file's only un-owned window (the sibling WSL scratch directory
+  // above is owned the same way). A failing mkdir cannot orphan anything, and the finally's
+  // `force: true` rm is a no-op for a directory that was never created.
+  await mkdir(windowsRoot, { recursive: true })
   const win = await call('selftest', { preset: 'standard', cwd: windowsRoot }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
   const winStep = (name) => win.steps.find((entry) => entry.name === name)
   check('a Windows workspace stays on the host preset', winStep('select')?.composed === 'standard', winStep('select'))
