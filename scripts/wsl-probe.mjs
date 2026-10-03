@@ -8,8 +8,8 @@
  * two consecutive calls while the VM ran at load ~11 with its swap 95% full).
  *
  * Three modules implement a retry of this shape, and this is where each one lives:
- * `lib/wsl/world.js` for the three probes it owns (`listLinuxDir`, `checkLinuxPath`,
- * `resolveDistroHome`),
+ * `lib/wsl/world.js` for the four probes it owns (`listLinuxDir`, `checkLinuxPath`,
+ * `resolveDistroHome`, `resolveLoginShell`),
  * `lib/wsl/confinement.js` inside `resolveIdentity`, `detectRunner` and the NO_NEW_PRIVS
  * probe, and `lib/wsl/pty.js` inside the bridge-runtime probe. The suites that run their OWN
  * `wsl.exe` probes had no such runner: `scripts/verify-confinement.mjs` reaches 35 `wsl.exe`
@@ -28,7 +28,7 @@
  * 35 spawns.
  *
  * THE TRIGGER IS NOT THE SAME IN ALL THREE, AND THIS RUNNER TAKES THE NARROWEST: `timedOut`
- * ALONE. `world.js`'s three probes (`probeWithRetry`, world.js:546) and `confinement.js`'s
+ * ALONE. `world.js`'s four probes (`probeWithRetry`, world.js:546) and `confinement.js`'s
  * `resolveIdentity` (:95) repeat on a timeout alone; `detectRunner` (:311) also repeats an
  * ANSWERED "no", because its `probeOnce` returns null both for "no" and for a probe that could
  * not run; `detectNoNewPrivs` (:400) and `pty.js`'s python3 probe (:132) repeat on ANY
