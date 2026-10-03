@@ -29,6 +29,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -272,6 +273,68 @@ if (!gitWorks) {
   check(BASE_CHECKS[3], control.ok === false && control.why.includes('no commit'),
     { ok: control.ok, why: control.why })
 }
+
+/**
+ * Every delivered page must still be the page its committed receipt measured.
+ *
+ * WHY THIS EXISTS: `visual-check` writes a receipt beside the page, and nothing compared the two.
+ * The measured cost of that hole: `e287d48` re-delivered three pages without refreshing their
+ * receipts, and docs/architecture.html has overflowed 1440x900 by 19px ever since — five commits
+ * whose receipts reported `containment: pass` for a page that no longer existed in that form,
+ * while the page in the tree carried 919px of content in a 900px viewport. A re-delivery without
+ * a re-measure now reddens here instead of shipping a green receipt for an artifact nobody
+ * re-checked.
+ *
+ * sha256 and the byte count are compared; `artifact.path` is NOT, because the receipt records the
+ * absolute path of the machine that produced it, and that is not a fact about the artifact.
+ *
+ * Both halves are asserted: the receipt must describe THIS page, and it must report a passing
+ * containment check — a receipt that describes the page and says `fail` is a delivered page
+ * violating the containment contract, which is precisely what this suite exists to name. A
+ * receipt left `skipped` (no Chrome where it was last re-measured) fails for the same reason:
+ * evidence that was never collected is not evidence.
+ */
+const DELIVERED_PAGES = [
+  'architecture',
+  'dataflow-terminal-pty',
+  'lifecycle-pty',
+  'sequence-session-create',
+  'workflow-update-discipline',
+]
+const receiptsNotOk = []
+for (const name of DELIVERED_PAGES) {
+  const pagePath = join(pluginRoot, 'docs', `${name}.html`)
+  const receiptPath = join(pluginRoot, 'docs', `${name}.visual-check.json`)
+  let page = null
+  let receipt = null
+  let unreadable = ''
+  try {
+    page = readFileSync(pagePath)
+  } catch (error) {
+    unreadable = `${pagePath}: ${String(error?.message ?? error)}`
+  }
+  try {
+    receipt = JSON.parse(readFileSync(receiptPath, 'utf8'))
+  } catch (error) {
+    unreadable = `${receiptPath}: ${String(error?.message ?? error)}`
+  }
+  const digest = page === null ? '' : createHash('sha256').update(page).digest('hex')
+  const claimed = typeof receipt?.artifact?.sha256 === 'string' ? receipt.artifact.sha256 : ''
+  const claimedBytes = receipt?.artifact?.bytes
+  const describes = page !== null && receipt !== null && claimed === digest
+    && (typeof claimedBytes !== 'number' || claimedBytes === page.length)
+  check(`the ${name} receipt describes the page beside it`, describes,
+    unreadable !== '' ? unreadable : {
+      receiptSha256: claimed.slice(0, 12),
+      pageSha256: digest.slice(0, 12),
+      receiptBytes: claimedBytes,
+      pageBytes: page === null ? null : page.length,
+      remedy: `re-measure it: <archify>/bin/archify.mjs visual-check docs/${name}.html --json`,
+    })
+  if (receipt?.ok !== true) receiptsNotOk.push(`${name} (status=${String(receipt?.status ?? 'unreadable')})`)
+}
+check('every delivered page\'s receipt reports a passing containment check', receiptsNotOk.length === 0,
+  { failing: receiptsNotOk, note: 'a receipt that is not ok means the page is stale or failing containment at a checked viewport' })
 
 if (failures > 0) console.log(`\n${failures} CHECK(S) FAILED${skipped === 0 ? '' : `, ${skipped} CHECK(S) SKIPPED`}`)
 else if (skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
