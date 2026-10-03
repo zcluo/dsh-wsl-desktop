@@ -483,6 +483,21 @@ const ranEmptyFacts = await settle(() => resolveLoginShell(distro, undefined, { 
 check('the control: a probe that RAN and exited 0 with an empty field still falls back to /bin/bash, in one attempt',
   ranEmpty.calls.length === 1 && ranEmptyFacts === '/bin/bash',
   { calls: ranEmpty.calls.length, facts: ranEmptyFacts })
+// The control's OTHER half, and the reason the fallback must be keyed on EMPTY rather than on
+// "does not start with /". An ANSWERED field 7 that is not an absolute path is still an answer:
+// `nologin` is a deliberate "this account has no interactive shell" marker, so replacing it with
+// /bin/bash invents a shell the distribution never measured — both callers SPAWN this value
+// (subprocess.js:173 hands it back as the resolved executable, subprocess.js:273 makes it
+// spawnTerminal's whole argv), and spawnTerminal's own comment refuses exactly that substitution
+// ("substituting a shell the probe never measured is the silent wrong answer round 4 removed").
+// A measured `nologin` reaches the terminal and fails there, which is the account's own ruling.
+// Asserted through the same injected runner, and the attempt COUNT is asserted too: a retry here
+// would mean the answer was read as inconclusive, which it is not.
+const answeredNologin = scriptedRunner([{ exitCode: 0, stdout: 'nologin\n', stderr: '', timedOut: false }])
+const answeredNologinFacts = await settle(() => resolveLoginShell(distro, undefined, { run: answeredNologin.run }))
+check('an ANSWERED non-path field 7 (nologin) reaches the caller as itself, in one attempt, not as an invented /bin/bash',
+  answeredNologin.calls.length === 1 && answeredNologinFacts === 'nologin',
+  { calls: answeredNologin.calls.length, facts: answeredNologinFacts })
 // A non-zero exit with no answer is the third way a probe fails to answer, and it used to
 // read as the same '/bin/bash'. It is refused WITH the probe's own evidence, so an operator
 // can tell "the distribution failed" from "this user has no login shell".
