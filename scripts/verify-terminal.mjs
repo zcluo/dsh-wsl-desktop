@@ -240,6 +240,8 @@ const replies = []
 let replyBuffer = ''
 /** Pending control requests by id — replies are matched by the id the request sent, never positionally. */
 const waiters = new Map()
+/** Prefixed stderr lines that were not valid JSON — the defect the demuxed-replies check asserts on. */
+const malformedReplies = []
 
 data.stdout.on('data', (chunk) => { out += chunk })
 data.stderr.on('data', (chunk) => {
@@ -250,7 +252,17 @@ data.stderr.on('data', (chunk) => {
     const line = replyBuffer.slice(0, index)
     replyBuffer = replyBuffer.slice(index + 1)
     if (line.startsWith('#dsh-pty ')) {
-      const parsed = JSON.parse(line.slice('#dsh-pty '.length))
+      // Recorded, not thrown: a prefixed line the host cannot parse is exactly the
+      // defect the demuxed-replies check below asserts on, and an unguarded parse
+      // here would crash the suite before that check could ever observe it. The
+      // sibling announceOnce() already wraps this same parse for that reason.
+      let parsed
+      try {
+        parsed = JSON.parse(line.slice('#dsh-pty '.length))
+      } catch {
+        malformedReplies.push(line)
+        continue
+      }
       // The bridge echoes the request id back (`ans()`), so a late reply can
       // never be consumed by the NEXT request — the same pairing rule the
       // production control channel uses. Positional shift() desynced every
@@ -475,16 +487,12 @@ check('the PTY still takes a size after the malformed ones', await until(() => /
 // began with the reply prefix would be parsed as a malformed reply and dropped,
 // and a swallowed defect would leave the operator nothing to read.
 const prefixed = err.split('\n').filter((line) => line.startsWith('#dsh-pty '))
+// The demux now RECORDS a prefixed line it cannot parse instead of crashing, so this
+// row can actually fail on the hazard it names: a diagnostic that parses as a
+// malformed reply would have been dropped by the host, leaving the operator nothing.
 check('every line the host demuxes as a reply really is one',
-  prefixed.length > 0 && prefixed.every((line) => {
-    try {
-      JSON.parse(line.slice('#dsh-pty '.length))
-      return true
-    } catch {
-      return false
-    }
-  }),
-  prefixed.slice(-3))
+  prefixed.length > 0 && malformedReplies.length === 0,
+  { malformed: malformedReplies.slice(-3), replyTail: prefixed.slice(-3) })
 // A blanket catch that only answered ok:false would hide a genuine defect inside
 // a reply the host never surfaces — nothing in lib/wsl/pty.js reads `error` — so
 // the failure has to reach the diagnostic stream as well.

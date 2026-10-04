@@ -448,8 +448,32 @@ if (linkFixtureReady) {
     existsSync(`${outsideHost}\\inside.txt`),
     `${outsideHost}\\inside.txt`)
 } else {
-  skipped += 1
-  console.log('  SKIP  the traversal assertions (no link fixture; see the FAIL above)')
+  // A SKIP here hides THIRTEEN assertions, not one — and one of them ("the WRITE KEY
+  // the fence is actually handed is refused") is the assertion this fixture EXISTS
+  // for. The house SKIP rule therefore names every unevaluated label and a remedy,
+  // and the tail counts the checks themselves, so a reader of the SKIP knows the
+  // exact size of what did not run (verify-9p.mjs handles its own link fixture the
+  // same way).
+  const TRAVERSAL_CHECKS = [
+    'the raw spelling is refused exactly when the canonicalizer is blind to the link',
+    'the WRITE KEY the fence is actually handed is refused',
+    'the write key equals the raw spelling exactly when the canonicalizer is blind to the link',
+    'a target whose own PARENT is the link is refused exactly when the link is unseen',
+    'a link that points INSIDE the root is refused exactly when the link is unseen (the cost)',
+    'a dangling link refuses the target on any share',
+    'the wsl$ alias spelling is refused exactly when the canonicalizer is blind',
+    'control: a missing component under a REAL directory is still authorized',
+    'control: a missing component directly under the root is still authorized',
+    'control: an existing real directory is still authorized',
+    'control: a final-component FILE link is still authorized',
+    'control: a final-component DIRECTORY link is still authorized',
+    'the fixture outside the root really exists (the escape link has a target)',
+  ]
+  skipped += TRAVERSAL_CHECKS.length
+  console.log(`  SKIP  the blind-arm traversal assertions — the link fixture could not be built (${linkProblem})`)
+  console.log(`        NOT EVALUATED (${TRAVERSAL_CHECKS.length} checks): ${TRAVERSAL_CHECKS.map((label) => `"${label}"`).join('; ')}`)
+  console.log('        Of those, "the WRITE KEY the fence is actually handed is refused" is the assertion this fixture exists for.')
+  console.log(`        Remedy: confirm the distribution answers ("wsl.exe -d ${distro} -- true") and that the fixture root under it is writable, then re-run — the fixture is Linux symlinks this suite creates and removes through the distribution, because the Windows side can do neither.`)
 }
 
 // ---------------------------------------------------------------------------

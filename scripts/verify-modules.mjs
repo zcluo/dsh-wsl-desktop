@@ -262,7 +262,12 @@ for (const relative of ALL) {
   check('BOTH settled paths report a ShellProcessStatus value',
     // TWO sites, not one: a single ternary is satisfied by start() alone, so a
     // wrong state.status inside execute() would pass.
-    (shell.match(/\?\s*'killed'\s*:\s*'completed'/g) ?? []).length >= 2
+    //
+    // Counted on comment-blanked source, the same ruling lines 140-146 record for
+    // FS_SANDBOX_DENIED: a doc comment that names the idiom would otherwise keep
+    // this count at 2 after one of the two real settle sites was deleted. The
+    // sibling clause below already reads codeOf for the same reason.
+    (codeOf(shell).match(/\?\s*'killed'\s*:\s*'completed'/g) ?? []).length >= 2
       && !/\.status\s*=\s*[^\n]*'timedOut'/.test(codeOf(shell)),
     "the union is 'running'|'completed'|'killed', and tool-bash maps anything that is not 'killed' to { status: 'completed', detail: 'exit code: 0' } — so reporting 'timedOut' recorded a killed command as a clean exit")
   check('the execution handle reflects the SETTLED sandbox facts',

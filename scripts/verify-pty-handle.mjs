@@ -54,16 +54,27 @@ function localAdapter(spec) {
     windowsHide: true,
     ...spec.env !== undefined ? { env: { ...process.env, ...spec.env } } : {},
   })
+  // The close outcome is REMEMBERED, for the same reason fifoAdapter below records
+  // it: a process that has already exited must settle immediately, because a
+  // re-armed 'close' listener never fires for a dead child. pty.js's terminate()
+  // awaits the data handle's waitForExit(), so a bridge that died mid-suite used to
+  // hang the teardown — and a suite that hangs reports no verdict at all.
+  let settled = null
+  const waiters = []
+  const settle = (outcome) => {
+    if (settled !== null) return
+    settled = outcome
+    for (const waiter of waiters.splice(0)) waiter()
+  }
+  child.on('close', (code, signal) => { settle({ exitCode: code, signal }) })
+  child.on('error', () => { settle({ exitCode: null, signal: null }) })
   return {
     stdin: child.stdin,
     stdout: child.stdout,
     stderr: child.stderr,
-    done: new Promise((resolve) => {
-      child.on('close', (code, signal) => resolve({ exitCode: code, signal }))
-      child.on('error', () => resolve({ exitCode: null, signal: null }))
-    }),
+    done: settled !== null ? Promise.resolve(settled) : new Promise((resolve) => child.on('close', () => resolve(settled))),
     terminate: () => { child.kill() },
-    waitForExit: () => new Promise((resolve) => child.on('close', () => resolve(true))),
+    waitForExit: () => settled !== null ? Promise.resolve(true) : new Promise((resolve) => waiters.push(() => resolve(true))),
   }
 }
 
