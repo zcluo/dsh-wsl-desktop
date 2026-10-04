@@ -132,6 +132,40 @@ function layout({ dom, row, cluster }, rowWidth, clusterWidth) {
 }
 
 /**
+ * Mirror the real `workspaces.list`.
+ *
+ * Two facts about the shipped service both have to hold: the snapshot accessor
+ * hangs off `list`, NOT off the service object (an earlier stub that put
+ * `getSnapshot` here directly is exactly why a wrong accessor passed this suite
+ * while the running app kept rendering folders), and a REPLACED snapshot notifies
+ * subscribers — that notification is how a re-pointed workspace reaches the plugin,
+ * because the row markup does not move on its own. The first stub accepted a
+ * listener and never called one, which under-mirrored the API and made a
+ * store-only change invisible to the half under test.
+ * @param {{ items: object[] }} state - the mutable snapshot object the case owns.
+ * @returns {{ getSnapshot: () => object, subscribe: (listener: () => void) => () => void }}
+ */
+function workspaceStore(state) {
+  const listeners = new Set()
+  let items = state.items
+  Object.defineProperty(state, 'items', {
+    configurable: true,
+    get: () => items,
+    set: (value) => {
+      items = value
+      for (const listener of listeners) listener()
+    },
+  })
+  return {
+    getSnapshot: () => state,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+  }
+}
+
+/**
  * Load the browser half and apply it against a stub client context.
  * @param {object} dom - the jsdom window owner.
  * @param {{ items: object[] } | undefined} [workspaceState] - the mutable snapshot
@@ -155,9 +189,7 @@ function apply(dom, workspaceState) {
       // kept rendering folders — the fixture has to encode the real contract.
       // Absent by default, so cases written before workspace rows existed keep
       // exercising the context they always did.
-      ...(workspaceState === undefined
-        ? {}
-        : { list: { getSnapshot: () => workspaceState, subscribe: () => () => {} } }),
+      ...(workspaceState === undefined ? {} : { list: workspaceStore(workspaceState) }),
     },
     uiWorkspace: { startSession: () => {} },
   })

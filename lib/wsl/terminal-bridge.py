@@ -21,6 +21,7 @@ Exits with the child's own exit status (128 + signal when it was killed).
 """
 
 import errno
+import atexit
 import fcntl
 import json
 import os
@@ -128,9 +129,21 @@ class Bridge:
         self.control_open = True
         self.revision = 0
         self.last_state = None
+        self.fifo = fifo
         self.control_fd = self._open_control(fifo)
         self._spawn()
         self.resize(cols, rows)
+
+    def remove_fifo(self):
+        """Unlink this bridge's control FIFO. Idempotent, and safe at any stage:
+        before the FIFO exists it raises FileNotFoundError, which is swallowed, and
+        after removal a second call does the same. The host runs a compensating
+        rm -f on every session-ending path, but that is a backstop for the paths
+        this process cannot catch (SIGKILL) — it is not the owner."""
+        try:
+            os.unlink(self.fifo)
+        except OSError:
+            pass
 
     def _open_control(self, fifo):
         """Create the control FIFO and hold its read end open."""
@@ -413,13 +426,37 @@ def main():
     cols, rows = sys.argv[2], sys.argv[3]
     argv = sys.argv[4:]
     bridge = Bridge(fifo, cols, rows, argv)
+
+    # The finally below covers every orderly path, but it does not run when the
+    # BRIDGE ITSELF is signalled — and the FIFO is the one thing this process owns
+    # exclusively, so the host's compensating rm -f must not be the only remover.
+    # SIGTERM and SIGINT therefore remove it first, then restore the default
+    # disposition and re-raise: a signalled bridge still reports 128+n, exactly the
+    # status it already had with no handler installed (an uncaught SIGTERM kills by
+    # default), so this changes what gets cleaned up and nothing else. SIGKILL is
+    # uncatchable by construction and stays the host's backstop.
+    atexit.register(bridge.remove_fifo)
+    for name in ("SIGTERM", "SIGINT"):
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+
+        def handler(signum, _frame, _default=number):
+            bridge.remove_fifo()
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        try:
+            signal.signal(number, handler)
+        except (ValueError, OSError):
+            # Registered off the main thread, or the platform refuses it: the
+            # finally below still covers every orderly path.
+            pass
+
     try:
         code = bridge.run()
     finally:
-        try:
-            os.unlink(fifo)
-        except OSError:
-            pass
+        bridge.remove_fifo()
     return code
 
 
