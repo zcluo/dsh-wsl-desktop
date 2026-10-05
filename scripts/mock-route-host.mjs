@@ -8,11 +8,14 @@
  * and the harness's fence contract (403 for an untrusted Host, 401 for an absent
  * browser cookie), so the suite can be driven end to end without a host:
  *
- *   # one shell — a scratch DSH_HOME, so the operator's real token file is untouched
- *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home"
+ *   # one shell — a scratch DSH_HOME, so the operator's real token file is untouched.
+ *   # Per-process on purpose: two concurrent runs sharing one home would share one
+ *   # token file, and the second ensureDevToken overwrite would 401 the first
+ *   # operator's verify-route calls.
+ *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home-$PID"
  *   node scripts/mock-route-host.mjs old            # prints the URL it bound
- *   # another shell, same DSH_HOME
- *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home"
+ *   # another shell, the SAME per-run home
+ *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home-$PID"
  *   node scripts/verify-route.mjs http://127.0.0.1:<printed port>
  *
  * Variant `old` applies the fence only when !developer — the D4 defect — and the
@@ -31,9 +34,9 @@
 
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { devTokenPath } from './dev-token.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const [variant = 'new', root = join(here, '..'), port = '0'] = process.argv.slice(2)
@@ -70,10 +73,9 @@ function requestRejection(req) {
  * @returns {Promise<boolean>} true when the caller presented this installation's token.
  */
 async function isDeveloperCaller(req) {
-  const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
   let expected
   try {
-    expected = (await readFile(join(home, 'wsl-desktop-dev-token'), 'utf8')).trim()
+    expected = (await readFile(devTokenPath(), 'utf8')).trim()
   } catch {
     return false
   }

@@ -272,16 +272,24 @@ function buildBindingRemovedCopy() {
   const tree = copySuiteTree('dsh-fence-skip-binding-')
   const fencePath = join(tree, 'lib', 'wsl', 'fence.js')
   const source = readFileSync(fencePath, 'utf8')
+  // The binding now lives in crossDistroUnc — the shared helper `isUnderHost` and
+  // fs.js's `contains()` both consume — so removing it there disables it for BOTH
+  // containment consumers at once (the pre-dedup mutant could only strip one copy).
   const binding = [
-    '  const targetUnc = parseWslUnc(targetKey)',
-    '  const rootUnc = parseWslUnc(root)',
-    '  if (targetUnc !== null && rootUnc !== null',
-    "    && targetUnc.distro.toLowerCase() !== rootUnc.distro.toLowerCase()) return false",
+    'export function crossDistroUnc(a, b) {',
+    '  const aUnc = parseWslUnc(a)',
+    '  const bUnc = parseWslUnc(b)',
+    '  return aUnc !== null && bUnc !== null',
+    "    && aUnc.distro.toLowerCase() !== bUnc.distro.toLowerCase()",
+    '}',
   ].join('\n')
   const mutated = source.includes(binding)
   writeFileSync(fencePath, source.replace(binding, [
-    '  // PIN MUTANT: the distribution binding is REMOVED, so the identity walk below answers',
-    '  // a foreign target exactly as it did before the binding existed.',
+    'export function crossDistroUnc(a, b) {',
+    '  // PIN MUTANT: the distribution binding is REMOVED, so both containment consumers',
+    '  // accept a foreign target exactly as they did before the binding existed.',
+    '  return false',
+    '}',
   ].join('\n')), 'utf8')
   return { path: join(tree, 'scripts', 'verify-fs-fence.mjs'), tree, mutated }
 }

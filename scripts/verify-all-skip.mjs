@@ -32,7 +32,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { blankLiterals } from './source-text.mjs'
+import { blankLiterals, citationResolves } from './source-text.mjs'
 import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -332,22 +332,8 @@ function tokensOf(text) {
     .filter((token) => !STOPWORDS.has(token.toLowerCase()))
 }
 
-/**
- * Whether one branch citation still resolves in the suite it cites.
- *
- * Two arms, because a citation legitimately lives in either place: the BLANKED arm
- * compares code against code (a citation carrying a literal still matches, because both
- * sides blank the same way), and the RAW arm covers a citation that lives INSIDE a
- * literal — the command a suite runs, the marker it greps for. The raw arm can also be
- * satisfied by prose, which is the limit of a text citation: it proves the entry points
- * at text the file carries, not that the text is on the exit-2 path.
- * @param {string} source - the suite's source, raw.
- * @param {string} citation - the cited text.
- * @returns {boolean} whether it resolves.
- */
-function citationResolves(source, citation) {
-  return blankLiterals(source).includes(blankLiterals(citation)) || source.includes(citation)
-}
+// `citationResolves` lives in scripts/source-text.mjs — one owner for the two
+// auditors that were carrying byte-identical copies.
 
 /**
  * What is wrong with the declaration table.

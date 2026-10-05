@@ -97,6 +97,15 @@ if (Test-Path $plugins) {
     # running host resolves is the one staged before it. Deleting that one breaks
     # every WSL session until the next restart, which is the failure the comment
     # above warns about.
+    #
+    # KNOWN LIMIT, kept deliberately: the MMddHHmmss stamp is not year-ordered, so
+    # this lexicographic sort puts every December generation above every January
+    # one, and across a year boundary the "two newest" here can keep a year-old
+    # generation over a newer one. The LIVE generation is still protected by the
+    # $linked guard below, so the cost is a wrong retention choice on a dev-only
+    # script — not a broken host. Fixing it means switching to LastWriteTime AND
+    # re-teaching verify-sync.mjs's fixture (whose fake 0000/0001/0002 names are
+    # pinned to this name-based rule), which is its own round.
     $keep = @(Get-ChildItem $plugins -Directory -Filter 'dsh-wsl-desktop*' |
       Sort-Object -Property Name -Descending |
       Select-Object -First 2 -ExpandProperty FullName)

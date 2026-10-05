@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { blankLiterals } from './source-text.mjs'
+import { blankLiterals, citationResolves } from './source-text.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const live = process.argv.includes('--live')
@@ -393,23 +393,9 @@ function canExitTwo(source) {
   return exitCodeExpressions(source).some(canBeTwo)
 }
 
-/**
- * Whether one branch citation still resolves in the suite it cites.
- *
- * Two arms, because a citation legitimately lives in either place: the BLANKED arm
- * compares code against code, blanking both sides so a citation that carries a string
- * literal still matches (a citation of a command the suite runs lives inside a literal,
- * and blanking the file removes that body), and the RAW arm covers exactly that case.
- * The raw arm can also be satisfied by prose, which is the honest limit of a text
- * citation: it proves the entry points at text the file carries, not that the text sits
- * on the exit-2 path.
- * @param {string} source - the suite's source, raw.
- * @param {string} citation - the cited text.
- * @returns {boolean} whether it resolves.
- */
-function citationResolves(source, citation) {
-  return blankLiterals(source).includes(blankLiterals(citation)) || source.includes(citation)
-}
+// `citationResolves` lives in scripts/source-text.mjs, beside the blanking pass it
+// is built on — the copy that stood here and the one in verify-all-skip.mjs were
+// byte-identical and had to be kept in sync by hand.
 
 // Every declaration must still be LIVE. A declared suite whose own exit-code
 // expression cannot be 2 can never skip anywhere — however many exit-2 shapes it

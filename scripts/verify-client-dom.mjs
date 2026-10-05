@@ -18,34 +18,15 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { detailText } from './detail.mjs'
+import { argvFlag, checkoutDefault, makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
-const flag = (name, fallback) => {
-  const hit = process.argv.find((argument) => argument.startsWith(`--${name}=`))
-  return hit === undefined ? fallback : hit.slice(name.length + 3)
-}
-// The harness checkout is this repo's sibling in a normal development layout;
-// DSH_CHECKOUT / --checkout override it anywhere else.
-const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? join(pluginRoot, '..', 'deepseek-harness'))
-const clientPath = flag('client', join(pluginRoot, 'lib', 'client.js'))
+const checkout = argvFlag('checkout', checkoutDefault(pluginRoot))
+const clientPath = argvFlag('client', join(pluginRoot, 'lib', 'client.js'))
 
-let failures = 0
-let checks = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was asserted.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - context shown on failure.
- */
-function check(label, ok, detail) {
-  checks += 1
-  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}`)
-  if (!ok && detail !== undefined) console.log(`        ${detailText(detail)}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker()
+const { check } = checker
 
 // jsdom comes from the harness checkout's dev dependencies. A missing
 // checkout is a SKIP (exit 2 — the contract verify-all documents), not a
@@ -414,7 +395,10 @@ console.log('\nWSL workspace rows')
     svg.append(path)
     return svg
   })()
-  row('legacy').querySelector('span.folder').replaceChildren(expandedFolder)
+  // Guarded the way lines 327-341 mandate: a fixture that regressed must produce
+  // one FAIL below, not a TypeError here that aborts the rest of the section.
+  const legacyFolder = row('legacy')?.querySelector('span.folder')
+  if (legacyFolder !== null && legacyFolder !== undefined) legacyFolder.replaceChildren(expandedFolder)
   parts.row.append(doc.createElement('i'))
   await settle()
   check('expanding the row rebuilds the cloud in the solid weight',
@@ -433,9 +417,9 @@ console.log('\nWSL workspace rows')
 
   live.dispose()
   check('dispose restores every swapped row',
-    doc.querySelector('svg[data-wsl-cloud]') === null && shipped('legacy').style.display === '',
+    doc.querySelector('svg[data-wsl-cloud]') === null && shipped('legacy')?.style.display === '',
     `clouds=${doc.querySelectorAll('svg[data-wsl-cloud]').length}`)
 }
 
-console.log(`\n${failures === 0 ? `${checks} check(s) passed` : `${failures} check(s) failed`}`)
-process.exit(failures === 0 ? 0 : 1)
+console.log(`\n${checker.failures === 0 ? `${checker.checks} check(s) passed` : `${checker.failures} check(s) failed`}`)
+process.exit(checker.failures === 0 ? 0 : 1)

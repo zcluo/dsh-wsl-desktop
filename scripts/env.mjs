@@ -28,8 +28,15 @@ const FALLBACK_DISTRO = 'debian'
  * instantly, and an unhandled ETIMEDOUT used to throw out of module evaluation —
  * killing the suite with a stack trace before a single check printed, which reads
  * as a broken suite rather than a distro that was slow to wake.
+ *
+ * Named away from PROBE_TIMEOUT_MS on purpose: scripts/wsl-probe.mjs exports that
+ * exact name at 60_000, and this module's ceiling is 30_000 for a deliberate
+ * reason — this is the MODULE-EVALUATION probe, synchronous, on the critical path
+ * of every suite, with the broader repeat (any failure, not a timeout alone). Two
+ * same-named constants with different values made importing the wrong one a
+ * one-keystroke mistake.
  */
-const PROBE_TIMEOUT_MS = 30_000
+const MODULE_EVAL_PROBE_TIMEOUT_MS = 30_000
 const PROBE_ATTEMPTS = 2
 
 /**
@@ -58,7 +65,7 @@ export function resolveLinuxUser(distro = resolveDistro()) {
   const failures = []
   for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
     try {
-      const user = execFileSync('wsl.exe', ['-d', distro, '-e', 'id', '-un'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS }).trim()
+      const user = execFileSync('wsl.exe', ['-d', distro, '-e', 'id', '-un'], { encoding: 'utf8', timeout: MODULE_EVAL_PROBE_TIMEOUT_MS }).trim()
       if (user !== '') return user
       failures.push('empty answer')
     } catch (error) {
@@ -99,7 +106,7 @@ export function resolveLinuxHome(distro) {
 export function listDistros() {
   let raw
   try {
-    raw = execFileSync('wsl.exe', ['-l', '-q'], { timeout: PROBE_TIMEOUT_MS })
+    raw = execFileSync('wsl.exe', ['-l', '-q'], { timeout: MODULE_EVAL_PROBE_TIMEOUT_MS })
   } catch (error) {
     throw new Error(`cannot list the WSL distributions (${error?.code ?? error?.status ?? 'failed'}). `
       + 'Wake WSL once ("wsl.exe -- true"), or set DSH_WSL_DISTRO / DSH_WSL_OTHER_DISTRO.')

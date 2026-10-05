@@ -14,6 +14,26 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
+/**
+ * The harness home the token lives under.
+ * @returns {string} the resolved `$DSH_HOME`.
+ */
+export function dshHome() {
+  return process.env.DSH_HOME ?? join(homedir(), '.dsh')
+}
+
+/**
+ * Where this installation's development token lives.
+ *
+ * ONE spelling of the path: the mock host used to read its own copy of these two
+ * literals, and a rename in either file silently desynchronized the token writer
+ * from the token reader.
+ * @returns {string} the token file's absolute path.
+ */
+export function devTokenPath() {
+  return join(dshHome(), 'wsl-desktop-dev-token')
+}
+
 /** Header name, mirrored from the host half. */
 export const DEV_TOKEN_HEADER = 'x-dsh-wsl-dev-token'
 
@@ -22,8 +42,7 @@ export const DEV_TOKEN_HEADER = 'x-dsh-wsl-dev-token'
  * @returns {Promise<string>} the token to present.
  */
 export async function ensureDevToken() {
-  const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-  const path = join(home, 'wsl-desktop-dev-token')
+  const path = devTokenPath()
   const token = randomBytes(32).toString('hex')
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, `${token}\n`, { mode: 0o600 })

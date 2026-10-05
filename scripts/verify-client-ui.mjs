@@ -15,39 +15,19 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
-import { detailText } from './detail.mjs'
 import { blankLiterals } from './source-text.mjs'
+import { argvFlag, checkoutDefault, makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
-const flag = (name, fallback) => {
-  const hit = process.argv.find((argument) => argument.startsWith(`--${name}=`))
-  return hit === undefined ? fallback : hit.slice(name.length + 3)
-}
-const clientPath = flag('client', join(pluginRoot, 'lib', 'client.js'))
-// The harness checkout is this repo's sibling in a normal development layout;
-// DSH_CHECKOUT / --checkout override it anywhere else.
-const checkout = flag('checkout', process.env.DSH_CHECKOUT ?? join(pluginRoot, '..', 'deepseek-harness'))
+const clientPath = argvFlag('client', join(pluginRoot, 'lib', 'client.js'))
+const checkout = argvFlag('checkout', checkoutDefault(pluginRoot))
 const iconSourcePath = join(
   checkout, 'packages', 'client', 'ui-primitives', 'src', 'icons', 'index.tsx',
 )
 
-let failures = 0
-let skipped = 0
-let checks = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was asserted.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - context shown on failure.
- */
-function check(label, ok, detail) {
-  checks += 1
-  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}`)
-  if (!ok && detail !== undefined) console.log(`        ${detailText(detail)}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker()
+const { check } = checker
 
 const source = await readFile(clientPath, 'utf8')
 const pkg = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8'))
@@ -144,8 +124,12 @@ try {
   iconSource = null
 }
 if (iconSource === null) {
-  skipped += 1
-  console.log(`  SKIP  trigger geometry matches the shipped icon — ${iconSourcePath} not readable`)
+  // The three-piece SKIP rule: the named precondition (the path is not readable),
+  // WHICH assertion did not run, and the remedy. The sibling suite's skip names
+  // all three too, so the two stay consistent with each other.
+  checker.skip(1)
+  console.log(`  SKIP  trigger geometry matches the shipped icon (1 check not evaluated) — ${iconSourcePath} not readable`)
+  console.log('        Remedy: pass --checkout=<dsh checkout> or set DSH_CHECKOUT to the harness checkout carrying packages/client/ui-primitives.')
 } else {
   // Find the artwork's path data under either icon naming generation.
   const artworkMatch = /ProjectAddOutlineArtwork[\s\S]*?<path d="(M[^"]+)"/.exec(iconSource)
@@ -244,6 +228,6 @@ check('re-checks cancellation after the create returns', picker.includes('if (st
 // exit code (2), which `verify-all` shows as SKIP only because verify-client-ui.mjs
 // is declared in scripts/verify-all.mjs's DECLARED_SKIPS with the precondition that
 // justifies it: undeclared, the same exit 2 fails that run instead.
-console.log(`\n${failures === 0 ? `${checks - skipped} check(s) passed` : `${failures} check(s) failed`}`
-  + `${skipped === 0 ? '' : `, ${skipped} skipped`}`)
-process.exit(failures > 0 ? 1 : skipped > 0 ? 2 : 0)
+console.log(`\n${checker.failures === 0 ? `${checker.checks - checker.skipped} check(s) passed` : `${checker.failures} check(s) failed`}`
+  + `${checker.skipped === 0 ? '' : `, ${checker.skipped} skipped`}`)
+process.exit(checker.failures > 0 ? 1 : checker.skipped > 0 ? 2 : 0)
