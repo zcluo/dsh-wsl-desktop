@@ -191,12 +191,28 @@ console.log('\nexecution world')
 // debian-dev and claiming debian, and a scratch directory created without the
 // distro landed in the wrong one (measured: the session then failed with
 // 'chdir(...) failed 2', because the directory was never there).
-const identity = await call('execInWsl', { cwd: home, distro, command: 'uname -s; pwd; echo "$WSL_DISTRO_NAME"' })
-check('a command runs inside the distribution', identity.exitCode === 0 && identity.stdout.includes('Linux'), identity)
-check('the working directory is a Linux path', identity.target?.linuxPath === home, identity.target)
+// Named, not fatal: the sibling calls all catch, and an uncaught throw here used
+// to suppress every section below — session acceptance, the Windows world, the
+// dialog contract, session binding and the browser half — leaving the run with no
+// verdict beyond a stack trace. All four rows stay printed and each names the
+// cause, so a host-down or a mis-named distro reads as what it is.
+let identity = null
+let probeFailure
+try {
+  identity = await call('execInWsl', { cwd: home, distro, command: 'uname -s; pwd; echo "$WSL_DISTRO_NAME"' })
+} catch (error) {
+  probeFailure = error instanceof Error ? error.message : String(error)
+}
+const probeDetail = probeFailure ?? identity
+check('a command runs inside the distribution',
+  probeFailure === undefined && identity.exitCode === 0 && identity.stdout.includes('Linux'), probeDetail)
+check('the working directory is a Linux path',
+  probeFailure === undefined && identity.target?.linuxPath === home, probeDetail)
 // The command echoes the distro NAME on its last line (uname -s; pwd; echo "$WSL_DISTRO_NAME").
-check('the command ran in the distribution under test', identity.stdout.trim().split('\n').pop() === distro, identity.stdout)
-check('the target carries the UNC workspace spelling', String(identity.target?.uncPath ?? '').startsWith('\\\\wsl.localhost\\'), identity.target)
+check('the command ran in the distribution under test',
+  probeFailure === undefined && identity.stdout.trim().split('\n').pop() === distro, probeDetail)
+check('the target carries the UNC workspace spelling',
+  probeFailure === undefined && String(identity.target?.uncPath ?? '').startsWith('\\\\wsl.localhost\\'), probeDetail)
 
 console.log('\nsession-level acceptance')
 // The workspace must be one the fence ACCEPTS. This used to be /tmp, which the

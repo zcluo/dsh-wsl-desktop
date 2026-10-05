@@ -105,7 +105,10 @@ for (const relative of PURE) {
           && host.Config !== undefined,
         { name: host.name, apply: typeof host.apply, hasConfig: host.Config !== undefined })
     } catch (error) {
-      check('lib/index.js loads against the real host dependencies', false, error)
+      // Both declared labels are accounted for, from the list: a check that is
+      // neither passed, failed nor skipped is a row that vanished from the run.
+      check(HOST_HALF_CHECKS[0], false, error)
+      check(HOST_HALF_CHECKS[1], false, 'not evaluated — the module did not load')
     }
   }
 }

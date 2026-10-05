@@ -230,7 +230,16 @@ const declarations = new Map(DECLARED_SKIPS.map((entry) => [entry.suite, entry])
 {
   const offenders = []
   for (const suite of suites) {
-    const source = readFileSync(join(here, suite), 'utf8')
+    // Named failure, not an ENOENT crash: a suite listed here but missing from
+    // disk used to kill the aggregate before any suite ran, taking the
+    // declared-skip audit and the whole per-suite summary with it.
+    let source
+    try {
+      source = readFileSync(join(here, suite), 'utf8')
+    } catch {
+      console.log(`FAIL  ${suite} is listed in this aggregate but is not readable as a file of this directory`)
+      process.exit(1)
+    }
     for (const match of source.matchAll(/\bcheck\(\s*(?:'[^']*'|"[^"]*"|`[^`]*`)\s*,\s*['"`]/g)) {
       const line = source.slice(0, match.index).split('\n').length
       offenders.push(`${suite}:${line}`)
