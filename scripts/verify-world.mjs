@@ -723,7 +723,10 @@ const indexSites = [
   ['listLinuxDir', /listLinuxDir\([^)]*\{ wslPath: routeWslPath \}\)/g, 2],
   ['checkLinuxPath', /checkLinuxPath\([^)]*\{ wslPath: routeWslPath \}\)/g, 3],
   ['resolveDistroHome', /resolveDistroHome\([^)]*\{ wslPath: routeWslPath \}\)/g, 1],
-  ['defaultWorkspaceUnc', /defaultWorkspaceUnc\(\{ wslPath: routeWslPath \}\)/g, 1],
+  // 2, not 1: workspaceFlow now defaults its location the same way the selftest
+  // does (the distribution home via defaultWorkspaceUnc), so the configured path
+  // travels to that site too — the second site this option legitimately serves.
+  ['defaultWorkspaceUnc', /defaultWorkspaceUnc\(\{ wslPath: routeWslPath \}\)/g, 2],
   ['execInWsl runWslShell', /wslPath: routeWslPath,\s*\n\s*\}\)/g, 1],
 ]
 check('index.js passes the configured path at every probe site',
