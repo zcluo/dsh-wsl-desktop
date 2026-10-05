@@ -162,7 +162,18 @@ async function confined(command, { mode, workspaceLinuxRoot, linuxCwd = '/' }) {
     console.log(`        identity probe error: ${error.message}`)
     return null
   })
-  if (identity === null) throw new Error('无法解析发行版内的用户身份')
+  if (identity === null) {
+    // A SENTINEL, not a throw. Every call site is top-level awaited with no catch,
+    // so a throw here used to abort the whole suite as an unhandled rejection
+    // BEFORE the summary printed and BEFORE the fixture-cleanup probes ran,
+    // leaking every pid-named fixture in the distribution. The guarded identity
+    // probe above follows the same ruling: the failure belongs to the rows below,
+    // which render it as FAIL after FAIL and let the suite finish.
+    return {
+      result: { exitCode: null, timedOut: false, stdout: '', stderr: 'confinement identity probe failed' },
+      identity: null,
+    }
+  }
   // Pass the DETECTED runner: once the operator installs the dsh-wsl-confine
   // helper, every check below must exercise the hardened path, not silently
   // keep testing the direct sudo-unshare runner.

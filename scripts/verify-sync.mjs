@@ -88,6 +88,7 @@ function said(output, pattern) {
  */
 async function scenario({ link, runs = 1, patch }) {
   const home = await mkdtemp(join(tmpdir(), 'dsh-wsl-sync-'))
+  try {
   const profile = join(home, 'profiles', 'verify')
   const plugins = join(profile, 'plugins')
   const modules = join(profile, 'node_modules')
@@ -171,7 +172,16 @@ async function scenario({ link, runs = 1, patch }) {
     // the evidence is taken from both channels rather than assuming one.
     output += `${run.stdout}\n${run.stderr}`
   }
-  const after = (await readdir(plugins)).sort()
+  // Named failure, not an ENOENT crash: in the 'fresh' scenario plugins/ exists
+  // only if the staging script created it, so a script that died before staging
+  // used to crash the whole suite here instead of letting the checks below report
+  // what actually happened.
+  let after = []
+  try {
+    after = (await readdir(plugins)).sort()
+  } catch {
+    after = []
+  }
   let linkTarget = null
   try {
     linkTarget = (await readlink(join(modules, 'dsh-wsl-desktop'))).split('\\').join('/')
@@ -181,6 +191,14 @@ async function scenario({ link, runs = 1, patch }) {
   const manifest = link === 'fresh' ? '' : await readFile(join(profile, 'package.json'), 'utf8')
   const lock = link === 'fresh' ? '' : await readFile(join(profile, 'pnpm-lock.yaml'), 'utf8')
   return { home, profile, plugins, after, output, error, linkTarget, manifest, lock, linked, staged }
+  } catch (error) {
+    // The temp home is this fixture's OWN, so a case that throws after mkdtemp —
+    // the patch-rewrite guard and the cp/readFile block both can — must remove it
+    // before rethrowing. The callers' deletes only run on their success path, so
+    // without this a failed rewrite leaked a dsh-wsl-sync-* directory per run.
+    await rm(home, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
 }
 
 console.log(`running ${script} against disposable profiles\n`)
