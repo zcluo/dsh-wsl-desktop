@@ -955,6 +955,10 @@ try {
 
 console.log('\nread-only')
 const readOnlyWrite = await confined(`echo written > ${probeRoot}/readonly.txt && echo RO-OK`, { mode: 'read-only' })
+// Positively gated: the sentinel a failed identity probe returns carries empty
+// stdout, which this row's negative test would read as a successful denial. The
+// companion proves a run actually executed before the denial means anything.
+check('the read-only denial came from a run that executed', readOnlyWrite.result.exitCode !== null, readOnlyWrite.result)
 check('a write inside the workspace is denied', !readOnlyWrite.result.stdout.includes('RO-OK'), `${readOnlyWrite.result.exitCode} ${readOnlyWrite.result.stdout}`)
 const readOnlyRead = await confined(`cat ${probeRoot}/seed.txt`, { mode: 'read-only', linuxCwd: probeRoot })
 check('reads still work', readOnlyRead.result.stdout.includes('seed'), readOnlyRead.result.stderr)
@@ -1001,6 +1005,10 @@ const failOpen = await confined('echo CONTINUED-AFTER-FAILED-SETUP', {
 check('a failed setup does not silently run the command anyway',
   !failOpen.result.stdout.includes('CONTINUED-AFTER-FAILED-SETUP'),
   `exit=${failOpen.result.exitCode} stdout=${JSON.stringify(failOpen.result.stdout)} stderr=${JSON.stringify(failOpen.result.stderr)}`)
+// Same companion: the sentinel's empty stdout would satisfy the negative test
+// above on its own, so this row states that the attempt itself executed.
+check('the failed-setup attempt reached the confinement wrapper',
+  failOpen.result.exitCode !== null, failOpen.result)
 
 console.log('\nprocess isolation')
 // A namespace is a different inode for /proc/self/ns/pid, not merely a

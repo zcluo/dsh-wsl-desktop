@@ -9,13 +9,15 @@
  * browser cookie), so the suite can be driven end to end without a host:
  *
  *   # one shell — a scratch DSH_HOME, so the operator's real token file is untouched.
- *   # Per-process on purpose: two concurrent runs sharing one home would share one
- *   # token file, and the second ensureDevToken overwrite would 401 the first
- *   # operator's verify-route calls.
- *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home-$PID"
+ *   # Pick ONE fresh literal name for the run and use the SAME value in BOTH shells
+ *   # (two concurrent runs sharing a home would share one token file, and the second
+ *   # ensureDevToken overwrite would 401 the first operator's verify-route calls).
+ *   # Do NOT use $PID here: it expands differently in each shell, so the two halves
+ *   # would never meet.
+ *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home-<run name>"
  *   node scripts/mock-route-host.mjs old            # prints the URL it bound
- *   # another shell, the SAME per-run home
- *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home-$PID"
+ *   # another shell, the SAME literal value
+ *   $env:DSH_HOME = "$env:TEMP\dsh-fence-mock-home-<run name>"
  *   node scripts/verify-route.mjs http://127.0.0.1:<printed port>
  *
  * Variant `old` applies the fence only when !developer — the D4 defect — and the

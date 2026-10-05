@@ -32,7 +32,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { blankLiterals, citationResolves } from './source-text.mjs'
+import { citationResolves } from './source-text.mjs'
 import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
