@@ -6,7 +6,7 @@
  * relative-name rewrite, the wsl-world isolate group).
  * Run: node scripts/verify-preset.mjs
  */
-import { buildVariantPlugins, buildWorldGroup, isHostWorldModule, WORLD_MODULE_NAMES, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
+import { buildVariantPlugins, buildWorldGroup, hasClassifierVerdict, isHostWorldModule, isToolFamilyModule, VERDICTED_KEPT_MODULES, WORLD_MODULE_NAMES, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
 
 let passed = 0
 let failed = 0
@@ -125,6 +125,40 @@ check('a fully readable preset reports nothing unclassified',
 let nonStringVerdict
 try { nonStringVerdict = isHostWorldModule({ __jsExpr: 'x' }) } catch (error) { nonStringVerdict = error }
 check('a non-string specifier is answered false, not thrown on', nonStringVerdict === false, nonStringVerdict)
+
+console.log('\ntool-family rows without a verdict are reported, not copied in silence')
+// The removal rule is a closed list, so before this branch a tool row this plugin
+// had never seen was neither removed NOR reported — copied into the WSL variant in
+// silence. That is the shape a NEW upstream tool row would take, and the reason the
+// live gate can now assert on the report instead of trusting the removal log.
+const novel = buildVariantPlugins([
+  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} },
+  { id: 'tool-newshell', name: '@deepseek-ai/dsh-tool-newshell' },
+  { id: 'tool-web', name: '@deepseek-ai/dsh-tool-web' },
+], MODULES)
+check('a tool-family row with no verdict is recorded as unclassified',
+  novel.unclassified.length === 1 && novel.unclassified[0]?.id === 'tool-newshell',
+  novel.unclassified)
+check('the unverdicted tool row is kept rather than guessed away',
+  novel.plugins.some((row) => row.id === 'tool-newshell'), novel.plugins.map((row) => row.id))
+check('a verdicted-kept tool row is NOT reported',
+  !novel.unclassified.some((row) => row.id === 'tool-web'), novel.unclassified)
+check('the subpath spelling of an unverdicted tool row is caught too',
+  isToolFamilyModule('@deepseek-ai/dsh-tool-newshell/src/index.ts'),
+  'the package identity has to be derived, not the basename')
+check('a world row is verdicted by the removal set',
+  hasClassifierVerdict('@deepseek-ai/dsh-tool-pwsh') && hasClassifierVerdict('@deepseek-ai/dsh-terminal-bash'),
+  'WORLD_MODULE_NAMES is a verdict too')
+check('a verdicted-kept row is verdicted by the kept set',
+  hasClassifierVerdict('@deepseek-ai/dsh-tool-web')
+  && [...VERDICTED_KEPT_MODULES].every((module) => hasClassifierVerdict(module)),
+  'every kept verdict resolves through the predicate')
+check('a non-tool module needs no verdict',
+  !isToolFamilyModule('@deepseek-ai/dsh-persona') && !isToolFamilyModule('@deepseek-ai/dsh-compaction-basic'),
+  'the family is narrow on purpose: a wide one would redden the gate over rows never in question')
+check('a non-string specifier is answered false by the family predicate, not thrown on',
+  (() => { try { return isToolFamilyModule({ __jsExpr: 'x' }) === false } catch { return false } })(),
+  'same contract as isHostWorldModule')
 
 const basePlugins = [
   { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { suffix: 'You are a coding agent.' } },

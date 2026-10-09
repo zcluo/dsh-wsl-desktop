@@ -96,6 +96,16 @@ check('the host exposes the 0.1.7 registry surface', status.hostCompat?.registry
 if (status.status === 'ready') {
   check('at least one WSL preset was written', Array.isArray(status.written) && status.written.length > 0, status.written)
   console.log(`        ${status.written.map((entry) => `${entry.id} (from ${entry.from}; removed ${entry.removed.join(',') || 'none'})`).join('\n        ')}`)
+  // A row the transform kept WITHOUT a classifier verdict is the leak shape: the
+  // removal rule is a closed list, so an upstream tool row this plugin has never
+  // seen is copied into the WSL variant in silence — no removal, no report, every
+  // suite green. The host reports those rows; asserting on the report is what turns
+  // the next upstream addition into a decision instead of a leak. Remedy: add the
+  // module to WORLD_MODULE_NAMES (drop it) or VERDICTED_KEPT_MODULES (keep it
+  // deliberately) in lib/wsl/preset.js.
+  const unclassified = status.written.flatMap((entry) => (entry.unclassified ?? []).map((row) => ({ preset: entry.id, ...row })))
+  check('no preset row survived without a classifier verdict', unclassified.length === 0,
+    unclassified.length === 0 ? undefined : `unclassified rows: ${JSON.stringify(unclassified)} — add each to WORLD_MODULE_NAMES (drop) or VERDICTED_KEPT_MODULES (keep) in lib/wsl/preset.js`)
   // A source preset the registry cannot mount is reported, not silently ignored.
   for (const entry of status.skipped ?? []) {
     console.log(`        SKIPPED ${entry.id}: ${entry.broken}`)
