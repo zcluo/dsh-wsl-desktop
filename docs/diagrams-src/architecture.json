@@ -41,7 +41,7 @@
     ],
     "repository": {
       "url": "https://github.com/zcluo/dsh-wsl-desktop",
-      "revision": "1110b37e0c9bb9dc8323bd6fe25ce1703f8a3eb2"
+      "revision": "5dc7584e23645fc10f29229e1adce787dcf7b7c5"
     }
   },
   "components": [
