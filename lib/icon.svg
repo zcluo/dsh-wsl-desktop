@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="DSH WSL Desktop">
+  <!-- W monogram. The polyline's apex/valleys are chosen so the STROKED bounds
+       (8.5..55.5 x 13.5..50.5) center on (32,32): the mark is optically centered,
+       not merely its path data. Keep the 7px stroke when editing the path, and
+       re-center against those bounds rather than the raw vertices. -->
+  <defs>
+    <linearGradient id="wsl-base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151D31"/>
+      <stop offset="1" stop-color="#0B111E"/>
+    </linearGradient>
+    <radialGradient id="wsl-glow" gradientUnits="userSpaceOnUse" cx="52" cy="4" r="44">
+      <stop offset="0" stop-color="#38BDF8" stop-opacity=".32"/>
+      <stop offset="1" stop-color="#38BDF8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wsl-mark" x1="12" y1="17" x2="52" y2="47" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#4D6BFE"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#wsl-base)"/>
+  <rect width="64" height="64" rx="15" fill="url(#wsl-glow)"/>
+  <path d="M12 17 L22.5 47 L32 25 L41.5 47 L52 17" fill="none" stroke="url(#wsl-mark)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x=".75" y=".75" width="62.5" height="62.5" rx="14.25" fill="none" stroke="#7DD3FC" stroke-opacity=".22" stroke-width="1.5"/>
+</svg>

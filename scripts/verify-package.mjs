@@ -17,6 +17,15 @@
  * tree that shipped the defect. The control section re-runs the pack with the
  * hook bypassed, so the same run also proves the list CAN carry the artifact.
  *
+ * The plugin icon is pinned here for the same reason: its declaration is metadata
+ * the harness reads from package.json (packages/boot/app-boot/src/package-meta.ts
+ * resolves a declared `icon` against the manifest's own directory, admits
+ * SVG/PNG/JPEG/WebP up to 256 KiB, and reports a violation as a diagnostic that
+ * keeps the display text while rendering NO icon). A declaration that resolves in
+ * the checkout but whose file the `files` allowlist stops covering ships a package
+ * whose market card has no icon, and nothing else in this repo reads the published
+ * file list.
+ *
  * Why its own suite. Its subject is the published artifact, which no other suite
  * reads, and it needs no distribution, no harness checkout and no host — npm
  * alone, from the package root. Folding it into verify-modules.mjs would report
@@ -32,8 +41,8 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, extname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { detailText } from './detail.mjs'
 
@@ -78,6 +87,7 @@ const PACK_CHECKS = [
   'the prepack hook removed the bytecode cache',
   'the file list carries no __pycache__ or .pyc path',
   'the file list carries the entry points package.json declares',
+  'the file list carries the plugin icon package.json declares',
   'the control: with the hook bypassed the same cache IS listed',
 ]
 
@@ -173,6 +183,44 @@ check('package.json parses and declares the strip as scripts.prepack',
     ? `package.json is not readable JSON: ${pkgProblem}`
     : `scripts=${JSON.stringify(pkg?.scripts ?? null)} — npm reads lifecycle scripts from the scripts map; a root-level "prepack" key is never executed`)
 
+/**
+ * The icon formats and size the harness admits, and why a violation is worth a
+ * row: `readPluginMeta` does not fail the plugin, it drops the icon and keeps the
+ * text — a bad declaration is invisible in the UI it was written for.
+ */
+const ICON_MEDIA_TYPES = new Set(['.svg', '.png', '.jpg', '.jpeg', '.webp'])
+const ICON_MAX_BYTES = 256 * 1024
+
+/**
+ * Whether a declared icon path resolves inside the package root.
+ *
+ * The reader's own rule, applied in the reader's order: an absolute path, a
+ * Windows path spelled on POSIX, or any URL-shaped value is refused before the
+ * containment test — `resolve` would otherwise quietly turn `C:/icons/a.svg`
+ * into a path inside the package on POSIX.
+ * @param {string} declared - the manifest's `icon` value.
+ * @returns {boolean} whether the value is a package-relative path inside the root.
+ */
+function iconInsidePackage(declared) {
+  if (declared === '' || isAbsolute(declared) || win32.isAbsolute(declared)) return false
+  if (/^[A-Za-z][A-Za-z\d+.-]*:/u.test(declared)) return false
+  const local = relative(pluginRoot, resolve(pluginRoot, declared))
+  return local !== '..' && !local.startsWith(`..${sep}`) && !isAbsolute(local)
+}
+
+// Read from the SAME manifest the pack below packs, and asserted BEFORE the pack
+// row that consumes it: with no declared icon that row's filter is empty, so it
+// would pass on a package that declares no icon at all.
+const declaredIcon = typeof pkg?.icon === 'string' ? pkg.icon.trim() : ''
+const iconInside = iconInsidePackage(declaredIcon)
+const iconTarget = iconInside ? resolve(pluginRoot, declaredIcon) : ''
+const iconStat = iconTarget !== '' && existsSync(iconTarget) ? statSync(iconTarget) : null
+check('package.json declares a plugin icon inside the package that the harness can read',
+  iconInside && iconStat?.isFile() === true
+    && ICON_MEDIA_TYPES.has(extname(iconTarget).toLowerCase())
+    && iconStat.size <= ICON_MAX_BYTES,
+  `icon=${JSON.stringify(pkg?.icon ?? null)} resolved=${JSON.stringify(iconTarget)} inside=${iconInside} file=${iconStat?.isFile() ?? false} ext=${JSON.stringify(extname(iconTarget))} size=${iconStat?.size ?? 'n/a'} — a declared icon resolves against its manifest directory and must be SVG, PNG, JPEG or WebP within ${ICON_MAX_BYTES} bytes`)
+
 // The presence test runs npm the SAME way the pack below does. A second locator
 // (where.exe / which) can answer from a source cmd.exe does not read — measured
 // here: where.exe resolves npm with an EMPTY PATH — so the two could disagree,
@@ -219,13 +267,20 @@ if (!npmUsable) {
     check(PACK_CHECKS[4], paths !== null && missing.length === 0,
       `missing from the pack: ${JSON.stringify(missing)} — package.json declares ${JSON.stringify(entryPoints)}`)
 
+    // The declaration above is read from the checkout's manifest; this row reads
+    // the LIST the tarball will carry, so one fact is pinned at both ends. npm
+    // reports packed paths with forward slashes on every platform.
+    const iconEntry = iconInside ? relative(pluginRoot, iconTarget).split(sep).join('/') : ''
+    check(PACK_CHECKS[5], paths !== null && iconEntry !== '' && paths.includes(iconEntry),
+      `the packed list carries no ${JSON.stringify(iconEntry)}: ${JSON.stringify((paths ?? []).filter((path) => path.startsWith('lib/')))}`)
+
     // THE CONTROL. --ignore-scripts skips the hook, so the cache must survive AND
     // appear: that is the measurement proving the row above is not vacuous.
     if (writeCache()) {
       const control = pack(['--ignore-scripts'])
       const controlPaths = packedPaths(control)
       const listed = (controlPaths ?? []).some((path) => path.endsWith('.pyc'))
-      check(PACK_CHECKS[5],
+      check(PACK_CHECKS[6],
         control.status === 0 && !/prepack/.test(control.stderr ?? '') && listed && existsSync(CACHE_FILE),
         `exit=${control.status} announced=${/prepack/.test(control.stderr ?? '')} listed=${listed} onDisk=${existsSync(CACHE_FILE)} paths=${JSON.stringify((controlPaths ?? []).filter((path) => path.endsWith('.pyc')))}`)
     } else {

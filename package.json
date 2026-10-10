@@ -3,6 +3,7 @@
   "version": "0.3.4",
   "type": "module",
   "main": "lib/index.js",
+  "icon": "./lib/icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
