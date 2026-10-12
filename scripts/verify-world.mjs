@@ -771,7 +771,7 @@ check('subprocess.js translates an unresolved login shell — and only there —
   && (subprocessCode.match(/cause: error/g) ?? []).length === 1,
   { windowsFallbackAt, loginShellGuardAt, loginShellTranslateAt, siblingLookupThrowAt,
     window: subprocessCode.slice(Math.max(0, windowsFallbackAt - 40), windowsFallbackAt + 500) })
-// The executable lookup is the FOURTH probe the documented sentence names (docs/CONFINEMENT.md:36,
+// The executable lookup is the FOURTH probe the documented sentence names (docs/CONFINEMENT.md:34,
 // 探针超时 60s + 超时后一次透明重试), and it is output-parsed: its empty
 // answer is read below as "no such executable", a class the terminal controller catches to
 // SKIP a shell candidate. Its policy is a SOURCE pin, like the shell.js rows above, because

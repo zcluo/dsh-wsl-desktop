@@ -1,7 +1,7 @@
 /**
  * The probe policy docs/CONFINEMENT.md states, as a runner the suites can share.
  *
- * docs/CONFINEMENT.md:36 — 探针超时 60s + 超时后一次透明重试 — one probe at a 60s ceiling, repeated
+ * docs/CONFINEMENT.md:34 — 探针超时 60s + 超时后一次透明重试 — one probe at a 60s ceiling, repeated
  * ONCE when it TIMED OUT. The reason it exists is the MACHINE, not the command: every
  * distribution shares one WSL2 VM, so a sibling distribution's load can stall a probe that
  * answered in 300ms a moment earlier (measured on this host: ~300ms, then 30.4s and 30.5s on
@@ -23,12 +23,12 @@
  * number that stood here fell into, so a re-count must not fall into them either: the
  * `confined()` wrapper's own `probe(...)` call is ONE OF THE 20 (the 15 call sites reach that
  * same line, so counting the wrapper as a sixteenth site double-counts all of them), and the two
- * fixture probes (FIXTURE_SETUP at :1168, FIXTURE_CLEANUP at :1262) are likewise two more of the
+ * fixture probes (FIXTURE_SETUP at :1144, FIXTURE_CLEANUP at :1181) are likewise two more of the
  * same 20, not a third category. The SUDO_USER site sits in a loop, so one run issues more than
  * 35 spawns.
  *
  * THE TRIGGER IS NOT THE SAME IN ALL THREE, AND THIS RUNNER TAKES THE NARROWEST: `timedOut`
- * ALONE. `world.js`'s four probes (`probeWithRetry`, world.js:546) and `confinement.js`'s
+ * ALONE. `world.js`'s four probes (`probeWithRetry`, world.js:605) and `confinement.js`'s
  * `resolveIdentity` (:95) repeat on a timeout alone; `detectRunner` (:311) also repeats an
  * ANSWERED "no", because its `probeOnce` returns null both for "no" and for a probe that could
  * not run; `detectNoNewPrivs` (:400) and `pty.js`'s python3 probe (:132) repeat on ANY
