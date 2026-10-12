@@ -35,17 +35,27 @@ export function checkoutDefault(pluginRoot) {
 }
 
 /**
- * The check counter both client suites drive.
+ * The check counter the suites drive.
+ *
+ * The default token is `OK  `, which is what the two client suites printed before this
+ * factory existed; the suites that print `PASS`/`FAIL` pass `{ pass: 'PASS' }`. Both
+ * spellings pad to four characters, so the labels line up in every suite's output.
+ * @param {{ pass?: string, detail?: (value: unknown) => string }} [options] - the pass
+ *   token (default `'OK  '`) and the detail renderer (default `detailText`).
  * @returns {{ check: (label: string, ok: boolean, detail?: unknown) => void,
  *   skip: (count?: number) => void,
- *   readonly failures: number, readonly checks: number, readonly skipped: number }}
+ *   readonly failures: number, readonly checks: number, readonly skipped: number,
+ *   readonly passed: number }}
  *   the check function and live counters (read the getters, do not destructure
  *   them — a destructured number is a snapshot, and the tails read the live count).
  */
-export function makeChecker() {
+export function makeChecker(options = {}) {
+  const passToken = options.pass ?? 'OK  '
+  const renderDetail = options.detail ?? detailText
   let failures = 0
   let checks = 0
   let skipped = 0
+  let passed = 0
   return {
     /**
      * Record one assertion.
@@ -55,8 +65,9 @@ export function makeChecker() {
      */
     check(label, ok, detail) {
       checks += 1
-      console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}`)
-      if (!ok && detail !== undefined) console.log(`        ${detailText(detail)}`)
+      if (ok) passed += 1
+      console.log(`  ${ok ? passToken : 'FAIL'}  ${label}`)
+      if (!ok && detail !== undefined) console.log(`        ${renderDetail(detail)}`)
       if (!ok) failures += 1
     },
     /**
@@ -69,5 +80,6 @@ export function makeChecker() {
     get failures() { return failures },
     get checks() { return checks },
     get skipped() { return skipped },
+    get passed() { return passed },
   }
 }
