@@ -29,8 +29,34 @@ const iconSourcePath = join(
 const checker = makeChecker()
 const { check } = checker
 
-const source = await readFile(clientPath, 'utf8')
-const pkg = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8'))
+/**
+ * Read a file every assertion below depends on, reporting a FAIL instead of throwing.
+ *
+ * A missing browser half or manifest is a DEPLOYMENT fault, not a finding: both reads
+ * used to throw out of the suite before any check printed, so the operator saw a stack
+ * trace instead of the file that was missing. Nothing below can be measured without
+ * them, so the FAIL names the path and the remedy, then the suite stops.
+ * @param {string} path - the file to read.
+ * @param {string} label - the row's label.
+ * @returns {Promise<string>} the file's text, or never (the process stops).
+ */
+async function readRequired(path, label) {
+  try {
+    return await readFile(path, 'utf8')
+  } catch (error) {
+    check(label, false, `could not read ${path}: ${error?.message ?? error} — run scripts/sync.ps1 to re-stage the plugin, then re-run`)
+    process.exit(1)
+  }
+}
+
+const source = await readRequired(clientPath, 'the shipped browser half is readable')
+let pkg
+try {
+  pkg = JSON.parse(await readRequired(join(pluginRoot, 'package.json'), 'the plugin manifest is readable'))
+} catch (error) {
+  check('the plugin manifest is valid JSON', false, `${error?.message ?? error}`)
+  process.exit(1)
+}
 
 // `blankLiterals` moved to ./source-text.mjs when the fs fence needed the same
 // scanner for its own structural pin: one owner per rule, and the one-pass

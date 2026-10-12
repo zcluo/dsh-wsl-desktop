@@ -311,7 +311,10 @@ check('the fence receives its parameters as environment variables',
 // thing the DROP_* assignments follow — the property this check exists for is
 // unchanged: bare KEY=VALUE words after the script name are positional parameters.
 check('the exec tail passes env before the fence script',
-  /env(?: -u [A-Za-z_][A-Za-z0-9_]*)* \\\n\s+DROP_UID=/.test(helperSource) && !/bash -c "\$FENCE" \\\n\s+dsh-wsl-confine \\\n\s+UID=/.test(helperSource), null)
+  /env(?: -u [A-Za-z_][A-Za-z0-9_]*)* \\\n\s+DROP_UID=/.test(helperSource) && !/bash -c "\$FENCE" \\\n\s+dsh-wsl-confine \\\n\s+UID=/.test(helperSource),
+  // The evidence, not `null`: a FAIL here has to show the tail it judged, or the
+  // operator cannot tell a moved env from a moved script name.
+  helperSource.split('\n').filter((line) => line.includes('env ') || line.includes('DROP_UID=') || line.includes('bash -c')).join('\n'))
 check('the helper escapes ERE metacharacters before building the exemption pattern',
   helperSource.includes('[][\\\\^$.*+?(){}|]') && helperSource.includes("]/\\\\&/g'"),
   'the allow-list is DATA: unescaped, a workspace path containing ( ) | or [ becomes regex syntax — the real workspace is swept read-only, or a `|` grants an exemption to a path that was never allowed')
@@ -1304,7 +1307,16 @@ if (FIXTURE_SOURCE_MNT === null) {
   // would remove, so the ordering assertion cannot pass vacuously on a gate whose
   // anchor line is gone.
   const ownershipText = helperOwnershipScript(HELPER_PATH)
-  const gateBody = ownershipText.slice(0, ownershipText.lastIndexOf('echo "$ok"'))
+  // The anchor's presence is asserted, not assumed: `lastIndexOf` answers -1 when
+  // 'echo "$ok"' is gone, and `slice(0, -1)` then returns the WHOLE script minus its last
+  // character — so the rows below would judge an ordering against a body that is not the
+  // gate, and report a length matching no gate at all.
+  const gateEnd = ownershipText.lastIndexOf('echo "$ok"')
+  check('the ownership gate body is delimited by the helper\'s own answer',
+    gateEnd > 0, `'echo "$ok"' sits at index ${gateEnd} in the helper text`)
+  // Falling back to the WHOLE text (not to '') keeps the ordering row below FAILING rather
+  // than passing vacuously when the anchor is gone; this row is that failure's diagnosis.
+  const gateBody = gateEnd > 0 ? ownershipText.slice(0, gateEnd) : ownershipText
   const selectionText = helperSelectionScript(HELPER_PATH)
   const sudoAt = selectionText.indexOf('sudo -n')
   check('the ownership gate never invokes sudo (its answer holds under a narrowed grant)',

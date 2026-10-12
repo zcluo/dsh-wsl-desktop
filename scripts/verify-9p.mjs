@@ -22,7 +22,7 @@
  */
 
 import { mkdir, writeFile, link, rename, realpath, stat, rm, readFile, readdir, copyFile, chmod, constants } from 'node:fs/promises'
-import { realpathSync } from 'node:fs'
+import { realpathSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { canonicalHostPath, isUnderHost } from '../lib/wsl/fence.js'
@@ -533,20 +533,28 @@ const LINK_CHECKS = {
  * handler would replace the suite's verdict, so this never throws — but a
  * leftover is not silent either.
  */
-function removeLinkFixture() {
+function removeFixtures() {
   try {
     execFileSync('wsl.exe', ['-d', distro, '-e', 'rm', '-rf', linkScratchLinux], { timeout: WSL_TIMEOUT_MS })
   } catch (error) {
     console.error(`verify-9p: the symlink fixture could not be removed: ${linkScratch} (${error?.code ?? error?.status ?? String(error)})`)
   }
+  // The probe root goes through the Windows side (that is how the suite removes it at the
+  // end, and it is why the handler looked unnecessary). It is not: "an operator could
+  // delete it by hand" is not the standard the other fixtures are held to, and a Ctrl-C
+  // stranded it just the same. On the normal path this is a no-op — the tree is gone.
+  try {
+    rmSync(root, { recursive: true, force: true })
+  } catch (error) {
+    console.error(`verify-9p: the probe root could not be removed: ${root} (${error?.code ?? String(error)})`)
+  }
 }
-// Node does not emit 'exit' when it dies from a signal, and this fixture cannot
-// be removed from the Windows side at all, so it gets the handlers the plain
-// probe root does not need (the shape verify-fs-fence.mjs uses).
-process.on('exit', removeLinkFixture)
+// Node does not emit 'exit' when it dies from a signal, so the handlers cover BOTH
+// scratch trees this suite owns (the shape verify-fs-fence.mjs uses).
+process.on('exit', removeFixtures)
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.on(signal, () => {
-    removeLinkFixture()
+    removeFixtures()
     process.exit(code)
   })
 }
@@ -773,7 +781,7 @@ try {
 
 // The fixture is removed through the distribution: a Linux symlink entry cannot
 // be removed from the Windows side at all (see the P1 fixture above).
-removeLinkFixture()
+removeFixtures()
 
 await rm(root, { recursive: true, force: true })
 // The exit code is the aggregate's only view of this suite: 2 is a SKIP (a fact
