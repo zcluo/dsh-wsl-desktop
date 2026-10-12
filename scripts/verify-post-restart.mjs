@@ -26,7 +26,13 @@ import { detailText } from './detail.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
-const baseUrl = process.argv[2] ?? 'http://127.0.0.1:19387'
+// The harness exports DSH_WEB_URL for the host it just started, and `verify-all --live`
+// runs this suite with NO argv (its spawnSync inherits the environment). Reading only
+// argv[2] meant the live mode was structurally broken after every restart: DSH's web port
+// CHANGES each time, so the list fell back to the hardcoded 19387 and every live suite
+// reported a connection refusal against a port nothing serves. The environment knows the
+// answer; guessing is what made the documented --live workflow unusable.
+const baseUrl = process.argv[2] ?? process.env.DSH_WEB_URL ?? 'http://127.0.0.1:19387'
 const distro = resolveDistro(process.argv[3])
 const home = resolveLinuxHome(distro)
 const endpoint = `${baseUrl}/wsl-desktop/api`

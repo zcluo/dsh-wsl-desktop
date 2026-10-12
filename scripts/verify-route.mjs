@@ -37,7 +37,13 @@ import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
 import { resolveDistro } from './env.mjs'
 import { makeChecker } from './suite-shell.mjs'
 
-const baseUrl = process.argv[2] ?? 'http://127.0.0.1:19387'
+// The harness exports DSH_WEB_URL for the host it just started, and `verify-all --live`
+// runs this suite with NO argv (its spawnSync inherits the environment). Reading only
+// argv[2] meant the live mode was structurally broken after every restart: DSH's web port
+// CHANGES each time, so the list fell back to the hardcoded 19387 and every live suite
+// reported a connection refusal against a port nothing serves. The environment knows the
+// answer; guessing is what made the documented --live workflow unusable.
+const baseUrl = process.argv[2] ?? process.env.DSH_WEB_URL ?? 'http://127.0.0.1:19387'
 const endpoint = `${baseUrl}/wsl-desktop/api`
 // The side-effect probe needs a share this distribution actually exposes; a
 // hardcoded name would make the load-bearing "it did not run" assertion check
