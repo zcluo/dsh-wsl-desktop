@@ -121,7 +121,7 @@ async function scenario({ link, runs = 1, patch }) {
       '    dependencies:',
       '      dsh-wsl-desktop:',
       `        specifier: link:${spelled}`,
-      '        version: link:plugins/dsh-wsl-desktop-0001',
+      '        version: link:plugins/${spelled.split('/').pop()}',
       '',
     ].join('\n'), 'utf8')
     if (link !== 'unlinked') {

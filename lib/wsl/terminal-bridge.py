@@ -200,7 +200,12 @@ class Bridge:
     def activity(self):
         """Report busy when the foreground group is not the shell itself."""
         pgrp = self.foreground_pgrp()
-        state = "unknown" if pgrp is None else ("idle" if pgrp == self.shell_pgrp else "busy")
+        if pgrp is None:
+            state = "unknown"
+        elif pgrp == self.shell_pgrp:
+            state = "idle"
+        else:
+            state = "busy"
         if state != self.last_state:
             self.last_state = state
             self.revision += 1

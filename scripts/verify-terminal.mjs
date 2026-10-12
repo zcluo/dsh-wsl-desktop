@@ -122,8 +122,11 @@ const SPAWN_DOSE = 6
  * @returns {Promise<{announce: object|undefined, exit: number|null, diagnostics: string[]}>} the announce reply, the session's exit code, and its own stderr.
  */
 async function announceOnce(prefix = []) {
-  const fifo = `/tmp/dsh-pty-${randomUUID().slice(0, 8)}.fifo`
-  const child = spawn('wsl.exe', [...base, ...prefix, 'python3', '-c', bridgeSource, fifo, '80', '24', '/bin/true'], {
+  // Named away from the module-level `fifo` on purpose: that one belongs to the
+  // long-lived session, and a shadowing local made an edit here able to address the
+  // wrong control channel.
+  const sessionFifo = `/tmp/dsh-pty-${randomUUID().slice(0, 8)}.fifo`
+  const child = spawn('wsl.exe', [...base, ...prefix, 'python3', '-c', bridgeSource, sessionFifo, '80', '24', '/bin/true'], {
     cwd: windowsCwd, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
   })
   let announce

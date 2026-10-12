@@ -780,7 +780,10 @@ await rm(root, { recursive: true, force: true })
 // that could not be measured here), which `verify-all` shows as SKIP rather than
 // as a pass — the same contract `verify-fs-fence.mjs` uses for its own skips.
 if (failures > 0) {
-  console.log(`\n${failures} PRIMITIVE(S) DIFFER FROM THE ASSUMED PROFILE${skipped === 0 && skippedChecks === 0 ? '' : `, AND ${skipped} SHARE FACT(S) WERE NOT MEASURED${skippedChecks === 0 ? '' : ` AND ${skippedChecks} CHECK(S) WERE NOT EVALUATED`} (see the SKIP above)`}`)
+  const factsPart = skipped === 0 && skippedChecks === 0 ? '' : `, AND ${skipped} SHARE FACT(S) WERE NOT MEASURED`
+  const checksPart = skippedChecks === 0 ? '' : ` AND ${skippedChecks} CHECK(S) WERE NOT EVALUATED`
+  const seeSkipPart = skipped === 0 && skippedChecks === 0 ? '' : ' (see the SKIP above)'
+  console.log(`\n${failures} PRIMITIVE(S) DIFFER FROM THE ASSUMED PROFILE${factsPart}${checksPart}${seeSkipPart}`)
 } else if (skipped > 0 || skippedChecks > 0) {
   console.log(`\nTHE PROFILE MATCHES WHAT THE PROVIDER ASSUMES, BUT ${skipped} SHARE FACT(S) WERE NOT MEASURED${skippedChecks === 0 ? '' : ` AND ${skippedChecks} CHECK(S) WERE NOT EVALUATED`} — exit 2, so verify-all reports this suite as SKIP`)
 } else {
