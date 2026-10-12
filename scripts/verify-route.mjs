@@ -195,7 +195,18 @@ const token = await ensureDevToken()
 // same function `resolveLocation` falls back to, so this reads the running handler's own answer
 // rather than a second guess at it. A null answer cannot be waved through — the default-world
 // checks would then read a share nothing writes to — so it carries its own check.
-const defaultAnswer = await post({ method: 'defaultDistro', params: {} }, { token })
+// Guarded, because this is the call that establishes a host exists at all: an unreachable
+// desktop used to throw out of the suite BEFORE any check printed — no FAIL, no remedy
+// (verify-post-restart's first live call is guarded for the same reason). Nothing below can
+// be measured without a host, so this reports and stops.
+let defaultAnswer
+try {
+  defaultAnswer = await post({ method: 'defaultDistro', params: {} }, { token })
+} catch (error) {
+  check('the route is reachable', false,
+    `POST ${baseUrl} failed: ${error?.message ?? error} — start DSH Desktop and re-run, or pass the running host URL as argv[2]`)
+  process.exit(1)
+}
 const defaultDistroName = typeof defaultAnswer.json?.value?.distro === 'string' ? defaultAnswer.json.value.distro : null
 check('the route reports the default world an unnamed probe resolves to (the checks below read it)',
   defaultDistroName !== null, `${defaultAnswer.status} ${defaultAnswer.text.slice(0, 120)}`)

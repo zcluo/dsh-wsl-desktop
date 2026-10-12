@@ -97,7 +97,7 @@ function send(res, status, payload) {
   res.end(body)
 }
 
-const server = createServer(async (req, res) => {
+async function handleRequest(req, res) {
   if (new URL(req.url, 'http://x').pathname !== '/wsl-desktop/api') {
     res.writeHead(404)
     res.end()
@@ -148,6 +148,28 @@ const server = createServer(async (req, res) => {
     return
   }
   send(res, 200, { ok: true, value: await run(envelope.params ?? {}) })
+}
+
+// A non-async callback that FORWARDS the rejection: an async listener's rejection is an
+// UNHANDLED rejection, so the mock used to die instead of answering — a client that
+// aborted mid-body was enough to trigger it, and a throwing method never reached a
+// response at all.
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch((error) => {
+    try {
+      send(res, 500, { ok: false, code: 'mock-failure', error: String(error?.message ?? error) })
+    } catch {
+      // The response is already gone; nothing left to answer.
+    }
+  })
+})
+
+// A port already in use is the documented explicit-port case; without this handler it
+// surfaced as an uncaught 'error' event and a stack trace instead of a sentence.
+server.on('error', (error) => {
+  const detail = error?.code === 'EADDRINUSE' ? `port ${port} is already in use` : String(error?.message ?? error)
+  console.error(`mock route host: ${detail}`)
+  process.exit(1)
 })
 
 server.listen(Number(port), '127.0.0.1', () => {

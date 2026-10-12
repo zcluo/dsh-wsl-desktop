@@ -95,7 +95,11 @@ check('the preset generation succeeded', status.status === 'ready', JSON.stringi
 check('the host exposes the 0.1.7 registry surface', status.hostCompat?.registry07 === true, status.hostCompat)
 if (status.status === 'ready') {
   check('at least one WSL preset was written', Array.isArray(status.written) && status.written.length > 0, status.written)
-  console.log(`        ${status.written.map((entry) => `${entry.id} (from ${entry.from}; removed ${entry.removed.join(',') || 'none'})`).join('\n        ')}`)
+  // Guarded, not assumed: the row above admits a non-array `written`, and mapping it
+  // anyway threw a TypeError that suppressed the FAIL it had just printed.
+  if (Array.isArray(status.written)) {
+    console.log(`        ${status.written.map((entry) => `${entry.id} (from ${entry.from}; removed ${entry.removed.join(',') || 'none'})`).join('\n        ')}`)
+  }
   // A row the transform kept WITHOUT a classifier verdict is the leak shape: the
   // removal rule is a closed list, so an upstream tool row this plugin has never
   // seen is copied into the WSL variant in silence — no removal, no report, every
@@ -457,10 +461,22 @@ if (clientEntry !== null) {
   // 0.1.7's graph entries may carry a path without the leading slash; the
   // joined URL must not lose the separator between origin and path.
   const bundlePath = clientEntry.url.startsWith('/') ? clientEntry.url : `/${clientEntry.url}`
-  const bundleResponse = await fetch(`${baseUrl}${bundlePath}`)
-  const bundle = await bundleResponse.text()
+  // Caught, not left to the runtime: this fetch is the only pair of awaits in the file
+  // without a guard, and a refused request used to kill the run with a stack trace —
+  // skipping the failure summary and the pending manual steps with it.
+  let bundleStatus = 0
+  let bundle = ''
+  let fetchProblem = ''
+  try {
+    const bundleResponse = await fetch(`${baseUrl}${bundlePath}`)
+    bundleStatus = bundleResponse.status
+    bundle = await bundleResponse.text()
+  } catch (error) {
+    fetchProblem = String(error?.message ?? error)
+  }
   check('the served browser half is the current one',
-    bundleResponse.status === 200 && bundle.includes('TRIGGER_ICON_PATH'), `status=${bundleResponse.status} bytes=${bundle.length}`)
+    fetchProblem === '' && bundleStatus === 200 && bundle.includes('TRIGGER_ICON_PATH'),
+    fetchProblem !== '' ? `the fetch failed: ${fetchProblem}` : `status=${bundleStatus} bytes=${bundle.length}`)
   check('it attaches a companion button beside the shipped trigger', bundle.includes('.after(button)'))
   check('it leaves the shipped directory-flow hole to the deployment',
     !bundle.includes('slots.register') && !bundle.includes('priority: -10'))

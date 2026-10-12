@@ -7,6 +7,11 @@
  * it carries the given markers.
  *
  * Run: node scripts/inspect-live-client.mjs [marker ...]
+ *
+ * The host to read is `DSH_BASE_URL` (default http://127.0.0.1:19387, which is NOT the
+ * port a restarted DSH serves — read `$env:DSH_WEB_URL` and pass it). The two suites
+ * that read the same route take their base URL as argv[2], so this tool is the only
+ * place the default is spelled.
  */
 
 const baseUrl = process.env.DSH_BASE_URL ?? 'http://127.0.0.1:19387'
@@ -32,9 +37,17 @@ async function liveEntry() {
         const line = buffered.slice(0, end)
         buffered = buffered.slice(end + 1)
         if (!line.startsWith('data: ')) continue
-        const payload = JSON.parse(line.slice(6))
+        // Guarded like verify-post-restart's read of the same field: a truncated
+        // line or a graph entry that carries no `entries` used to crash the tool
+        // instead of reporting that the plugin is not in the served module graph.
+        let payload
+        try {
+          payload = JSON.parse(line.slice(6))
+        } catch {
+          continue
+        }
         if (payload.type !== 'graph') continue
-        return payload.graph.entries.find((entry) => entry.id === 'dsh-wsl-desktop') ?? null
+        return (payload.graph?.entries ?? []).find((entry) => entry.id === 'dsh-wsl-desktop') ?? null
       }
     }
   } finally {
