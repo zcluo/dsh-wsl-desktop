@@ -583,13 +583,25 @@ try {
 } catch {
   publicationCode = null
 }
+/**
+ * The two assertions the publication-sequence arm evaluates, named here so the SKIP
+ * below can say exactly what did not run (the house SKIP rule) and the tail can count
+ * them: the SKIP used to increment by ONE while the else branch evaluated TWO, so a
+ * reader could not size what went unmeasured and the tail under-reported it.
+ */
+const PUBLICATION_CHECKS = [
+  'the publication creates the target directory as a bare awaited step no guard can catch',
+  'the sequence that try guards is the staging one (staging dir, then a rename onto the target)',
+]
 if (publicationCode === null) {
   // A missing development checkout is REPORTED and the suite's exit code says so: a
   // green aggregate must not hide a pin that never ran (see the tail). A FAIL would
   // be wrong the other way — the sibling suites treat this same missing artifact as
   // exit 2, not as a red machine.
-  skipped += 1
+  skipped += PUBLICATION_CHECKS.length
   console.log(`  SKIP  the publication sequence is pinned structurally — ${publicationSource} not readable (set DSH_CHECKOUT, or place the harness checkout beside this repo)`)
+  console.log(`        NOT EVALUATED (${PUBLICATION_CHECKS.length} checks): ${PUBLICATION_CHECKS.map((label) => `"${label}"`).join('; ')}`)
+  console.log('        Remedy: set DSH_CHECKOUT to the harness checkout, or place it beside this repo, then re-run.')
 } else {
   const functionStart = publicationCode.indexOf('export async function writeFileAtomic(')
   const anchor = publicationCode.indexOf('const directory = dirname(absolutePath)')
@@ -623,7 +635,7 @@ if (publicationCode === null) {
   const beforeCreate = functionStart === -1 || createDirectory === -1 ? '' : publicationCode.slice(functionStart, createDirectory)
   const guarded = publicationCode.indexOf('try {', callEnd === -1 ? 0 : callEnd)
   const toNextTry = callEnd === -1 || guarded === -1 ? '' : publicationCode.slice(callEnd, guarded)
-  check('the publication creates the target directory as a bare awaited step no guard can catch',
+  check(PUBLICATION_CHECKS[0],
     functionStart !== -1 && anchor !== -1 && createDirectory !== -1 && callEnd !== -1 && guarded !== -1
       && anchor < createDirectory && callEnd < guarded
       && /await\s+$/.test(head)
@@ -640,7 +652,7 @@ if (publicationCode === null) {
   // reach those calls.
   const guardedEnd = guarded === -1 ? -1 : publicationCode.indexOf('\n}\n', guarded)
   const guardedBody = guarded === -1 || guardedEnd === -1 ? '' : publicationCode.slice(guarded, guardedEnd)
-  check('the sequence that try guards is the staging one (staging dir, then a rename onto the target)',
+  check(PUBLICATION_CHECKS[1],
     guardedBody.includes('mkdir(stagingDir, { mode: 0o700 })')
       && guardedBody.includes('await rename(tempPath, absolutePath)'),
     `guarded region ${guardedBody.length} chars at ${guarded} (${publicationSource})`)

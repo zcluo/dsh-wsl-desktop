@@ -98,7 +98,11 @@ for (const relative of PURE) {
   } else {
     try {
       const host = await import(pathToFileURL(join(pluginRoot, 'lib/index.js')).href)
-      check(HOST_HALF_CHECKS[0], true)
+      // A fact the import established, not a constant: `true` here was invisible to
+      // verify-all's always-PASS scanner (the label is an identifier, not a literal),
+      // so a refactor moving the import out of this try would have left it green
+      // forever. A namespace that loaded and exported nothing fails this row.
+      check(HOST_HALF_CHECKS[0], Object.keys(host).length > 0, { exports: Object.keys(host).slice(0, 8) })
       check(HOST_HALF_CHECKS[1],
         typeof host.name === 'string' && host.name.length > 0
           && typeof host.apply === 'function'

@@ -105,8 +105,16 @@ function runSuite(env, suite = suitePath) {
     killSignal: 'SIGKILL',
     env: childEnv,
   })
-  // A killed run settles as a null status; report it as a failure rather than as an absent code.
-  return { code: run.status ?? 1, out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
+  // A killed run settles as a null status. Report it as a failure AND say WHICH ending
+  // it was: collapsing every ending into `code: 1` let a child killed at the 300s
+  // ceiling satisfy the "exit 1 — the family still FAILS" row below without ever
+  // finishing (verify-confinement-skip.mjs's outcomeOf is the fuller form of this).
+  const { status, signal } = run
+  const error = run.error ?? null
+  const how = status !== null ? 'exited'
+    : error?.code === 'ETIMEDOUT' ? 'ceiling'
+      : signal !== null ? 'signalled' : 'unstarted'
+  return { code: status ?? 1, how, out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
 }
 
 /**
@@ -147,18 +155,35 @@ function skipLineOf(block) {
 /**
  * How many checks the child's tail must report as skipped.
  *
- * The family contributes four. Every OTHER skip the same run printed contributes exactly one
- * (the traversal fixture and the publication sequence each increment the suite's counter once),
- * and WHICH of them fired is a property of the machine — a missing harness checkout adds the
- * publication one — so the expectation is derived from the run instead of hardcoded. A
- * hardcoded count is what reddened the 9P pin on the owner's machine class.
+ * The family contributes four. Every OTHER skip the same run printed contributes the
+ * number IT names — not one apiece: the suite's `skip()` helper puts "N check(s) not
+ * evaluated" on the SKIP line itself, and the families that print a label list (the
+ * traversal fixture, 13; the publication sequence, 2) put "NOT EVALUATED (N checks)"
+ * on the line after it. Counting SKIP LINES as one each reddened this pin on any run
+ * where the traversal or publication family fired — a count reason, not a defect —
+ * and WHICH of them fired is a property of the machine, so the expectation is derived
+ * from the run instead of hardcoded. A hardcoded count is what reddened the 9P pin on
+ * the owner's machine class.
  * @param {string} out - the child's combined output.
  * @returns {number} the count the tail must name.
  */
 function expectedSkippedChecks(out) {
-  const otherSkips = out.split('\n').filter((entry) => entry.startsWith('  SKIP  ')
-    && !entry.includes(CROSS_DISTRO_FAMILY)).length
-  return Object.keys(CROSS_DISTRO_LABELS).length + otherSkips
+  const lines = out.split('\n')
+  let total = Object.keys(CROSS_DISTRO_LABELS).length
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (!line.startsWith('  SKIP  ') || line.includes(CROSS_DISTRO_FAMILY)) continue
+    const inline = /(\d+) check\(s\) not evaluated/.exec(line)
+    if (inline !== null) {
+      total += Number(inline[1])
+      continue
+    }
+    // Neither shape found: an unknown future SKIP. Counting it as one keeps the pin
+    // from over-reporting a family it does not understand.
+    const listed = /NOT EVALUATED \((\d+) checks?\)/.exec(lines[index + 1] ?? '')
+    total += listed === null ? 1 : Number(listed[1])
+  }
+  return total
 }
 
 /**
@@ -392,8 +417,8 @@ if (machineSecond.hasSecond && sharesShareTmpIdentity(machineSecond.other)) {
   const bindingRun = runSuite({}, bindingCopy.path)
   rmSync(bindingCopy.tree, { recursive: true, force: true })
   check('binding mutant: exit 1 — the family still FAILS when the fence stops refusing a foreign target',
-    bindingRun.code === 1,
-    `exit ${bindingRun.code}; the run's FAIL lines and its end:\n${failureLinesOf(bindingRun.out)}\n${tailOf(bindingRun.out)}`)
+    bindingRun.code === 1 && bindingRun.how === 'exited',
+    `exit ${bindingRun.code} (ending: ${bindingRun.how}); the run's FAIL lines and its end:\n${failureLinesOf(bindingRun.out)}\n${tailOf(bindingRun.out)}`)
   check('binding mutant: the binding-dependent assertion is printed as FAIL (it is not a constant)',
     bindingRun.out.includes(`  FAIL  ${CROSS_DISTRO_LABELS.sharedIdentity}`),
     failureLinesOf(bindingRun.out))

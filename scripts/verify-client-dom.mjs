@@ -31,11 +31,24 @@ const { check } = checker
 // jsdom comes from the harness checkout's dev dependencies. A missing
 // checkout is a SKIP (exit 2 — the contract verify-all documents), not a
 // failure: an unguarded load crashes with exit 1 and reads as a false FAIL.
+/**
+ * The sections this suite evaluates, named so the SKIP below can say WHICH assertions
+ * did not run instead of only why: a reader of the log has to be able to tell that the
+ * whole swap / weight / restore / observer-budget set went unmeasured, not merely that
+ * jsdom was missing.
+ */
+const SECTIONS = [
+  'collapsed rail (no room for a third icon)',
+  'inline search expanded (the shipped cluster hides itself)',
+  'a second control sharing the trigger geometry',
+  'a duplicate with no recognisable cluster',
+  'WSL workspace rows',
+]
 let JSDOM
 try {
   JSDOM = createRequire(join(checkout, 'package.json'))('jsdom').JSDOM
 } catch {
-  console.log('SKIP  jsdom unavailable (no harness checkout) — pass --checkout=… or set DSH_CHECKOUT')
+  console.log(`SKIP  every assertion in this suite (${SECTIONS.length} sections: ${SECTIONS.join('; ')}) — jsdom unavailable, no harness checkout; pass --checkout=… or set DSH_CHECKOUT`)
   process.exit(2)
 }
 const source = await readFile(clientPath, 'utf8')

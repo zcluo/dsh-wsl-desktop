@@ -10,6 +10,18 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_DIR="$REPO/tmp-probe/distro-matrix"
 
+# The fixture is GENERATED (scripts/generate-fence-fixture.mjs), not committed. With
+# no guard, running this before generating it makes docker create an EMPTY directory
+# at the mount point, and every family then reports FAIL (exit != 0) — a fence verdict
+# for a precondition that was never met. Exit 2, the SKIP code, and name the remedy.
+for required in fence-fixture.sh probe-tools.sh; do
+  if [ ! -f "$FIXTURE_DIR/$required" ]; then
+    echo "SKIP: $FIXTURE_DIR/$required is missing — generate the fixture first:" >&2
+    echo "      node scripts/generate-fence-fixture.mjs" >&2
+    exit 2
+  fi
+done
+
 IMAGES=(
   "debian:12|apt"
   "ubuntu:24.04|apt"

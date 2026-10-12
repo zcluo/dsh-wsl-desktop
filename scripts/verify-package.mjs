@@ -284,7 +284,10 @@ if (!npmUsable) {
         control.status === 0 && !/prepack/.test(control.stderr ?? '') && listed && existsSync(CACHE_FILE),
         `exit=${control.status} announced=${/prepack/.test(control.stderr ?? '')} listed=${listed} onDisk=${existsSync(CACHE_FILE)} paths=${JSON.stringify((controlPaths ?? []).filter((path) => path.endsWith('.pyc')))}`)
     } else {
-      check(PACK_CHECKS[5], false, `could not recreate ${CACHE_FILE} for the control`)
+      // PACK_CHECKS[6] is the control row; [5] is the plugin-icon row, which this
+      // failure used to redden a second time (after its own PASS) while leaving the
+      // control row never evaluated at all.
+      check(PACK_CHECKS[6], false, `could not recreate ${CACHE_FILE} for the control`)
     }
   } finally {
     // The fixture is this suite's own residue: the hook removes it on the way

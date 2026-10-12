@@ -30,7 +30,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { detailText } from './detail.mjs'
@@ -301,6 +301,21 @@ const DELIVERED_PAGES = [
   'sequence-session-create',
   'workflow-update-discipline',
 ]
+
+// The list above is hand-maintained and nothing used to prove it covers the
+// directory: a newly delivered page (docs/<name>.html plus its .visual-check.json)
+// would simply never be measured while this suite stayed green. Both directions are
+// asserted, because either alone leaves a hole — a receipt the list omits is
+// unmeasured evidence, and a listed name with no page is a stale entry.
+const committedReceipts = readdirSync(join(pluginRoot, 'docs'))
+  .filter((name) => name.endsWith('.visual-check.json'))
+  .map((name) => name.slice(0, -'.visual-check.json'.length))
+const unlistedReceipts = committedReceipts.filter((name) => !DELIVERED_PAGES.includes(name))
+const listedWithoutPage = DELIVERED_PAGES.filter((name) => !existsSync(join(pluginRoot, 'docs', `${name}.html`)))
+check('the delivered-page list covers every committed receipt, and every listed page exists',
+  unlistedReceipts.length === 0 && listedWithoutPage.length === 0,
+  { unlistedReceipts, listedWithoutPage, committedReceipts })
+
 const receiptsNotOk = []
 for (const name of DELIVERED_PAGES) {
   const pagePath = join(pluginRoot, 'docs', `${name}.html`)

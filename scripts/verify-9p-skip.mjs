@@ -110,7 +110,17 @@ function runProbe(env, probe = probePath) {
   })
   // A killed run settles as a null status; report it as a failure rather than as
   // an absent code.
-  return { code: run.status ?? 1, out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
+  // The ending travels with the code, not only the code: a child killed at the ceiling
+  // settles as a null status, and reporting that as a bare `1` would let a row that
+  // expects a failure be satisfied by a run that never finished. (No row here asserts
+  // code 1 today — expectedCode is 2 or 0 — so this is the latent half of the same
+  // defect verify-fs-fence-skip.mjs's section D carried.)
+  const { status, signal } = run
+  const error = run.error ?? null
+  const how = status !== null ? 'exited'
+    : error?.code === 'ETIMEDOUT' ? 'ceiling'
+      : signal !== null ? 'signalled' : 'unstarted'
+  return { code: status ?? 1, how, out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
 }
 
 /**
@@ -406,9 +416,16 @@ function assertFixtureSkipContent(run, machineSecond) {
     new RegExp(`(^| )${expectedFacts} SHARE FACT\\(S\\) WERE NOT MEASURED`).test(tail) && /4 CHECK\(S\) WERE NOT EVALUATED/.test(tail),
     tail || `(no line saying the facts were not measured); the run ends:\n${tailOf(run.out)}`)
   const factLines = run.out.split('\n').filter((entry) => entry.startsWith('  FACT    '))
-  check('fixture skip: the UNMEASURED fixture row is NOT counted among the recorded facts',
-    !factLines.some((entry) => entry.includes('a Linux symlink inside a fixture root'))
-      && run.out.includes('NOT measured (named in the SKIP above)'),
+  // The first clause here grepped the FACT lines for 'a Linux symlink inside a
+  // fixture root' — a string verify-9p.mjs never prints (its labels are 'realpath /
+  // read of the link …', 'a rename whose destination traverses the link', 'mkdir
+  // through the link …'), so `!factLines.some(...)` could never be false and the row
+  // asserted nothing about the count it was named for. A real cross-check needs the
+  // suite's own label list, which lives in verify-9p.mjs and cannot be imported
+  // (importing that file RUNS the suite) — so the row is narrowed to what it can
+  // measure from the run, and the label-list check is recorded as follow-up work.
+  check('fixture skip: the suite says the fixture row was NOT measured',
+    run.out.includes('NOT measured (named in the SKIP above)'),
     `${factLines.length} FACT line(s):\n${factLines.join('\n')}`)
 }
 

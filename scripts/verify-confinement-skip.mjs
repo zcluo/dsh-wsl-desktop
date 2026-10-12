@@ -372,14 +372,19 @@ function buildStalledProbeCopy(stripRepeat) {
     "  return await real.runWslShell(options)",
     "}",
   ].join('\n'), 'utf8')
+  let mutated = true
   if (stripRepeat) {
     const policy = join(tree, 'scripts', 'wsl-probe.mjs')
     const source = readFileSync(policy, 'utf8')
     const repeat = '  if (first.timedOut !== true) return first'
-    if (!source.includes(repeat)) throw new Error('the copy no longer carries the repeat; the stub must be updated')
-    writeFileSync(policy, source.replace(repeat, '  return first // PIN STUB: the repeat removed'), 'utf8')
+    // A STALE anchor is reported, not thrown: every other mutation builder in this
+    // file (and in the sibling pins) returns a `mutated` flag a check row reports, so
+    // a reworded repeat line prints the FAIL that names it instead of aborting the
+    // whole pin with a stack trace.
+    mutated = source.includes(repeat)
+    if (mutated) writeFileSync(policy, source.replace(repeat, '  return first // PIN STUB: the repeat removed'), 'utf8')
   }
-  return { suite: join(tree, 'scripts', 'verify-confinement.mjs'), tree }
+  return { suite: join(tree, 'scripts', 'verify-confinement.mjs'), tree, mutated }
 }
 
 /**
@@ -450,8 +455,16 @@ function assertDrivePathSkip(run) {
   check('drive-path-free run: the SKIP names the installed-helper drift check exactly when the helper runner was detected',
     skipText.includes(INSTALLED_HELPER_LABEL) === detectedHelper,
     `runner=${runnerMatch === null ? '(not reported)' : runnerMatch[1]} driftLabelNamed=${skipText.includes(INSTALLED_HELPER_LABEL)}`)
+  // The remedy requirement belongs to the drive-path FAMILY's own lines: the
+  // fixture-table SKIP is a DIFFERENT class (the one hostTempMountable measures) and
+  // carries its own remedy, so demanding this family's token of EVERY SKIP line
+  // reddened this pin on a host whose temp directory has no /mnt spelling — a correct
+  // run. The family's lines are the ones naming the family's labels, and
+  // `familyLines.length > 0` keeps the clause from passing vacuously.
+  const familyLines = skipLines.filter((line) => DRIVE_PATH_LABELS.some((label) => line.includes(label)))
   check('drive-path-free run: the SKIP names the precondition and the remedy',
-    skipLines.length > 0 && skipLines.every((line) => line.includes(PRECONDITION_TOKEN) && line.includes(REMEDY_TOKEN)),
+    skipLines.length > 0 && skipLines.every((line) => line.includes(PRECONDITION_TOKEN))
+      && familyLines.length > 0 && familyLines.every((line) => line.includes(REMEDY_TOKEN)),
     skipText || `(no "  SKIP  " line); the run ends:\n${tailOf(run.out)}`)
   check('drive-path-free run: every SKIP line counts exactly the labels it names',
     claims.length > 0 && claims.every((claim) => claim.count === claim.labels.length && claim.labels.length > 0),
@@ -643,6 +656,12 @@ if (!isInnerRun) {
       && !withPolicy.out.includes(`  FAIL  ${INSIDE_WRITE_LABEL}`),
     `exit ${withPolicy.code} (${withPolicy.how}); the stub's calls:\n${withStub.join('\n') || '(none)'}\nthe run's FAIL rows: ${failedRowNamesOf(withPolicy.out)}\n${tailOf(withPolicy.out)}`)
   const strippedCopy = buildStalledProbeCopy(true)
+  // The builder reports a stale anchor instead of throwing (see its `mutated`), so the
+  // row below is what names it: without this the pin would abort with a stack trace the
+  // moment scripts/wsl-probe.mjs's repeat line is reworded.
+  check('suite probes: the repeat mutation applied to the copy (a stale mutation must not pass silently)',
+    strippedCopy.mutated,
+    `the copy at ${join(strippedCopy.tree, 'scripts', 'wsl-probe.mjs')} still carries the repeat line the stub removes`)
   const withoutPolicy = runSuite({}, strippedCopy.suite)
   rmSync(strippedCopy.tree, { recursive: true, force: true })
   const strippedStub = withoutPolicy.out.split('\n').filter((entry) => entry.includes('PROBE STUB:')).map((entry) => entry.trim())

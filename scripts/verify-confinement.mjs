@@ -18,6 +18,7 @@
  * Run: node scripts/verify-confinement.mjs [distro]
  */
 
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -71,7 +72,7 @@ const run = (options) => runWslShell(options)
  * @returns {string} its first non-empty line, trimmed.
  */
 const firstLine = (text) => String(text ?? '').trim().split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
-// The runner THIS suite's own probes get (docs/CONFINEMENT.md:36 — 探针超时 60s + 超时后一次透明重试).
+// The runner THIS suite's own probes get (docs/CONFINEMENT.md:34 — 探针超时 60s + 超时后一次透明重试).
 // Every `wsl.exe` call below goes through it except the two inside `fixtureAnswer`/
 // `fixtureVersion`, which already carry their own 60s ceiling and their own documented repeat.
 // A REFUSAL is an immediate answer, never a timeout, so the repeat cannot turn one into a pass;
@@ -485,7 +486,7 @@ if (typeof detectNoNewPrivs !== 'function' || typeof noNewPrivsRefusal !== 'func
   // setup-failure marker (exit 97): the helper has no pre-flight for the flag at all — it
   // execs `setpriv --no-new-privs` unconditionally (dsh-wsl-confine.sh) — and setpriv
   // rejects the unknown option with an ordinary exit 1, so the command simply does not run.
-  // docs/CONFINEMENT.md:33 records that measured exit 1; a message repeating the old "exit 97"
+  // docs/CONFINEMENT.md:31 records that measured exit 1; a message repeating the old "exit 97"
   // framing would describe a classification the runner never makes. Only a newer
   // util-linux is a remedy, so the text must name it, must state what the helper really
   // does, and must NOT tell the operator to install it.
@@ -1036,6 +1037,40 @@ console.log('\nthe helper selection gate, measured against fixtures the session 
 // not (the precondition the drive-path checks above skip on). The host tree and
 // the fixture trees are removed in the same run.
 const FIXTURE_SOURCE_DIR = mkdtempSync(join(tmpdir(), 'dsh-wsl-helper-fixtures-'))
+
+/**
+ * The safety net for every fixture this section creates.
+ *
+ * The two cleanups at the end of this file — the local temp dir and the trees inside
+ * the distribution — are reachable only by falling off the end: the suite has no
+ * top-level try/finally (its own comment says so), so a throw in between strands them,
+ * and the unguarded `runWslShell` calls inside fixtureAnswer/fixtureVersion can reject
+ * exactly while the fixture trees are live.
+ *
+ * Registered HERE, before the first fixture exists, not beside FIXTURE_CLEANUP further
+ * down: a handler registered after the throw point never runs (measured — the first cut
+ * of this net sat below the fixture setup and the forced-throw proof found the temp dir
+ * still on disk). FIXTURE_CLEANUP is read at EXIT time, so its own declaration may not
+ * have run yet; that reference is inside the try for exactly that reason, and the local
+ * removal happens before it either way. An exit handler cannot await, so the
+ * in-distribution removal goes through a bounded execFileSync; both steps are
+ * best-effort by construction, because the process is already leaving.
+ */
+let fixturesCleaned = false
+process.on('exit', () => {
+  if (fixturesCleaned) return
+  try {
+    rmSync(FIXTURE_SOURCE_DIR, { recursive: true, force: true })
+  } catch {
+    // Best effort: nothing left to do about it here.
+  }
+  try {
+    execFileSync('wsl.exe', ['-d', distro, '-e', 'bash', '-c', FIXTURE_CLEANUP], { timeout: 20_000, stdio: 'ignore' })
+  } catch {
+    // Best effort: the distribution may be unreachable, the grant may refuse, or the
+    // cleanup command's own declaration may not have been reached.
+  }
+})
 const FIXTURE_SOURCE_HOST = join(FIXTURE_SOURCE_DIR, 'dsh-wsl-confine.sh')
 writeFileSync(FIXTURE_SOURCE_HOST, helperSource)
 const FIXTURE_SOURCE_MNT = windowsToMntPath(FIXTURE_SOURCE_HOST)
@@ -1287,6 +1322,8 @@ rmSync(FIXTURE_SOURCE_DIR, { recursive: true, force: true })
 // carry spaces and ERE metacharacters — which is the point of the sections
 // above — so an unquoted rm would either miss them or be re-parsed.
 await probe({ distro, linuxCwd: '/', command: `rm -rf ${shellQuote(probeRoot)} ${shellQuote(spacedRoot)} ${shellQuote(metaRoot)} ${shellQuote(forbiddenPath)} /tmp/dsh-wsl-tmp-${runSuffix}.txt` })
+// The normal path got here, so the exit handler above has nothing to add.
+fixturesCleaned = true
 // A skip is a check that did not run, and reporting it as a pass would make this
 // suite's green meaningless exactly where the shipped helper is the subject: exit
 // 2 is what verify-all renders as SKIP (the sibling suites' ruling, applied here).

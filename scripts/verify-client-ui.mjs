@@ -76,7 +76,10 @@ check('injects the services the picker reads',
 const reads = [...new Set([...code.matchAll(/ctx\.([A-Za-z][A-Za-z0-9]*)/g)].map((match) => match[1]))]
   .filter((name) => !NON_SERVICE_MEMBERS.includes(name))
 check('reads no service it did not inject',
-  reads.every((name) => injected.includes(name)),
+  // `reads.length > 0` first: `[].every(...)` is true, so without it a client that
+  // stopped reading any ctx. service would turn this row green while measuring
+  // nothing — the sibling row three lines up guards exactly this way.
+  reads.length > 0 && reads.every((name) => injected.includes(name)),
   `reads=[${reads.join(', ')}] inject=[${injected.join(', ')}]`)
 
 check('releases the dialog and observer on dispose',

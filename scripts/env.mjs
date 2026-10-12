@@ -20,6 +20,21 @@ import { execFileSync } from 'node:child_process'
 const FALLBACK_DISTRO = 'debian'
 
 /**
+ * A spelled value, when it spells something.
+ *
+ * The override tests used to be `!== undefined`, which is the wrong question:
+ * `DSH_WSL_USER=` (an empty value, which a shell or a CI variable produces easily)
+ * IS defined, so it was returned as the login name and `resolveLinuxHome` then built
+ * the literal `/home/` — a home that cannot exist. An empty spelling means "not
+ * set", which is what the fallback and the probe are for.
+ * @param {string|undefined} value - a spelled value.
+ * @returns {string|undefined} the value when it is non-empty, else undefined.
+ */
+function nonEmpty(value) {
+  return value === undefined || value === '' ? undefined : value
+}
+
+/**
  * Ceiling for the user probe, and how many times it is attempted.
  *
  * The ceiling is mandatory: this probe sits on the critical path of nearly every
@@ -45,7 +60,7 @@ const PROBE_ATTEMPTS = 2
  * @returns {string} the distribution name.
  */
 export function resolveDistro(argument) {
-  return argument ?? process.env.DSH_WSL_DISTRO ?? FALLBACK_DISTRO
+  return nonEmpty(argument) ?? nonEmpty(process.env.DSH_WSL_DISTRO) ?? FALLBACK_DISTRO
 }
 
 /**
@@ -54,7 +69,8 @@ export function resolveDistro(argument) {
  * @returns {string} the login name reported inside that distribution.
  */
 export function resolveLinuxUser(distro = resolveDistro()) {
-  if (process.env.DSH_WSL_USER !== undefined) return process.env.DSH_WSL_USER
+  const override = nonEmpty(process.env.DSH_WSL_USER)
+  if (override !== undefined) return override
   // A ceiling is mandatory: this probe sits on the critical path of nearly
   // every suite, and wsl.exe is exactly the call a cold VM start can hang.
   //
@@ -89,7 +105,8 @@ export function resolveLinuxUser(distro = resolveDistro()) {
  * @returns {string} an absolute Linux path.
  */
 export function resolveLinuxHome(distro) {
-  if (process.env.DSH_WSL_HOME !== undefined) return process.env.DSH_WSL_HOME
+  const override = nonEmpty(process.env.DSH_WSL_HOME)
+  if (override !== undefined) return override
   return `/home/${resolveLinuxUser(distro)}`
 }
 
@@ -126,6 +143,13 @@ export function listDistros() {
  * @returns {string|undefined} another installed distribution's name, or undefined when there is none.
  */
 export function resolveOtherDistro(distro = resolveDistro()) {
+  // `!== undefined` HERE, unlike the three overrides above, and the difference is
+  // deliberate: an explicitly EMPTY DSH_WSL_OTHER_DISTRO means "this machine has no
+  // second share", and the suites report that as a SKIP naming the family and the
+  // missing precondition (verify-9p.mjs's otherProblem branch, pinned by
+  // verify-fs-fence-skip.mjs's "empty override" section). Folding an empty value back
+  // into the probe would find SOME second distribution and silently measure a share
+  // the operator said they did not have.
   if (process.env.DSH_WSL_OTHER_DISTRO !== undefined) return process.env.DSH_WSL_OTHER_DISTRO
   return listDistros().find((name) => name.toLowerCase() !== distro.toLowerCase())
 }
