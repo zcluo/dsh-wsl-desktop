@@ -17,6 +17,11 @@ import { spawnWslTerminal } from '../lib/wsl/pty.js'
 import { planWsl, runWslShell } from '../lib/wsl/world.js'
 import { shellQuote } from '../lib/wsl/paths.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
+import { makeChecker } from './suite-shell.mjs'
+// Still needed: the probe loop's catch reports `probe failed: ${detailText(error)}`. The
+// suite-wide check() no longer renders detail itself (the factory owns that), but this
+// one call site does, and losing this import would turn a reported probe failure into a
+// ReferenceError on the very path that exists to report it.
 import { detailText } from './detail.mjs'
 import { blankLiterals } from './source-text.mjs'
 
@@ -24,18 +29,8 @@ const distro = resolveDistro(process.argv[2])
 const here = dirname(fileURLToPath(import.meta.url))
 const bridgeSource = await readFile(join(here, '..', 'lib', 'wsl', 'terminal-bridge.py'), 'utf8')
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS' })
+const { check } = checker
 
 /**
  * A minimal stand-in for the host subprocess provider, shaped like the seam.
@@ -521,5 +516,5 @@ for (const path of leftoverFifos) {
   await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
 }
 for (const entry of fifoChildren) { try { entry.child.kill() } catch { /* already gone */ } }
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
+process.exitCode = checker.failures === 0 ? 0 : 1

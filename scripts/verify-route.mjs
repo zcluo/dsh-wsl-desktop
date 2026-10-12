@@ -35,7 +35,7 @@ import {
 } from '../lib/http-admission.js'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
 import { resolveDistro } from './env.mjs'
-import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const baseUrl = process.argv[2] ?? 'http://127.0.0.1:19387'
 const endpoint = `${baseUrl}/wsl-desktop/api`
@@ -45,18 +45,8 @@ const endpoint = `${baseUrl}/wsl-desktop/api`
 const distro = resolveDistro()
 const shareRoot = `\\\\wsl.localhost\\${distro}`
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS' })
+const { check } = checker
 
 /**
  * Wait, briefly, for a share to report a path.
@@ -319,5 +309,5 @@ const oversized = await post({ method: 'listDistros', params: {} }, {
 })
 check('an oversized body answers 413', oversized.status === 413, oversized.status)
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
+process.exitCode = checker.failures === 0 ? 0 : 1

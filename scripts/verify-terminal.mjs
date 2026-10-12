@@ -16,24 +16,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { resolveDistro } from './env.mjs'
-import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const distro = resolveDistro(process.argv[2])
 const here = dirname(fileURLToPath(import.meta.url))
 const bridgeSource = await readFile(join(here, '..', 'lib', 'wsl', 'terminal-bridge.py'), 'utf8')
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS' })
+const { check } = checker
 
 /** Wait until a predicate holds or the deadline passes. */
 async function until(predicate, timeoutMs = 15_000) {
@@ -532,5 +522,5 @@ check('a terminated session reports the signal, not a clean exit',
 reap()
 await settled
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
+process.exitCode = checker.failures === 0 ? 0 : 1
