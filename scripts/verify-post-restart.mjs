@@ -22,7 +22,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
-import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
@@ -40,19 +40,10 @@ const endpoint = `${baseUrl}/wsl-desktop/api`
 // fences behind the transport check plus this token.
 const token = await ensureDevToken()
 
-let failures = 0
+const checker = makeChecker({ pass: 'PASS' })
+const { check } = checker
 let pending = 0
 
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
 
 /**
  * Mark a check that needs a human step.
@@ -511,5 +502,5 @@ console.log('        Everything else — the session bound to a WSL preset, bash
 console.log('        distribution, the tool layer\'s confinement, and the Windows world staying unchanged —')
 console.log('        is asserted automatically above.')
 
-console.log(`\n${failures === 0 ? 'NO AUTOMATED FAILURES' : `${failures} CHECK(S) FAILED`}; ${pending} manual step(s) pending`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'NO AUTOMATED FAILURES' : `${checker.failures} CHECK(S) FAILED`}; ${pending} manual step(s) pending`)
+process.exitCode = checker.failures === 0 ? 0 : 1

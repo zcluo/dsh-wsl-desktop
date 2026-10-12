@@ -44,24 +44,14 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
 
-let failures = 0
-let skipped = 0
+const checker = makeChecker({ pass: 'PASS' })
+const { check } = checker
 
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
 
 /**
  * Record checks that could not run here, and count them.
@@ -76,7 +66,7 @@ function check(label, ok, detail) {
  * @param {string} remedy - what the operator can do about it.
  */
 function skip(labels, precondition, remedy) {
-  skipped += labels.length
+  checker.skip(labels.length)
   console.log(`  SKIP  ${labels.join('; ')} — ${labels.length} check(s) not evaluated, ${precondition}; ${remedy}`)
 }
 
@@ -300,7 +290,7 @@ if (!npmUsable) {
 // A skip is a check that did not run, and reporting it as a pass would make this
 // suite's green meaningless exactly where the artifact is the subject: exit 2 is
 // what verify-all renders as SKIP (the sibling suites' ruling, applied here).
-if (failures > 0) console.log(`\n${failures} CHECK(S) FAILED${skipped === 0 ? '' : `, ${skipped} CHECK(S) SKIPPED`}`)
-else if (skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+if (checker.failures > 0) console.log(`\n${checker.failures} CHECK(S) FAILED${checker.skipped === 0 ? '' : `, ${checker.skipped} CHECK(S) SKIPPED`}`)
+else if (checker.skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
 else console.log('\nALL CHECKS PASSED')
-process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0
+process.exitCode = checker.failures > 0 ? 1 : checker.skipped > 0 ? 2 : 0

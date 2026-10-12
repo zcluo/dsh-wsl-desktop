@@ -25,13 +25,13 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
 
-let failures = 0
-let skipped = 0
+const checker = makeChecker({ pass: 'PASS' })
+const { check } = checker
 
 /** The two assertions the host-half import below performs — the skip COUNT is derived from it. */
 const HOST_HALF_CHECKS = [
@@ -39,16 +39,6 @@ const HOST_HALF_CHECKS = [
   'the plugin exposes the host contract',
 ]
 
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
 
 /** Modules that import nothing from the harness, so the source tree can load them. */
 const PURE = ['lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/publish.js', 'lib/http-admission.js']
@@ -93,7 +83,7 @@ for (const relative of PURE) {
   // never PASS) and the tail below stops the suite from calling itself green.
   const deps = process.env.DSH_WSL_DEPS ?? join(pluginRoot, 'node_modules')
   if (!existsSync(deps)) {
-    skipped += HOST_HALF_CHECKS.length
+    checker.skip(HOST_HALF_CHECKS.length)
     console.log(`  SKIP  the host-half import — ${HOST_HALF_CHECKS.length} check(s) not evaluated, no dependencies at ${deps}; link the host node_modules there, or set DSH_WSL_DEPS`)
   } else {
     try {
@@ -423,7 +413,7 @@ for (const relative of ALL) {
 // A skip is a check that did not run, and reporting it as a pass would make this
 // suite's green meaningless exactly where the import is the subject: exit 2 is
 // what verify-all renders as SKIP (the sibling suites' ruling, applied here).
-if (failures > 0) console.log(`\n${failures} CHECK(S) FAILED${skipped === 0 ? '' : `, ${skipped} CHECK(S) SKIPPED`}`)
-else if (skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+if (checker.failures > 0) console.log(`\n${checker.failures} CHECK(S) FAILED${checker.skipped === 0 ? '' : `, ${checker.skipped} CHECK(S) SKIPPED`}`)
+else if (checker.skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
 else console.log('\nALL CHECKS PASSED')
-process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0
+process.exitCode = checker.failures > 0 ? 1 : checker.skipped > 0 ? 2 : 0
