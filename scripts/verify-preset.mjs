@@ -6,16 +6,15 @@
  * relative-name rewrite, the wsl-world isolate group).
  * Run: node scripts/verify-preset.mjs
  */
+import { makeChecker } from './suite-shell.mjs'
+import { detailText } from './detail.mjs'
 import { buildVariantPlugins, buildWorldGroup, hasClassifierVerdict, isHostWorldModule, isToolFamilyModule, VERDICTED_KEPT_MODULES, WORLD_MODULE_NAMES, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
 
-let passed = 0
-let failed = 0
-function check(name, condition, detail) {
-  if (condition) { passed += 1; console.log(`  PASS  ${name}`); return }
-  failed += 1
-  console.log(`  FAIL  ${name}`)
-  if (detail !== undefined) console.log(`        ${JSON.stringify(detail).slice(0, 300)}`)
-}
+const checker = makeChecker({
+  pass: 'PASS',
+  detail: (value) => detailText(value).slice(0, 300),
+})
+const { check } = checker
 
 const MODULES = {
   subprocessPath: 'file:///live/lib/wsl/subprocess.js',
@@ -246,5 +245,5 @@ console.log('\nworld rows constant')
 check('world rows exclude the WSL tool ids', !WORLD_ROWS.has('tool-bash-wsl') && WORLD_ROWS.has('tool-pwsh'))
 check('persona sentence names the UNC spelling', WSL_PERSONA_SENTENCE.includes('wsl.localhost'))
 
-console.log(`\n${passed} passed, ${failed} failed`)
-process.exit(failed === 0 ? 0 : 1)
+console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
+process.exit(checker.failures === 0 ? 0 : 1)

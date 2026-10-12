@@ -36,6 +36,7 @@
 
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { makeChecker } from './suite-shell.mjs'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -65,21 +66,8 @@ const ARTIFACT_TOKEN = /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:mjs|cjs|js|ts
 // Whitespace and both the ASCII and the full-width marks a sentence can put after a name.
 const DELIMITERS = /[\s|()\x22\x27\x60,;:：；，、。！？（）［］【】「」『』“”‘’]+/
 
-let failures = 0
-let checks = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was asserted.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - context shown on failure.
- */
-function check(label, ok, detail) {
-  checks += 1
-  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}`)
-  if (!ok && detail !== undefined) console.log(`        ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker()
+const { check } = checker
 
 /**
  * Canonicalize a named artifact so that a document's two language editions share one identity.
@@ -165,5 +153,5 @@ for (const [left, right] of DOC_PAIRS) {
     + (undecidable.length === 0 ? '' : ` — undecidable basename(s): ${undecidable.join('; ')}`))
 }
 
-console.log(`\n${failures === 0 ? `${checks} pair(s) in parity` : `${failures} check(s) failed`}`)
-process.exit(failures > 0 ? 1 : 0)
+console.log(`\n${checker.failures === 0 ? `${checker.checks} pair(s) in parity` : `${checker.failures} check(s) failed`}`)
+process.exit(checker.failures > 0 ? 1 : 0)

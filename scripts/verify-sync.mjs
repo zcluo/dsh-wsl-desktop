@@ -19,27 +19,14 @@ import { cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
 const script = join(pluginRoot, 'scripts', 'sync.ps1')
 
-let failures = 0
-let checks = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was asserted.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  checks += 1
-  console.log(`  ${ok ? 'OK  ' : 'FAIL'}  ${label}`)
-  if (!ok && detail !== undefined) console.log(`        ${detailText(detail)}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker()
+const { check } = checker
 
 /** Candidate PowerShell hosts, in the order this machine is most likely to have them. */
 const SHELL_CANDIDATES = ['powershell.exe', 'pwsh.exe', 'pwsh']
@@ -355,5 +342,5 @@ console.log('\nnever staged into: no plugins directory at all')
   await rm(run.home, { recursive: true, force: true })
 }
 
-console.log(`\n${failures === 0 ? `${checks} check(s) passed` : `${failures} check(s) failed`}`)
-process.exit(failures === 0 ? 0 : 1)
+console.log(`\n${checker.failures === 0 ? `${checker.checks} check(s) passed` : `${checker.failures} check(s) failed`}`)
+process.exit(checker.failures === 0 ? 0 : 1)
