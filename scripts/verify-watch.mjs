@@ -7,8 +7,15 @@
  *
  * The io seam is injected so ticks are driven by hand: a suite that sleeps and races
  * the poll measures its own timing, not the behaviour.
+ *
+ * The last section is the exception, and it is deliberate: it passes NO io at all, so
+ * the module's own DEFAULT seam is exercised — against a real temp directory, not the
+ * share — because an injected fake cannot fail for a default that is wrong.
  * Run: node scripts/verify-watch.mjs
  */
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
 import { entrySetChanged, entrySetKey, startWatch, watchStrategyFor, WATCH_INTERVAL_MS } from '../lib/wsl/watch.js'
@@ -210,6 +217,119 @@ console.log('\npath polling (a file, and a path observed for creation)')
     io.unwatchFileCalls.map((call) => typeof call.listener))
   await dispose()
   check('disposing twice does not remove again', io.unwatchFileCalls.length === 1, io.unwatchFileCalls.length)
+}
+
+console.log('\nreal io, end to end (the seam hides this)')
+
+// Every row above injects the io seam. That is what makes a tick deterministic, and it
+// is also this file's blind spot: the default seam is what an operator actually runs, and
+// a callback-style `readdir` in it rejected EVERY real directory target while every row
+// in this file stayed green (task-2-report D2). These two rows therefore pass no `io`, so
+// the module's own default is the subject, against a local temp directory: a real poll, a
+// real mutation, a real notification. No distribution, no WSL — and no sleep: the await
+// above returns the moment the notification lands, so the bound is reached only on a red.
+
+/** The period these rows arm the real strategies with, fast enough that a green run costs tens of milliseconds. */
+const REAL_IO_INTERVAL_MS = 50
+
+/**
+ * The ceiling on one real notification, in milliseconds.
+ *
+ * A real bound rather than a sleep, and a WIDE one: at a 50ms interval 2s spans ~40
+ * ticks, so reaching it means no notification arrived — never that this machine was
+ * slow. That is what keeps the bound honest, and why a green run never waits for it.
+ */
+const REAL_IO_BOUND_MS = 2000
+
+/**
+ * Arm a REAL watch — no `io` option, so the module's own default is what runs.
+ *
+ * Initialization is caught here, not thrown: `startWatch` reads its baseline through the
+ * default io before it reports itself active, so a wrong default rejects for every real
+ * directory target. An escaping rejection would kill this run before the row that names
+ * it could print; caught, it is a red row whose detail IS the error.
+ * @param {{ hostPath: string, strategy: 'dir-entries' | 'path-stat', intervalMs: number }} request - the request, minus `changed` and `signal`.
+ * @returns {Promise<{ notifications: number[], errors: Error[], dispose: (() => Promise<void>) | null, rejection: Error | null }>}
+ *   the handles: `dispose` is a function only once the watch armed, `rejection` holds the refusal that kept it from arming.
+ */
+async function armRealWatch(request) {
+  const notifications = []
+  const errors = []
+  const controller = new AbortController()
+  let dispose = null
+  let rejection = null
+  try {
+    dispose = await startWatch({
+      ...request,
+      changed: (error) => { if (error === undefined) notifications.push(1); else errors.push(error) },
+      signal: controller.signal,
+    })
+  } catch (error) {
+    rejection = error instanceof Error ? error : new Error(String(error))
+  }
+  return { notifications, errors, dispose, rejection }
+}
+
+/**
+ * The notification count once one arrives, or null at the bound.
+ *
+ * The collector is polled on a short timer rather than slept on: the COUNT is what is
+ * awaited, so a fixed sleep would make every green run pay the whole bound.
+ * @param {number[]} notifications - the collector the watch appends to.
+ * @param {number} boundMs - the ceiling in milliseconds.
+ * @returns {Promise<number | null>} the count, or null when nothing arrived in time.
+ */
+function notifiedWithin(notifications, boundMs) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now()
+    const timer = setInterval(() => {
+      if (notifications.length > 0) {
+        clearInterval(timer)
+        resolve(notifications.length)
+      } else if (Date.now() - startedAt >= boundMs) {
+        clearInterval(timer)
+        resolve(null)
+      }
+    }, 10)
+  })
+}
+
+{
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-watch-real-io-'))
+  let dispose = null
+  try {
+    const armed = await armRealWatch({ hostPath: dir, strategy: 'dir-entries', intervalMs: REAL_IO_INTERVAL_MS })
+    dispose = armed.dispose
+    // Created AFTER the arm, so it is a change rather than the baseline the strategy
+    // reads before it reports itself active — the read that a wrong default rejects.
+    await writeFile(join(dir, 'created-after-arming.txt'), 'created after the watch was armed\n')
+    const seen = dispose === null ? null : await notifiedWithin(armed.notifications, REAL_IO_BOUND_MS)
+    check('the default io observes a real directory change', seen !== null,
+      seen ?? { notifications: armed.notifications.length, errors: armed.errors.map((error) => error.message), rejection: armed.rejection?.message ?? null })
+  } finally {
+    if (dispose !== null) await dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+{
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-watch-real-io-'))
+  let dispose = null
+  try {
+    const file = join(dir, 'appended.txt')
+    // Written BEFORE the arm: `path-stat` observes one path, and this row is about a
+    // change to a file that is already there — observing CREATION is the row above.
+    await writeFile(file, 'before the watch was armed\n')
+    const armed = await armRealWatch({ hostPath: file, strategy: 'path-stat', intervalMs: REAL_IO_INTERVAL_MS })
+    dispose = armed.dispose
+    await appendFile(file, 'appended after the watch was armed\n')
+    const seen = dispose === null ? null : await notifiedWithin(armed.notifications, REAL_IO_BOUND_MS)
+    check("the default io observes a real file's stat change", seen !== null,
+      seen ?? { notifications: armed.notifications.length, errors: armed.errors.map((error) => error.message), rejection: armed.rejection?.message ?? null })
+  } finally {
+    if (dispose !== null) await dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
 }
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
