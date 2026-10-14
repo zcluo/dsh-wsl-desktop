@@ -4,7 +4,7 @@
 
 ## 为什么需要轮询
 
-消费者链条是 `WorkspaceChangeFeed.follow` → `ctx.fs.watch` → `LocalFileSystem.watch` → chokidar → `fs.watch`，而它在共享的第一环就断了：**`fs.watch` 在 `\\wsl.localhost\…` 上构造即抛 `EISDIR`——目录目标与文件目标都抛**（实测）。`LocalFileSystem.watch`（`packages/fs/fs-local/src/index.ts:69-89`）两个分支都监听**目录**：目录目标监听目标自己，文件目标监听它的 `dirname`；所以 EISDIR 堵死的是每一个 WSL 目标，`changes.ts:79-89` 把它包成 `workspace-file/watch-unsupported`。消费方（侧栏文件树）收到该错误后不报失败、保留手动刷新（`directory-node.ts:124-131`）。用户可见的影响因此是：**WSL 工作区的侧栏文件树失去实时刷新，手动刷新仍在**——是声明的降级，不是崩溃，也不是静默失效。
+消费者链条是 `WorkspaceChangeFeed.follow` → `ctx.fs.watch` → `LocalFileSystem.watch` → chokidar → `fs.watch`，而它在共享的第一环就断了：**`fs.watch` 在 `\\wsl.localhost\…` 上构造即抛 `EISDIR`——目录目标与文件目标都抛**（实测）。`LocalFileSystem.watch`（`packages/fs/fs-local/src/index.ts:69-89`）两个分支都监听**目录**：目录目标监听目标自己，文件目标监听它的 `dirname`；所以 EISDIR 堵死的是每一个 WSL 目标，`packages/api/workspace-files/src/changes.ts:79-89` 把它包成 `workspace-file/watch-unsupported`。消费方（侧栏文件树）收到该错误后不报失败、保留手动刷新（`packages/client/ui-sidebar-files/src/client/directory-node.ts:124-131`）。用户可见的影响因此是：**WSL 工作区的侧栏文件树失去实时刷新，手动刷新仍在**——是声明的降级，不是崩溃，也不是静默失效。
 
 本行的修法是给这个世界自带一个共享支持的策略：**只依赖 `node:fs` 的用户态轮询**。`lib/wsl/watch.js` 是唯一 owner（两个策略 + 纯函数策略选择 + 可注入 io 的 `startWatch`），`lib/wsl/fs.js` 覆写 `watch`，把它接到 `ctx.fs.watch` 上。
 
@@ -17,9 +17,9 @@
 - **失效条件是条目集合**：新增 / 删除 / 改名可见；子项的内容变化不可见（见「未测与已知限制」）。
 - 首轮读取只建立基线、**不报变化**——对齐宿主后端的 `ignoreInitial: true`。少了这一条，每个 watch 一开口就会报一次假变化。
 - `ENOENT` 是「空集合」而不是错误：目录被删与重现都通知（空目录这一个例外见「未测与已知限制」）。
-- tick 不叠加（上一 tick 未完成时跳过本 tick），且**每 tick 至多一次通知**。合并不是优化：`changes.ts:95-102` 的帧由该目标构成，逐子项通知会产出 N 个关于**同一个目录**的完全相同帧——轮询结构把这个风暴消掉了。
+- tick 不叠加（上一 tick 未完成时跳过本 tick），且**每 tick 至多一次通知**。合并不是优化：`packages/api/workspace-files/src/changes.ts:95-102` 的帧由该目标构成，逐子项通知会产出 N 个关于**同一个目录**的完全相同帧——轮询结构把这个风暴消掉了。
 
-**`path-stat`（文件与尚不存在的路径）**：`fs.watchFile(hostPath, { interval, persistent: true }, listener)`，mtime / size / ino 任一变化即失效，启动时不报变化。disposer 只摘**自己那份**注册（`unwatchFile` 带 listener）：Node 按路径对 StatWatcher 引用计数，不带 listener 的 `unwatchFile(path)` 会连别的消费者一起摘掉。
+**`path-stat`（文件与尚不存在的路径）**：`fs.watchFile(hostPath, { interval, persistent: true }, listener)`，mtime / size / ino 任一变化即失效。**已存在的文件在它变化之前一直安静**；**尚不存在的路径反而在 arm 的当下立刻报一次**（实测 Node 语义：首次比对没有上一份 stat 可比，被读成一次变化，而报出时路径仍然不在），**路径出现时再报一次**。这条直接决定活体证据怎么写：文件行必须先把探针文件建出来，否则 `notified > 0` 会被 arm 那一次满足（见「钉子在哪」）。disposer 只摘**自己那份**注册（`unwatchFile` 带 listener）：Node 按路径对 StatWatcher 引用计数，不带 listener 的 `unwatchFile(path)` 会连别的消费者一起摘掉。
 
 监听的路径取 `target.targetKey`（宿主拼写），**不是** `processPath`——后者返回 Linux 拼写，在宿主侧解析它会去监听另一个东西（`/home/…` 变成 `E:\home\…`），而且通常静默：那个路径多半不存在。
 
@@ -58,8 +58,8 @@ mtime 经共享会及时更新（实测 `advanced`）——这是轮询类修法
 
 ## 钉子在哪
 
-`scripts/verify-watch.mjs`（离线，**无前置条件，因此从不跳过**；清单与单跑命令见 `docs/VERIFICATION.md`）钉住：策略选择、条目集合差分与首轮基线、`ENOENT` 与真实错误的分流、tick 不叠加、disposer 幂等与晚到 abort、以及 stat 策略只摘自己那份注册。它靠 `startWatch` 的**可注入 io 缝**逐 tick 手驱动——不 sleep、不赛跑，测的是行为而不是本机速度。最后一节是刻意的例外：**不传 io**，用模块自己的默认缝在真临时目录上跑一次目录策略与 stat 策略；注入的假 io 对「默认缝写错了」是瞎的——回调风格的 `readdir` 会让每个 WSL 目录目标在基线读取时就 reject，而注入缝的每一行仍然绿（本系列实测）。
+`scripts/verify-watch.mjs`（离线，**无前置条件，因此从不跳过**；清单与单跑命令见 `docs/VERIFICATION.md`）钉住：策略选择、条目集合差分与首轮基线、`ENOENT` 与真实错误的分流、tick 不叠加、disposer 幂等与晚到 abort、以及 stat 策略只摘自己那份注册。它靠 `startWatch` 的**可注入 io 缝**逐 tick 手驱动——不 sleep、不赛跑，测的是行为而不是本机速度。最后两节是刻意的例外：**不传 io**，用模块自己的默认缝在真临时目录上跑一次目录策略与 stat 策略，并把「尚不存在的路径在 arm 当下报一次基线、路径出现时再报一次」这条 Node 语义钉住（活体文件行的探针为什么必须先建出来，理由就在这里）；注入的假 io 对「默认缝写错了」是瞎的——回调风格的 `readdir` 会让每个 WSL 目录目标在基线读取时就 reject，而注入缝的每一行仍然绿（本系列实测）。
 
-`scripts/verify-post-restart.mjs` 的三行活体证据（需要已安装插件 + 运行中的宿主）：`fs.watch.file`（发行版内改文件 → 收到通知）、`fs.watch.dir`（发行版内新增条目 → 收到通知）、`fs.watch.native`（**诚实状态行**：原生 `fs.watch` 在共享上仍抛 `EISDIR`）。前两行断言的是**通知真的到了**（`notified > 0` 且 `watchError === null`），不是「调用返回了」——没 arm 成功的行会读成 `notified: 0`，看着像什么都没发生。第三行把「覆写仍有存在理由」记成证据：哪天共享不再抛 EISDIR，它会红，并告诉维护者可以删掉覆写。等待窗口是 5 × `WATCH_INTERVAL_MS`（1500ms），对实测 2–52ms 是 30 倍余量，poll 从不跑时仍会红。
+`scripts/verify-post-restart.mjs` 的三行活体证据（需要已安装插件 + 运行中的宿主）：`fs.watch.file`（发行版内改文件 → 收到通知）、`fs.watch.dir`（发行版内新增条目 → 收到通知）、`fs.watch.native`（**诚实状态行**：原生 `fs.watch` 在共享上仍抛 `EISDIR`）。前两行断言的是**通知真的到了**（`notified > 0` 且 `watchError === null`），不是「调用返回了」——没 arm 成功的行会读成 `notified: 0`，看着像什么都没发生；文件行因此**先把探针文件建出来再 arm**——尚不存在的路径在 arm 当下就会报一次基线（见「两个策略」），不先建文件，`notified > 0` 会被那次基线满足。等待窗口是 `lib/index.js:665` 的 5 × `WATCH_INTERVAL_MS`（1500ms）：对实测 2–52ms 有约 28.8 倍余量（1500/52），poll 从不跑时仍会红。第三行把「覆写仍有存在理由」记成证据：哪天共享不再抛 EISDIR，它会红，并告诉维护者可以删掉覆写。
 
 文档本身也在被钉：`docs/WATCH.md` 与 `docs/WATCH.en.md` 由 `scripts/verify-docs.mjs` 的**声明对表**校验——两个语言版本必须命名同一批产物，而未声明的对根本不在校验范围内，并且这一点不会以任何红报出来。

@@ -16,7 +16,7 @@ Turns a WSL distribution into a **first-class execution world** inside DSH Deskt
 - **This page**: [Target capabilities](#target-capabilities) · [Install / Update / Uninstall](#install--update--uninstall) · [Quick start](#quick-start) · [Desktop update discipline](#desktop-update-discipline-mandatory) · [Security and trust boundaries](#security-and-trust-boundaries) · [Known limitations](#known-limitations) · [Verification](#verification) · [Development](#development) · [Release](#release)
 - **In-depth material**: [Security and trust boundaries](SECURITY.md) · [Architecture and the execution world](docs/ARCHITECTURE.en.md) · [Confinement (Linux side)](docs/CONFINEMENT.en.md) · [The fs fence](docs/FS-FENCE.en.md) · [Terminal (PTY bridge)](docs/PTY-BRIDGE.en.md) · [WSL file watching](docs/WATCH.en.md) · [Verification and the SKIP ruling](docs/VERIFICATION.en.md) · [Engineering notes](docs/ENGINEERING-NOTES.en.md) · [Distro support matrix](docs/DISTRO-SUPPORT.md) · [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) · [Architecture and flow diagrams](docs/diagrams.md)
 
-> The six documents this restructure created have an English edition (linked above; the file names carry an `.en` marker) and the pair is enforced rather than trusted. The three older documents — the distro support matrix, the upstream proposals and the diagram index — are **Chinese-only**, because no English text for them exists: translating them is a separate piece of work, not a rename.
+> The bilingual documents linked above (their file names carry an `.en` marker) are enforced as pairs rather than trusted. The three older documents — the distro support matrix, the upstream proposals and the diagram index — are **Chinese-only**, because no English text for them exists: translating them is a separate piece of work, not a rename.
 
 ## Target capabilities
 
@@ -108,6 +108,7 @@ lib/wsl/world.js        Distro discovery, the wsl.exe execution core, directory 
 lib/wsl/shell.js        ShellExecutor implementation (WSL bash + confinement hookup)
 lib/wsl/fs.js           LocalFileSystem subclass (9P backend + path dialects)
 lib/wsl/publish.js      The overwrite publication's wait bound (retry + measured tail; pure module, independently testable)
+lib/wsl/watch.js        Polling strategies for file watching (pure module, independently testable)
 lib/wsl/subprocess.js   SubprocessRuntime implementation (pipes + terminal; delegates to the host subprocess)
 lib/wsl/pty.js          Terminal handle: two processes driving the in-distro PTY bridge
 lib/wsl/terminal-bridge.py  The PTY bridge running inside the distro (python3 stdlib, zero install)

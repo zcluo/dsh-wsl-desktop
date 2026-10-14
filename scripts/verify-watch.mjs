@@ -8,12 +8,12 @@
  * The io seam is injected so ticks are driven by hand: a suite that sleeps and races
  * the poll measures its own timing, not the behaviour.
  *
- * The last section is the exception, and it is deliberate: it passes NO io at all, so
+ * The last two sections are the exception, and it is deliberate: they pass NO io at all, so
  * the module's own DEFAULT seam is exercised — against a real temp directory, not the
  * share — because an injected fake cannot fail for a default that is wrong.
  * Run: node scripts/verify-watch.mjs
  */
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { makeChecker } from './suite-shell.mjs'
@@ -271,19 +271,25 @@ async function armRealWatch(request) {
 }
 
 /**
- * The notification count once one arrives, or null at the bound.
+ * The notification count once it exceeds `from`, or null at the bound.
  *
  * The collector is polled on a short timer rather than slept on: the COUNT is what is
  * awaited, so a fixed sleep would make every green run pay the whole bound.
+ *
+ * `from` is what separates the arming baseline from the event that follows it: a watch on
+ * an absent path is ALREADY at 1 when it arms, so "it notified again" can only be tested
+ * against a count strictly greater than the baseline — a non-zero test would be satisfied
+ * by the baseline alone. The default waits for the first notification, as before.
  * @param {number[]} notifications - the collector the watch appends to.
  * @param {number} boundMs - the ceiling in milliseconds.
- * @returns {Promise<number | null>} the count, or null when nothing arrived in time.
+ * @param {number} [from] - the count already observed; default 0, the first notification.
+ * @returns {Promise<number | null>} the count, or null when nothing new arrived in time.
  */
-function notifiedWithin(notifications, boundMs) {
+function notifiedWithin(notifications, boundMs, from = 0) {
   return new Promise((resolve) => {
     const startedAt = Date.now()
     const timer = setInterval(() => {
-      if (notifications.length > 0) {
+      if (notifications.length > from) {
         clearInterval(timer)
         resolve(notifications.length)
       } else if (Date.now() - startedAt >= boundMs) {
@@ -326,6 +332,42 @@ function notifiedWithin(notifications, boundMs) {
     const seen = dispose === null ? null : await notifiedWithin(armed.notifications, REAL_IO_BOUND_MS)
     check("the default io observes a real file's stat change", seen !== null,
       seen ?? { notifications: armed.notifications.length, errors: armed.errors.map((error) => error.message), rejection: armed.rejection?.message ?? null })
+  } finally {
+    if (dispose !== null) await dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+console.log('\nabsent paths: the arming baseline is real (Node semantics)')
+
+// Measured default-seam behavior, and the trap the LIVE file row has to dodge: `fs.watchFile`
+// on a path that does NOT exist calls the listener once immediately at arming — the first
+// comparison has no previous stat to compare against, so it reads as a change — and the path
+// is still absent when that lands. A notification on an absent path is therefore NOT evidence
+// that anything was observed; only the creation after it is. On an EXISTING file the arming
+// comparison has a previous stat and stays silent, which is what makes a notification there
+// evidence (that is the row above). These rows pass no `io` for the same reason as the rows
+// above: this is default-seam behavior, and an injected fake can never fire on its own.
+{
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-watch-absent-'))
+  let dispose = null
+  try {
+    const file = join(dir, 'not-yet-created.txt')
+    // Deliberately NOT written before the arm: this is the absent branch under test.
+    const armed = await armRealWatch({ hostPath: file, strategy: 'path-stat', intervalMs: REAL_IO_INTERVAL_MS })
+    dispose = armed.dispose
+    const baseline = dispose === null ? null : await notifiedWithin(armed.notifications, REAL_IO_BOUND_MS)
+    // The file's state is READ after the notification rather than assumed: nothing has
+    // created it at this point, so this is what "while it is still absent" means here.
+    const stillAbsent = await access(file).then(() => false, () => true)
+    check('arming on a path that does not exist notifies once immediately — the arming baseline, not an observation',
+      baseline !== null && stillAbsent,
+      { notifications: baseline, stillAbsent, errors: armed.errors.map((error) => error.message), rejection: armed.rejection?.message ?? null })
+    await writeFile(file, 'created after the arming baseline\n')
+    const created = baseline === null ? null : await notifiedWithin(armed.notifications, REAL_IO_BOUND_MS, baseline)
+    check('the path appearing after that baseline notifies again',
+      created !== null,
+      { baseline, after: baseline === null ? null : armed.notifications.length, errors: armed.errors.map((error) => error.message), rejection: armed.rejection?.message ?? null })
   } finally {
     if (dispose !== null) await dispose()
     await rm(dir, { recursive: true, force: true })
