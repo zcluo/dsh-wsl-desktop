@@ -55,6 +55,7 @@ const DOC_PAIRS = [
   ['docs/ENGINEERING-NOTES.md', 'docs/ENGINEERING-NOTES.en.md'],
   ['docs/PTY-BRIDGE.md', 'docs/PTY-BRIDGE.en.md'],
   ['docs/VERIFICATION.md', 'docs/VERIFICATION.en.md'],
+  ['docs/WATCH.md', 'docs/WATCH.en.md'],
 ]
 
 /** The `.en` side of a declared pair, keyed by basename, mapping onto its primary's basename. */

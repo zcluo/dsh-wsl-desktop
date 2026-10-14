@@ -14,11 +14,11 @@
 ## 目录
 
 - **本页**：[目标能力](#目标能力) · [安装 / 更新 / 卸载](#安装--更新--卸载) · [快速开始](#快速开始) · [桌面更新纪律](#桌面更新纪律强制) · [安全与信任边界](#安全与信任边界) · [已知限制](#已知限制) · [校验](#校验) · [开发](#开发) · [发版](#发版)
-- **深入材料**：[安全与信任边界](SECURITY.md) · [架构与执行世界](docs/ARCHITECTURE.md) · [Linux 侧约束](docs/CONFINEMENT.md) · [fs 工具的围栏](docs/FS-FENCE.md) · [终端 PTY 桥](docs/PTY-BRIDGE.md) · [校验与 SKIP 裁定](docs/VERIFICATION.md) · [工程笔记](docs/ENGINEERING-NOTES.md) · [发行版支持矩阵](docs/DISTRO-SUPPORT.md) · [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) · [架构与流程图](docs/diagrams.md)
+- **深入材料**：[安全与信任边界](SECURITY.md) · [架构与执行世界](docs/ARCHITECTURE.md) · [Linux 侧约束](docs/CONFINEMENT.md) · [fs 工具的围栏](docs/FS-FENCE.md) · [终端 PTY 桥](docs/PTY-BRIDGE.md) · [WSL 文件变更监听](docs/WATCH.md) · [校验与 SKIP 裁定](docs/VERIFICATION.md) · [工程笔记](docs/ENGINEERING-NOTES.md) · [发行版支持矩阵](docs/DISTRO-SUPPORT.md) · [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) · [架构与流程图](docs/diagrams.md)
 
 ## 目标能力
 
-**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 全绿 + 离线 18 套件；下面每条都注明证据强度）：
+**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 全绿 + 离线 19 套件；下面每条都注明证据强度）：
 
 | # | 能力 | 状态 |
 |---|---|---|
@@ -73,10 +73,12 @@
 
 **约束覆盖不到 `/dev`、`/proc`、`/sys` 与 interop**，如实报在 `enforcement: 'partial'` 里；而会话用户保留的免密 sudo 授权可绕过文件围栏，闭合路径见 [SECURITY.md](SECURITY.md)。
 
+**WSL 工作区里的文件变更跟踪是轮询的，不是事件驱动的。** 发行版的 9P 共享上 `fs.watch` 会抛 `EISDIR`（文件与目录目标都抛），宿主后端的 chokidar 监听因此在 WSL 目标上根本无法初始化；插件改为在宿主侧轮询——目录看条目集合（每 300ms 一次 `readdir`，实测本进程 0ms CPU/3s、延迟 2–3ms），文件与尚不存在的路径走 `fs.watchFile`（每 300ms 一次 `stat`，实测 0ms CPU/3s、延迟 52ms）。**目录目标只对条目集合变化失效**：新增、删除、改名可见，目录内某个文件的**内容**变化不可见——要盯着某个文件，就按文件路径监听它。机制、实测与未测项见 [WSL 文件变更监听](docs/WATCH.md)。
+
 ## 校验
 
 ```powershell
-node scripts/verify-all.mjs          # 全部离线套件（18 个）
+node scripts/verify-all.mjs          # 全部离线套件（19 个）
 node scripts/verify-all.mjs --live   # 追加需要已安装插件 + 运行中宿主的套件
 ```
 

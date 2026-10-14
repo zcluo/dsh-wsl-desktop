@@ -14,13 +14,13 @@ Turns a WSL distribution into a **first-class execution world** inside DSH Deskt
 ## Contents
 
 - **This page**: [Target capabilities](#target-capabilities) · [Install / Update / Uninstall](#install--update--uninstall) · [Quick start](#quick-start) · [Desktop update discipline](#desktop-update-discipline-mandatory) · [Security and trust boundaries](#security-and-trust-boundaries) · [Known limitations](#known-limitations) · [Verification](#verification) · [Development](#development) · [Release](#release)
-- **In-depth material**: [Security and trust boundaries](SECURITY.md) · [Architecture and the execution world](docs/ARCHITECTURE.en.md) · [Confinement (Linux side)](docs/CONFINEMENT.en.md) · [The fs fence](docs/FS-FENCE.en.md) · [Terminal (PTY bridge)](docs/PTY-BRIDGE.en.md) · [Verification and the SKIP ruling](docs/VERIFICATION.en.md) · [Engineering notes](docs/ENGINEERING-NOTES.en.md) · [Distro support matrix](docs/DISTRO-SUPPORT.md) · [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) · [Architecture and flow diagrams](docs/diagrams.md)
+- **In-depth material**: [Security and trust boundaries](SECURITY.md) · [Architecture and the execution world](docs/ARCHITECTURE.en.md) · [Confinement (Linux side)](docs/CONFINEMENT.en.md) · [The fs fence](docs/FS-FENCE.en.md) · [Terminal (PTY bridge)](docs/PTY-BRIDGE.en.md) · [WSL file watching](docs/WATCH.en.md) · [Verification and the SKIP ruling](docs/VERIFICATION.en.md) · [Engineering notes](docs/ENGINEERING-NOTES.en.md) · [Distro support matrix](docs/DISTRO-SUPPORT.md) · [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) · [Architecture and flow diagrams](docs/diagrams.md)
 
 > The six documents this restructure created have an English edition (linked above; the file names carry an `.en` marker) and the pair is enforced rather than trusted. The three older documents — the distro support matrix, the upstream proposals and the diagram index — are **Chinese-only**, because no English text for them exists: translating them is a separate piece of work, not a rename.
 
 ## Target capabilities
 
-**Honest state after live acceptance** (`verify-post-restart.mjs` all green + 18 offline suites; each item below notes its evidence strength):
+**Honest state after live acceptance** (`verify-post-restart.mjs` all green + 19 offline suites; each item below notes its evidence strength):
 
 | # | Capability | Status |
 |---|---|---|
@@ -75,10 +75,12 @@ After every DSH Desktop update, the plugin may break because of harness internal
 
 **Confinement does not cover `/dev`, `/proc`, `/sys` or interop**, which is reported honestly in `enforcement: 'partial'`; and the session user's retained passwordless sudo grant can bypass the file fence — see [SECURITY.md](SECURITY.md).
 
+**File-change tracking inside a WSL workspace polls; it is not event-driven.** `fs.watch` throws `EISDIR` on the distribution's 9P share (for a file target as well as a directory one), so the host backend's chokidar watcher cannot initialize for any WSL target. The plugin polls on the host side instead: a directory compares its entry set (one `readdir` per 300ms; measured 0ms CPU per 3s and 2-3ms latency in this process) and a file — or a path that does not exist yet — watches its stat (`fs.watchFile`, measured 0ms CPU per 3s and 52ms). **A directory target is invalidated by entry-set changes only**: adds, removes and renames are seen; the CONTENT change of a file inside it is not — watch that file's own path to follow it. Mechanisms, measurements and what was not measured are in [WSL file watching](docs/WATCH.en.md).
+
 ## Verification
 
 ```powershell
-node scripts/verify-all.mjs          # all offline suites (18)
+node scripts/verify-all.mjs          # all offline suites (19)
 node scripts/verify-all.mjs --live   # additionally the suites needing the installed plugin + a running host
 ```
 
