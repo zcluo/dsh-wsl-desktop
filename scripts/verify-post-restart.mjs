@@ -261,6 +261,19 @@ try {
   const fsRoundtrip = step('fs.roundtrip')
   check('the file tools address Linux paths', fsRoundtrip?.processPath?.startsWith('/'), fsRoundtrip)
   check('file URIs are built in the execution world', String(fsRoundtrip?.fileUrl ?? '').startsWith('file:///'), fsRoundtrip?.fileUrl)
+  // The three watch rows: the provider's override observed from outside, driven the
+  // way a consumer drives it, and mutated from inside the distribution. A watch row
+  // that never armed reads as `notified: 0` with `watchError: null` — so each row
+  // asserts a notification ARRIVED, not merely that the call returned.
+  const fileWatch = step('fs.watch.file')
+  check('the provider observes a file changed from inside the distribution',
+    fileWatch?.notified > 0 && fileWatch?.watchError === null, fileWatch)
+  const dirWatch = step('fs.watch.dir')
+  check('the provider observes an entry created from inside the distribution',
+    dirWatch?.notified > 0 && dirWatch?.watchError === null, dirWatch)
+  const nativeWatch = step('fs.watch.native')
+  check('the native primitive still cannot watch this share — the reason the override exists',
+    nativeWatch?.threw === true && nativeWatch?.code === 'EISDIR', nativeWatch)
   const confined = step('shell.confined')
   check('a write outside the workspace is refused', confined?.sandbox?.denied === true, confined)
   const probe = step('subprocess.probe')
