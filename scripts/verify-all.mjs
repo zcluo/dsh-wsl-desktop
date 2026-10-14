@@ -101,6 +101,7 @@ const STANDALONE = [
   'verify-client-dom.mjs',
   'verify-sync.mjs',
   'verify-all-skip.mjs',
+  'verify-watch.mjs',
 ]
 
 /** Suites that require the installed plugin behind a running Desktop host. */
