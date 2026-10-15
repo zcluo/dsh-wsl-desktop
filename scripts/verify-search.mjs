@@ -44,6 +44,15 @@ check('glob: VCS names are pruned, never merely filtered',
   globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 100 }).join(' ').includes('-prune'))
 check('glob: the pattern is ANCHORED to the search root (unanchored matches nothing)',
   globArgv({ pattern: 'src/**/*.ts', path: '/ws' }, { maxResults: 100 }).includes('/ws/src/*.ts'))
+// The root is the one path where anchoring can go wrong: stripping the trailing slashes yields ''
+// and the formula happily produces `/`, so ANY extra slash here builds a '//'-prefixed pattern.
+// MEASURED (twice, in the distribution): such a pattern matches nothing at all, so a full-root
+// search would answer with an empty listing instead of failing — the worst shape there is.
+{
+  const argv = globArgv({ pattern: '**/*.ts', path: '/' }, { maxResults: 100 })
+  check('glob: a root path keeps exactly ONE leading slash (a doubled one matches nothing)',
+    argv.includes('/*.ts') && !argv.join(' ').includes('//'), argv)
+}
 check('glob: mtime is printed for the sort, NUL-terminated so spaces survive',
   globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 100 }).join(' ').includes('-printf'))
 
