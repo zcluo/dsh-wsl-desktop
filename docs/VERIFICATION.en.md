@@ -28,6 +28,7 @@ node scripts/verify-docs.mjs         # document-pair parity: a declared bilingua
 node scripts/verify-sync.mjs         # runs the real sync.ps1 against a disposable profile: four generation-retention scenarios (link resolves / dangling / no link / never staged into)
 node scripts/verify-all-skip.mjs     # the aggregate's ruling on a SKIP: an undeclared skip fails / a declared one is reported with its precondition / a dead declaration fails before any suite runs
 node scripts/verify-watch.mjs        # watch strategies: strategy choice, the entry-set difference and its first-reading baseline, absence versus failure, a tick that does not stack, an idempotent disposer and a late abort (no precondition, so it never skips)
+node scripts/verify-search.mjs       # search-inside-the-distribution pure logic: the glob translation and the two whole-argv golden vectors, the two parsers and their limits, the failure vocabulary (no precondition, so it never skips)
 node scripts/verify-route.mjs        # live: the acceptance route (needs a running host)
 node scripts/inspect-live-client.mjs # reads the client bundle the host actually delivers (accepts marker strings)
 .\scripts\sync.ps1                   # stage into the profile; an already-installed profile also gets its link re-pointed (a first install is still wired by plugin_manager)
