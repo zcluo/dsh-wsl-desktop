@@ -20,7 +20,7 @@
  */
 import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
-import { globArgv, grepArgv, parseGlobOutput, parseGrepOutput, translateGlob, VCS_EXCLUDES } from '../lib/wsl/search.js'
+import { globArgv, grepArgv, parseGlobOutput, parseGrepOutput, searchFailure, translateGlob, VCS_EXCLUDES } from '../lib/wsl/search.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 300) })
 const { check } = checker
@@ -287,6 +287,30 @@ check('glob: the cap reports truncation, because a silent cap reads as a complet
   const out = parseGlobOutput('1.0 /ws/a.ts\0' + 'abc /ws/b.ts\0', { maxResults: 9 })
   check('glob: a record whose mtime is not a number is skipped, not ordered on NaN',
     JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
+}
+
+console.log('\nthe failure vocabulary (the host\'s two classes, told apart at the call boundary)')
+// The realm's tools fail in two shapes the model must be able to tell apart, because the
+// next action differs: a rejected PATTERN means rewrite the regex, a launch failure means
+// the search never ran at all. The names are the host's own (search-core.ts:67-97).
+// grep exits 2 for a syntax error, and the class is GREP'S alone — find has no such exit,
+// so the same code arriving from glob is an ordinary failure and must not be reported as a
+// pattern problem. Both halves ride in the one assertion: the guard and the class.
+{
+  const rejected = Object.assign(new Error('grep: Unmatched ( or \\('), { exitCode: 2 })
+  const invalid = searchFailure(rejected, 'grep')
+  check('grep exit 2 is SEARCH_INVALID_PATTERN — and the same exit from find is not',
+    invalid.code === 'SEARCH_INVALID_PATTERN' && searchFailure(rejected, 'glob').code === 'SEARCH_FAILED',
+    { grep: invalid, glob: searchFailure(rejected, 'glob') })
+}
+// EVERYTHING else is SEARCH_FAILED — including the shape a distribution without grep
+// produces. A launch that never started is not an invalid pattern, and reporting it as one
+// would send the model off rewriting a regex that was never the problem. The detail has to
+// survive into the message for the same reason: the tool's error text is all the model gets.
+{
+  const failed = searchFailure(Object.assign(new Error('spawn /usr/bin/grep ENOENT'), { code: 'ENOENT' }), 'grep')
+  check('a launch failure (ENOENT) is SEARCH_FAILED, never an invalid pattern, and says so',
+    failed.code === 'SEARCH_FAILED' && failed.message.includes('ENOENT'), failed)
 }
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
