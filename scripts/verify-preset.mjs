@@ -20,6 +20,7 @@ const MODULES = {
   subprocessPath: 'file:///live/lib/wsl/subprocess.js',
   shellPath: 'file:///live/lib/wsl/shell.js',
   fsPath: 'file:///live/lib/wsl/fs.js',
+  searchPath: 'file:///live/lib/wsl/search-tool.js',
 }
 console.log('\nwsl-minimal persistent-shell group (shipped-prevalence regression)')
 // The shipped minimal preset nests ENABLED host PowerShell persistent rows
@@ -62,6 +63,12 @@ const SPELLINGS = [
   // harness's own tests name dsh-terminal-bash this way.
   { name: '@deepseek-ai/dsh-tool-pwsh/src/index.ts', survives: false },
   { name: '@deepseek-ai/dsh-tool-fs-search/src/glob.ts', survives: false },
+  // The other half of that pair, and the reason it is asserted HERE rather than only in
+  // the object transform below: the host's search package is pruned by identity, and the
+  // realm's replacement is a module of THIS plugin — a spelling the classifier has no
+  // verdict for and must therefore keep. A rule that widened WORLD_MODULE_NAMES to the
+  // search family (instead of re-mounting a row of our own) would redden exactly here.
+  { name: 'file:///E:/src/dsh-wsl-desktop/lib/wsl/search-tool.js', survives: true },
   { name: '@deepseek-ai/dsh-terminal-bash/src/config.ts', survives: false },
   // Not loadable today, and asserted anyway: the predicate runs offline over
   // arbitrary, future and user-authored presets and cannot consult an exports map,
@@ -184,6 +191,26 @@ check('tool rows carry no distro pin', plugins.at(-1).config.filter((row) => row
 check('editor re-mounted inside the group', plugins.at(-1).config.some((row) => row.id === 'str-replace-editor'), plugins.at(-1).config.map((row) => row.id))
 check('persona amended with the path-dialect sentence', plugins[0].config.suffix.includes('wsl.localhost'), plugins[0].config.suffix?.slice(0, 80))
 check('provider modules are absolute file paths', [MODULES.subprocessPath, MODULES.shellPath, MODULES.fsPath].every((p) => plugins.at(-1).config.some((row) => row.name === p)))
+// The realm's searching is re-mounted the way bash and fs are: two rows in the SAME group,
+// named by a module of THIS plugin. Both halves of the claim are one assertion because they
+// are one decision — a row pointed at the host's package would be a row the transform
+// REMOVES (`@deepseek-ai/dsh-tool-fs-search` is in WORLD_MODULE_NAMES), so "names our
+// module" and "is not a host-world module" can only be true together.
+//
+// The tool NAME is what Task 4 invokes, and a row id is free to differ from it; here the id
+// and the name coincide, and `config.tool` is what the single shared module reads to know
+// which of the two tools this instance registers (two rows naming one module would
+// otherwise register the same tool twice).
+{
+  const group = plugins.at(-1)
+  const searchRows = ['grep', 'glob'].map((id) => group.config.find((row) => row.id === id))
+  check('the realm re-mounts grep and glob as rows of this plugin, not of the host search package',
+    searchRows.every((row) => row?.name === MODULES.searchPath && !isHostWorldModule(row.name)),
+    group.config.map((row) => [row.id, row.name]))
+  check('each search row names the tool its own instance registers',
+    searchRows.every((row) => row !== undefined && row.config?.tool === row.id),
+    searchRows.map((row) => [row?.id, row?.config]))
+}
 
 // The re-mounted tool rows must carry the operator's own config. Re-declaring
 // them bare silently dropped whatever the base preset had set — a value honoured
