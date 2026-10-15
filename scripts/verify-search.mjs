@@ -180,6 +180,28 @@ check('grep: the cap truncates AND says so, because a silent cap reads as a comp
   check('grep: a line over maxLineBytes is cut to the cap',
     out.matches[0].text === 'xxxx' && out.truncated === false, out)
 }
+// Carried from the controller's ruling 21 (Task 2 report, C2) rather than invented here. The unit is
+// the whole point of the cap's NAME, and a UTF-16 `length` is not that unit: '中文中' is 3 units but
+// 9 bytes (measured), so a unit-counted cap of 3 let the entire line through at THREE times the
+// number the caller asked for — a cap that is not the cap it says it is. The cut is by CODE POINT,
+// sizing each one in UTF-8 bytes, so the character that would cross the cap is dropped WHOLE and
+// never halved into a replacement character.
+{
+  const out = parseGrepOutput('/a:1:中文中\n', { maxMatches: 5, maxLineBytes: 3 })
+  check('grep: maxLineBytes counts BYTES, not UTF-16 units — a cap of 3 keeps one CJK character',
+    out.matches[0].text === '中' && Buffer.byteLength(out.matches[0].text, 'utf8') === 3
+    && out.truncated === false, out)
+}
+// The same cut read from the other side, and the reason this row is not decorative: a cap that falls
+// BETWEEN characters must still stop on a boundary. 4 bytes cannot hold a second 3-byte character,
+// so the answer is the SAME as at cap 3 — which a byte-slice of the buffer would not give (that
+// answers one whole character plus the first byte of the next, as a replacement character).
+{
+  const out = parseGrepOutput('/a:1:中文中\n', { maxMatches: 5, maxLineBytes: 4 })
+  check('grep: a cap BETWEEN characters keeps the whole ones — 4 bytes still holds exactly one',
+    out.matches[0].text === '中' && Buffer.byteLength(out.matches[0].text, 'utf8') === 3
+    && out.truncated === false, out)
+}
 
 // The mtime field is the FIRST space's business only, because a path may contain one; the NUL
 // separator is what keeps that path whole. And the order is the host's MEASURED one: the host
