@@ -38,6 +38,8 @@ check('grep: no shell, the pattern is one element, -- ends the options',
     .includes('"a b; rm -rf /"'))
 check('grep: include maps to --include= (fnmatch: braces are NOT expanded)',
   grepArgv({ pattern: 'x', path: '/ws', include: '*.{ts,tsx}' }, { maxMatches: 1 }).some(a => a.startsWith('--include=')))
+check('grep: every VCS name is excluded by --exclude-dir (measured missing -> .git hits)',
+  VCS_EXCLUDES.every(name => grepArgv({ pattern: 'x', path: '/ws' }, { maxMatches: 1 }).includes(`--exclude-dir=${name}`)))
 check('glob: VCS names are pruned, never merely filtered',
   globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 100 }).join(' ').includes('-prune'))
 check('glob: mtime is printed for the sort, NUL-terminated so spaces survive',
@@ -58,6 +60,18 @@ console.log('\nthe properties the vectors above stand on')
 check('glob: the VCS list is the host list, in the host order — no extension, no reorder',
   JSON.stringify(VCS_EXCLUDES) === JSON.stringify(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl']),
   VCS_EXCLUDES)
+// The exclusions ride on grep OPTIONS, so where they sit in the vector is part of the
+// vector: the presence row above proves all six are in it, this one proves none of them
+// landed after `--`, where grep would read it as just another path operand.
+{
+  const argv = grepArgv({ pattern: 'x', path: '/ws', include: '*.ts' }, { maxMatches: 1 })
+  const lastExclude = argv.map((element) => element.startsWith('--exclude-dir=')).lastIndexOf(true)
+  const include = argv.findIndex((element) => element.startsWith('--include='))
+  const separator = argv.indexOf('--')
+  check('grep: the exclusions precede both --include= and the -- separator',
+    lastExclude !== -1 && lastExclude < include && lastExclude < separator,
+    { lastExclude, include, separator, argv })
+}
 // `-o` binds looser than the implicit `-a`, so the chain is a sequence of alternatives and
 // the LAST prune must still precede the match action: an action placed inside the chain
 // would fire only for a path that matched no earlier alternative.
