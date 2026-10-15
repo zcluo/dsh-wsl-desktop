@@ -67,7 +67,7 @@
 
 ## 已知限制
 
-**grep / glob 工具在 WSL 会话里不可用。** `tool-fs-search` 虽然通过 `ctx.subprocess.spawn()` 启动（`search-core.ts:238`），但它的 argv[0] 是 `@vscode/ripgrep` 提供的**打包 Windows rg.exe**（`search-core.ts:174-178`），在发行版里既不存在、也无法用 Linux 参数工作。所以 WSL 预设会把它从执行世界里移除，WSL 会话的模型只能用 bash 的 `grep` / `find`（两者在发行版里都在）。这算是一个能力回退，不是遗漏——要做成对等的，需要给 WSL 世界提供自己的搜索实现。
+**grep / glob 工具在 WSL 会话里可用，后端是发行版自己的 `grep` / `find`。** 宿主那两行依然被移除，理由是实测的两件事：`tool-fs-search` 虽然通过 `ctx.subprocess.spawn()` 启动（`search-core.ts:238`），但它的 `argv[0]` 是 `@vscode/ripgrep` 提供的**打包 Windows rg.exe**（`search-core.ts:174-178`）——在发行版里既不存在、也无法用 Linux 参数工作；而发行版自带 `/usr/bin/grep` 与 `/usr/bin/find`（实测：发行版里 `command -v rg` 回答为空）。所以 `wsl-world` 组把这两个名字挂回本插件自己的实现（`lib/wsl/search-tool.js`），模型在 WSL 会话里照常调用 `grep` / `glob`——**但语义是发行版工具的**：POSIX ERE（没有 `\d`、`(?i)`）· 不解析 `.gitignore`（只排除六个 VCS 目录）· 点目录会被搜到 · `include` 只匹配 basename 且没有花括号 · 模式按搜索根相对解释、`*` 与 `**/` 跨 `/` · 路径含 `:` 的记录可能被丢弃或被静默错配 · 二进制文件永不被匹配 · 达到上限的截断不落盘。八条缺口、限额、未测项与怎么自己验，见 [发行版内搜索](docs/SEARCH.md)。
 
 **终端走 PTY 桥，PTC 的 `stdio.control`（fd 通道）明确拒绝**——`wsl.exe` 无法转发任意描述符。桥的驱动方式与实测前提见 [docs/PTY-BRIDGE.md](docs/PTY-BRIDGE.md)。
 
