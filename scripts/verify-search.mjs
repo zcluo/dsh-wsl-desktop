@@ -76,13 +76,15 @@ check('glob: the pattern is ANCHORED to the search root (unanchored matches noth
 // mutations walked past are gone: their facts are measured here instead, once, over the entire
 // vector — every name, the order, the separator and the output format included. A name-blind
 // substring check cannot tell a dropped exclusion from a present one; a literal vector can.
+// The glob vector's `--` is measured too: findutils 4.10.0 answers the same records with and
+// without it, so it is pinned as generated rather than left to drift.
 const GOLDEN_GREP = ['/usr/bin/grep', '-r', '-n', '-H', '-E', '--binary-files=without-match',
   '--exclude-dir=.git', '--exclude-dir=.svn', '--exclude-dir=.hg', '--exclude-dir=.bzr', '--exclude-dir=.jj', '--exclude-dir=.sl',
   '--include=*.ts', '--regexp', 'needle', '--', '/ws']
 check('grep: the whole vector is golden (all six exclusions, order, include, separator)',
   JSON.stringify(grepArgv({ pattern: 'needle', path: '/ws', include: '*.ts' }, { maxMatches: 1 })) === JSON.stringify(GOLDEN_GREP),
   JSON.stringify(grepArgv({ pattern: 'needle', path: '/ws', include: '*.ts' }, { maxMatches: 1 })))
-const GOLDEN_GLOB = ['/usr/bin/find', '/ws',
+const GOLDEN_GLOB = ['/usr/bin/find', '--', '/ws',
   '-name', '.git', '-prune', '-o', '-name', '.svn', '-prune', '-o', '-name', '.hg', '-prune', '-o',
   '-name', '.bzr', '-prune', '-o', '-name', '.jj', '-prune', '-o', '-name', '.sl', '-prune', '-o',
   '-path', '/ws/*.ts', '-type', 'f', '-printf', '%T@ %p\\0']
