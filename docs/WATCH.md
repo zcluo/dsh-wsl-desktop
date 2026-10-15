@@ -6,6 +6,8 @@
 
 消费者链条是 `WorkspaceChangeFeed.follow` → `ctx.fs.watch` → `LocalFileSystem.watch` → chokidar → `fs.watch`，而它在共享的第一环就断了：**`fs.watch` 在 `\\wsl.localhost\…` 上构造即抛 `EISDIR`——目录目标与文件目标都抛**（实测）。`LocalFileSystem.watch`（`packages/fs/fs-local/src/index.ts:69-89`）两个分支都监听**目录**：目录目标监听目标自己，文件目标监听它的 `dirname`；所以 EISDIR 堵死的是每一个 WSL 目标，`packages/api/workspace-files/src/changes.ts:79-89` 把它包成 `workspace-file/watch-unsupported`。消费方（侧栏文件树）收到该错误后不报失败、保留手动刷新（`packages/client/ui-sidebar-files/src/client/directory-node.ts:124-131`）。用户可见的影响因此是：**WSL 工作区的侧栏文件树失去实时刷新，手动刷新仍在**——是声明的降级，不是崩溃，也不是静默失效。
 
+> **机制补记（2026-10-15 实测）**：断点发生在 **chokidar 内部**——它**不把 `EISDIR` 抛给调用方，而是发出 `error` 事件**（本机实测：原生 `fs.watch` 同步抛；chokidar 12ms 后发事件；本地 NTFS 对照组 4ms `ready`）。于是 `LocalFileSystem.watch` 的 `await once(watcher, 'ready')` **永远等不到** `ready`：provider 的 `watch()` **既不 resolve 也不 reject**，错误只经 `changed(error)` 回调到达，`changes.ts` 据此包成 `watch-unsupported`。所以「构造即抛」只适用于原生原语，**不适用于 provider 路径**；调试这一类「watcher 没工作」时要分开看三件事：原语是否同步抛、库是否把它转成事件、caller 的 promise 是否因此永挂。
+
 本行的修法是给这个世界自带一个共享支持的策略：**只依赖 `node:fs` 的用户态轮询**。`lib/wsl/watch.js` 是唯一 owner（两个策略 + 纯函数策略选择 + 可注入 io 的 `startWatch`），`lib/wsl/fs.js` 覆写 `watch`，把它接到 `ctx.fs.watch` 上。
 
 ## 两个策略
