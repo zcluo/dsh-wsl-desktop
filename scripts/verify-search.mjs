@@ -53,6 +53,16 @@ check('glob: the pattern is ANCHORED to the search root (unanchored matches noth
   check('glob: a root path keeps exactly ONE leading slash (a doubled one matches nothing)',
     argv.includes('/*.ts') && !argv.join(' ').includes('//'), argv)
 }
+// A leading `/` is ripgrep's ANCHORED glob form and means nothing extra here. Not stripping it is
+// what lets the anchor above emit a '//'-bearing -path pattern — and such a pattern matches
+// NOTHING (measured: the same fixture answers 2 records for the single-slash form, 0 for the
+// doubled one), so the realm would answer with an empty listing instead of failing.
+{
+  const argv = globArgv({ pattern: '/**/*.ts', path: '/ws' }, { maxResults: 100 })
+  check('glob: a leading / is the rg anchored form and is stripped (else a // tail matches nothing)',
+    translateGlob('/**/*.ts') === '*.ts' && argv.includes('/ws/*.ts'),
+    { translated: translateGlob('/**/*.ts'), argv })
+}
 check('glob: mtime is printed for the sort, NUL-terminated so spaces survive',
   globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 100 }).join(' ').includes('-printf'))
 
