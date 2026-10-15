@@ -27,7 +27,7 @@
 | ③ | 同一实例里 Windows 与 WSL 工作区并存 | **活体验收 PASS**：Windows 工作区停留在宿主 preset（PowerShell 可用、无 bash），WSL 会话并行运行 confined realm |
 | ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并活体验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧围栏已实现并活体验证**（越界写拒绝 PASS，见 [fs 工具的围栏](docs/FS-FENCE.md)）|
 
-**哪些能力有保留**（证据强度就是上表状态列的措辞）：`grep` / `glob` 工具在 WSL 会话里不存在，终端不支持 `stdio.control`——两条都写在「已知限制」里，不藏。
+**哪些能力有保留**（证据强度就是上表状态列的措辞）：终端不支持 `stdio.control`——写在「已知限制」里，不藏。
 
 ## 安装 / 更新 / 卸载
 

@@ -29,7 +29,7 @@ Turns a WSL distribution into a **first-class execution world** inside DSH Deskt
 | ③ | Windows and WSL workspaces coexist in the same instance | **Live acceptance PASS**: Windows workspaces stay on the host preset (PowerShell available, no bash); WSL sessions run the confined realm in parallel |
 | ④ | Linux-side sandbox constraints on the WSL side | **Shell side fixed and live-verified**: at runtime, all `rw` mounts are enumerated and remounted read-only one by one (observed `/mnt/c`, `/dev/shm`, `/run/user/<uid>` going WRITABLE → READONLY); any failure rejects (exit code 97 preserved); `enforcement` honestly reports `partial`. **fs-side fence implemented and live-verified** (out-of-bounds write rejected, PASS — see [The fs tool fence](docs/FS-FENCE.md)) |
 
-**Which capabilities are qualified**: the evidence strength is the wording of the status column above. The `grep` / `glob` tools do not exist in a WSL session and the terminal has no `stdio.control` — both are stated under "Known limitations" rather than left out.
+**Which capabilities are qualified**: the evidence strength is the wording of the status column above. The terminal has no `stdio.control` — it is stated under "Known limitations" rather than left out.
 
 ## Install / Update / Uninstall
 
