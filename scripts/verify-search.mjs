@@ -61,11 +61,17 @@ check('glob: the pattern is ANCHORED to the search root (unanchored matches noth
 }
 // Carried from the final review (its finding 3) rather than invented here: the trailing-slash strip
 // on `input.path` had no row. The block above reads the ONE path where that strip decides
-// CORRECTNESS — the root — while `'/ws/'` is the same expression read where it is merely
-// DEFENSIVE: the realm never hands this vector a trailing slash (the root is `resolveRoot`'s
-// `processPath` output, which is `/` or a slash-separated absolute path), so nothing else in this
-// suite would notice the strip going away. Drop it and the formula's own separator doubles
-// instead — `/ws//*.ts` — which is the `//`-bearing -path pattern measured above to match NOTHING.
+// CORRECTNESS — the root — while `'/ws/'` is the same expression read where nothing else in this
+// suite would notice it going away. Whether such a spelling can REACH the vector is not settled by
+// reading the realm, and the two branches of the root's spelling disagree: the UNC branch provably
+// cannot hand a trailing separator to `resolveRoot`'s `processPath` output (`parseWslUnc` rebuilds
+// the Linux path from NON-EMPTY segments — `paths.js:34-45` — so only the root `/` ends in one),
+// while the `/mnt/<drive>` branch CAN (`windowsToMntPath('E:\ws\')` is `/mnt/e/ws/`, `paths.js:72`)
+// and `posix.normalize` PRESERVES a trailing slash (measured: `normalize('/ws/')` is `'/ws/'`).
+// Whether a host `targetKey` can carry that separator in its spelling at all is invisible from this
+// checkout, so the row stands on a case that cannot be ruled out rather than on unreachability —
+// which is all the more reason to keep it: drop the strip and the formula's own separator doubles
+// instead — `/ws//*.ts` — the `//`-bearing -path pattern measured above to match NOTHING.
 {
   const argv = globArgv({ pattern: '**/*.ts', path: '/ws/' }, { maxResults: 100 })
   check('glob: a trailing slash on the search root is stripped too (else the anchor doubles its own separator)',
