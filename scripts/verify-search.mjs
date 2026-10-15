@@ -69,7 +69,18 @@ check('glob: the pattern is ANCHORED to the search root (unanchored matches noth
     translateGlob('/**/*.ts') === '*.ts' && argv.includes('/ws/*.ts'),
     { translated: translateGlob('/**/*.ts'), argv })
 }
-
+// Carried from Task 1's review (Ruling 14) rather than invented here, and it is ONE character:
+// stripping a single slash is not enough. `//**/*.ts` is the third input family of the same
+// "silent empty result" shape — after the root path and the single-slash form above — because a
+// one-slash strip leaves `/**/*.ts`, translates it to `/*.ts`, and the anchor then builds the
+// `//`-bearing -path pattern that matches NOTHING (measured on one fixture: the single-slash
+// form answers 2 records, the doubled one 0). Every leading slash is therefore stripped.
+{
+  const argv = globArgv({ pattern: '//**/*.ts', path: '/ws' }, { maxResults: 100 })
+  check('glob: EVERY leading / is stripped (one left behind rebuilds the //-bearing pattern that matches nothing)',
+    translateGlob('//**/*.ts') === '*.ts' && argv.includes('/ws/*.ts'),
+    { translated: translateGlob('//**/*.ts'), argv })
+}
 
 // GOLDEN VECTORS — the whole argv of each builder, compared literally (Task 1 review, Finding 1).
 // MEASURED before they existed, on this suite: a glob-side `VCS_EXCLUDES.slice(1)` that drops five
