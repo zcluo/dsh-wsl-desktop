@@ -162,6 +162,19 @@ check('grep: the path ends at the FIRST colon, the number sits between the two, 
   check('grep: a colon in the PATH leaves NO record — the unreadable line is skipped, never kept as NaN',
     JSON.stringify(out) === JSON.stringify({ matches: [], truncated: false }), out)
 }
+// The second half of that field test, and it is not decoration: the test is a finite INTEGER, not
+// merely a finite number, because a colon-bearing path can land on a value that is finite and still
+// not a line number. The fixture's real path is `/ws/build:9.30:logs/x.ts` — a tagged directory,
+// legal on Linux — whose `:9.30:` segment leaves `9.30` between the first two colons. A
+// `Number.isFinite` guard keeps that record and hands the host a FRACTIONAL line number for a field
+// its schema declares an INTEGER (grep.ts:307): the same class of failure as the NaN above, by the
+// same route (invalid tool output loses the whole call). `Number.isInteger` refuses NaN, Infinity and
+// 9.30 alike. (Beyond ruling 25's two rows; declared as such in the round's report.)
+{
+  const out = parseGrepOutput('/ws/build:9.30:logs/x.ts:12:needle\n', { maxMatches: 5, maxLineBytes: 99 })
+  check('grep: a FINITE but NON-INTEGER line number is damage too — the field is a count, so it is skipped',
+    JSON.stringify(out) === JSON.stringify({ matches: [], truncated: false }), out)
+}
 // A file authored on Windows keeps its CR, and the terminator belongs to the file's line ending
 // rather than to the line's text — grep prints it verbatim because it is simply the last
 // character. Left in, every match's text differs from the line the model asked about.
@@ -182,6 +195,18 @@ check('grep: the cap truncates AND says so, because a silent cap reads as a comp
   const out = parseGrepOutput('/a:1:x\n/b:c.ts:7:y\n', { maxMatches: 1, maxLineBytes: 99 })
   check('grep: a dropped record does NOT set truncated — the flag is about the cap, not about damage',
     JSON.stringify(out) === JSON.stringify({ matches: [{ path: '/a', lineNumber: 1, text: 'x' }], truncated: false }), out)
+}
+// Beyond ruling 25's two rows, and declared as such: the ruling pins that a dropped record does not
+// set the flag, not that it leaves the scan running. A parser that BREAKS at the first unreadable
+// line passes both of those rows and still answers with a silently short list — the exact shape this
+// suite exists to keep out. The readable record after the broken one is the only place it shows.
+{
+  const out = parseGrepOutput('/a:1:x\n/b:c.ts:7:y\n/c:2:z\n', { maxMatches: 5, maxLineBytes: 99 })
+  check('grep: a dropped record does not END the scan — the readable records after it still answer',
+    JSON.stringify(out) === JSON.stringify({
+      matches: [{ path: '/a', lineNumber: 1, text: 'x' }, { path: '/c', lineNumber: 2, text: 'z' }],
+      truncated: false,
+    }), out)
 }
 // The cap's second field: maxMatches bounds how many records come back, maxLineBytes bounds how
 // much of ONE line does. A mutilated line is not a truncation of the ANSWER, so it does not set
