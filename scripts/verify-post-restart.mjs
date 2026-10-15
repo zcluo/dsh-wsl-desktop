@@ -376,7 +376,7 @@ check('a workspace is registered under the UNC spelling', String(flow.workspaceP
  * Did THIS run's workspace get removed?
  *
  * Scoped to what the composite can actually tell apart. A leftover registered at the UNC root
- * makes `workspaceFlow` answer `created:false, deleted:null` (lib/index.js:760-762:
+ * makes `workspaceFlow` answer `created:false, deleted:null` (lib/index.js:887-889:
  * `created = existing === undefined`, `if (created) deleted = await registry.delete(…)`), and
  * this suite has no route method that could remove a workspace it did not create — so a row
  * asserting `deleted === true` reddens on a condition the operator cannot act on, while
