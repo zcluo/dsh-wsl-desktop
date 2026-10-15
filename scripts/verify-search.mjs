@@ -138,12 +138,29 @@ check('grep: the path ends at the FIRST colon, the number sits between the two, 
 // Not an edge case: the print has no escaping, so a matching line that CONTAINS a colon arrives
 // with three or more of them. Reaching for the last one — or taking the third field of a plain
 // split — reads such a line as less than it is, and the text is the field that must keep its
-// colons. (The other direction of the same ambiguity, a colon in the PATH, is a gap this parser
-// cannot resolve — grep offers no escaping — and is disclosed rather than asserted here.)
+// colons. (The other direction of the same ambiguity is read one row down — and it is a decision
+// rather than a gap: a colon in the PATH mis-splits the record and nothing here can undo it.)
 {
   const out = parseGrepOutput('/ws/a.ts:12:x = 1: done\n', { maxMatches: 5, maxLineBytes: 99 })
   check('grep: a colon in the TEXT stays text — the split never reaches for the last colon',
     out.matches[0].path === '/ws/a.ts' && out.matches[0].lineNumber === 12 && out.matches[0].text === 'x = 1: done', out)
+}
+// Carried from the controller's ruling 20 (Task 2 report, C1) rather than invented here, and this is
+// the SAME ambiguity read the other way — except this direction is UNRECOVERABLE, not merely
+// unfixed. grep prints `path:line:text` with no escaping, so a path containing a colon is
+// indistinguishable from the separators: the information is lost at the PRINT layer, before any
+// parser sees the string, and no implementation could get it back. (The host dodges this by reading
+// ripgrep's JSON; the realm has only this print.) The measured outcome is therefore pinned as a
+// DECISION, so the next reader meets something decided instead of an accident: the path is cut at
+// the first colon, the number field is `b.ts`, and `Number('b.ts')` is NaN — which the DETAIL prints
+// as `null`, because JSON has no NaN (that is why the row asks Number.isNaN and not === NaN). The
+// gap itself belongs in Task 5's docs/SEARCH.md list of the realm's differences from the host.
+{
+  const out = parseGrepOutput('/ws/a:b.ts:7:x\n', { maxMatches: 5, maxLineBytes: 99 })
+  check('grep: a colon in the PATH mis-splits the record and STAYS mis-split — documented, not repaired',
+    out.matches.length === 1 && out.matches[0].path === '/ws/a'
+    && Number.isNaN(out.matches[0].lineNumber) && out.matches[0].text === '7:x'
+    && out.truncated === false, out)
 }
 // A file authored on Windows keeps its CR, and the terminator belongs to the file's line ending
 // rather than to the line's text — grep prints it verbatim because it is simply the last
