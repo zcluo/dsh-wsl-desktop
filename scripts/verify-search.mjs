@@ -59,6 +59,18 @@ check('glob: the pattern is ANCHORED to the search root (unanchored matches noth
   check('glob: a root path keeps exactly ONE leading slash (a doubled one matches nothing)',
     argv.includes('/*.ts') && !argv.join(' ').includes('//'), argv)
 }
+// Carried from the final review (its finding 3) rather than invented here: the trailing-slash strip
+// on `input.path` had no row. The block above reads the ONE path where that strip decides
+// CORRECTNESS — the root — while `'/ws/'` is the same expression read where it is merely
+// DEFENSIVE: the realm never hands this vector a trailing slash (the root is `resolveRoot`'s
+// `processPath` output, which is `/` or a slash-separated absolute path), so nothing else in this
+// suite would notice the strip going away. Drop it and the formula's own separator doubles
+// instead — `/ws//*.ts` — which is the `//`-bearing -path pattern measured above to match NOTHING.
+{
+  const argv = globArgv({ pattern: '**/*.ts', path: '/ws/' }, { maxResults: 100 })
+  check('glob: a trailing slash on the search root is stripped too (else the anchor doubles its own separator)',
+    argv.includes('/ws/*.ts') && !argv.join(' ').includes('//'), argv)
+}
 // A leading `/` is ripgrep's ANCHORED glob form and means nothing extra here. Not stripping it is
 // what lets the anchor above emit a '//'-bearing -path pattern — and such a pattern matches
 // NOTHING (measured: the same fixture answers 2 records for the single-slash form, 0 for the

@@ -70,7 +70,7 @@
 
 ## 钉子在哪
 
-`scripts/verify-search.mjs`（离线、**无前置条件，因此从不跳过**；`node scripts/verify-search.mjs` → 本机 **32 passed, 0 failed**）按五节钉住：glob 翻译（`**/` 收成 `*`，前导 `/` 与 `./` 剥除）、argv 向量（每个模型值恰好一个惰性元素，加**两条金标向量**——整条 argv 字面相等，VCS 六个名字、顺序、分隔符与输出格式都在里面）、向量所依赖的性质（VCS 清单与宿主同序、排除必须站在 `--` 之前）、两个解析器（首冒号切分、正文里的冒号要保住、`:` 路径的跳过、非整数行号的跳过、CRLF、字节限额与字符边界、cap 与损坏记录的分别、NUL 分隔与路径里的换行、mtime 升序取最旧、无空格与非有限 mtime 的跳过）、失败词表（grep 的 2 是 `SEARCH_INVALID_PATTERN`，find 的同码不是；启动失败是 `SEARCH_FAILED`）。
+`scripts/verify-search.mjs`（离线、**无前置条件，因此从不跳过**；`node scripts/verify-search.mjs` → 本机 **33 passed, 0 failed**）按五节钉住：glob 翻译（`**/` 收成 `*`，前导 `/` 与 `./` 剥除，搜索根的尾部斜杠同样剥除）、argv 向量（每个模型值恰好一个惰性元素，加**两条金标向量**——整条 argv 字面相等，VCS 六个名字、顺序、分隔符与输出格式都在里面）、向量所依赖的性质（VCS 清单与宿主同序、排除必须站在 `--` 之前）、两个解析器（首冒号切分、正文里的冒号要保住、`:` 路径的跳过、非整数行号的跳过、CRLF、字节限额与字符边界、cap 与损坏记录的分别、NUL 分隔与路径里的换行、mtime 升序取最旧、无空格与非有限 mtime 的跳过）、失败词表（grep 的 2 是 `SEARCH_INVALID_PATTERN`，find 的同码不是；启动失败是 `SEARCH_FAILED`）。
 
 **活体两行**在 `scripts/verify-post-restart.mjs` 里（`tool.search.grep` 与 `tool.search.glob`，需要已安装插件 + 运行中的宿主）：它们断言命中探针文件的**第 3 行**（行号，不只是「搜到了这个文件」）、glob 列出探针**与两层深的嵌套文件**、且结果里**不出现 `.git`**。它们必须在**开发装配**上跑（`developerTools === true`）：production 装配下验收路由按设计回 `HTTP 401`，那**就是这两行从未被执行**的样子（本机实测两次），不是工具的失败。这两行也是上面「没有离线钉子」那条唯一的观察者。
 
