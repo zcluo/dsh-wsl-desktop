@@ -6,7 +6,7 @@
 
 宿主那两个名字（`tool-fs-search` 的 `grep` 与 `glob`）在 WSL 世界里被**刻意移除**，理由是两个实测事实：它经 `ctx.subprocess.spawn()` 启动（`search-core.ts:238`），而它的 `argv[0]` 是 `@vscode/ripgrep` 提供的**打包 Windows rg.exe**（`search-core.ts:174-178`）——那是一个 Windows 可执行文件，**在发行版里不存在**，也无法用 Linux 参数工作；反过来，发行版自带它自己的 `/usr/bin/grep` 与 `/usr/bin/find`（本机实测：`command -v rg` 在发行版里**回答为空**，而 grep 3.11、findutils 4.10.0 在场）。**两个事实合起来**才是这条线的完整理由：宿主那张行没有可用的后端，而这个后端本来就在发行版里。
 
-所以 `wsl-world` 组把这两个宿主行移除（`lib/wsl/preset.js` 的 `WORLD_MODULE_NAMES`），再由本插件把**两个名字**挂回去，与 `bash`、`fs` 的重挂载同形：两行，各自一个实例，都指向 `lib/wsl/search-tool.js`，由 `config.tool` 说明这个实例注册哪一个（两行指向同一模块，`config.tool` 缺了它就在挂载时被拒绝，而不是静默地什么都不挂）。
+所以 `wsl-world` 组把这两个宿主行移除（`lib/wsl/preset.js` 的 `WORLD_MODULE_NAMES`），再由本插件把**两个名字**挂回去，与 `bash`、`fs` 的重挂载同形：两行，各自一个实例，都指向 `lib/wsl/search-tool.js`，由 `config.tool` 说明这个实例注册哪一个（两行指向同一个模块，否则会把同一个工具注册两次；缺了 `config.tool` 的行在挂载时被拒绝，而不是静默地什么都不挂）。
 
 两个工具跑的是**发行版自己的** `/usr/bin/grep -E` 与 `/usr/bin/find`，而且这条路上**没有 shell**：模式、路径、include 都作为**恰好一个 argv 元素**到达发行版，所以 `a b; rm -rf /` 只是一个参数（shell 语法在这里是惰性的）；排序与限额在 Node 侧做——realm 里没有可以管道的 `sort`。
 
@@ -42,7 +42,7 @@
 7. **路径含 `:` 的记录可能被丢弃，也可能被静默错配**：grep 打印的是 `path:line:text` 且**没有任何转义**，字段边界在打印那一刻就没了（宿主读的是 ripgrep 的 JSON，realm 只有这份打印）。行号字段读不出整数时记录被**跳过**：`NaN` 不是无损 JSON，宿主的 value 快照会拒绝它（`packages/util/values/src/index.ts:128-129`），整次调用会连同批次里其它命中一起以 `ToolOutputError` 失败，而那个错误里从不提冒号——丢一条是**可恢复的假阴性**，所以现在的选择是跳过（`9.30` 这种**有限但非整数**的行号同样跳过：`tool-fs-search/src/grep.ts:307` 把这个字段声明为 integer）。但读成**有限整数**时没有任何守卫能发现：`/ws/2024:12:00.log:7:needle` 会被错读成 `/ws/2024` 的第 12 行（实测），`''` 与 `' 7'` 同样静默读成 0 与 7。**带冒号的路径请改用 `read`**——这件事只有打印格式能定，而格式是工具自己的，改不动。
 8. **二进制文件永不被匹配**：向量带 `--binary-files=without-match`，它的文档语义是「假定二进制文件不匹配」→ 二进制内容**永远不会进入 `line`**（比宿主更安全）；代价是宿主的 rg 对二进制文件**会报一条命中**，realm 报「无匹配」。
 
-> **机制补记（本机实测，GNU grep 3.11，两个流各自重定向到文件）**：带 flag 的二进制命中 → exit 1、stdout 0 字节、stderr 0 字节；不带 flag → exit 0、stdout 0 字节、**stderr 82 字节**（`binary file matches` 的 notice）。那条 notice 走 **stderr**，而工具成功时不表面化 stderr → 去掉 flag 不会让它响亮失败，只会让「二进制命中」多一条静默理由地与「无匹配」同形；flag 的真实价值就是上面那句文档语义。
+> **机制补记（本机实测，GNU grep 3.11，两个流各自重定向到文件）**：带 flag 的二进制命中 → exit 1、stdout 0 字节、stderr 0 字节；不带 flag → exit 0、stdout 0 字节、**stderr 82 字节**（`binary file matches` 的 notice）。那条 notice 走 **stderr**，而工具成功时不表面化 stderr → 去掉 flag 不会让它响亮失败，只会让「二进制命中」多出一条与「无匹配」同形的理由；flag 的真实价值就是上面那句文档语义。
 
 **八条之外，两处边界要一并知道：**
 
