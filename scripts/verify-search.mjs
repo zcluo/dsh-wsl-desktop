@@ -33,15 +33,20 @@ check('a leading ./ is stripped',
   translateGlob('./src/*.js') === 'src/*.js', translateGlob('./src/*.js'))
 
 console.log('\nthe argv vectors (one inert element per model value)')
-check('grep: no shell, the pattern is one element, -- ends the options',
+// The label says ONE element, and this is the value that would stop being one if anything on the
+// path ever interpreted a model value: the vector must carry it WHOLE, shell metacharacters and
+// all. (The separator half of a claim like this rides on the golden vector below.)
+check('grep: the pattern stays ONE inert element, even when it reads like shell syntax',
   JSON.stringify(grepArgv({ pattern: 'a b; rm -rf /', path: '/ws' }, { maxMatches: 100 }))
-    .includes('"a b; rm -rf /"'))
+    .includes('"a b; rm -rf /"'),
+  grepArgv({ pattern: 'a b; rm -rf /', path: '/ws' }, { maxMatches: 100 }))
+// GNU grep's --include goes through fnmatch, which has no brace expansion — so the braces have to
+// reach grep as typed. Pinned as the element's whole text: a value split on its comma (what an
+// expansion would look like) is no longer THAT element, even though a bare prefix check passes.
 check('grep: include maps to --include= (fnmatch: braces are NOT expanded)',
-  grepArgv({ pattern: 'x', path: '/ws', include: '*.{ts,tsx}' }, { maxMatches: 1 }).some(a => a.startsWith('--include=')))
-check('grep: every VCS name is excluded by --exclude-dir (measured missing -> .git hits)',
-  VCS_EXCLUDES.every(name => grepArgv({ pattern: 'x', path: '/ws' }, { maxMatches: 1 }).includes(`--exclude-dir=${name}`)))
-check('glob: VCS names are pruned, never merely filtered',
-  globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 100 }).join(' ').includes('-prune'))
+  grepArgv({ pattern: 'x', path: '/ws', include: '*.{ts,tsx}' }, { maxMatches: 1 })
+    .includes('--include=*.{ts,tsx}'),
+  grepArgv({ pattern: 'x', path: '/ws', include: '*.{ts,tsx}' }, { maxMatches: 1 }))
 check('glob: the pattern is ANCHORED to the search root (unanchored matches nothing)',
   globArgv({ pattern: 'src/**/*.ts', path: '/ws' }, { maxResults: 100 }).includes('/ws/src/*.ts'))
 // The root is the one path where anchoring can go wrong: stripping the trailing slashes yields ''
@@ -63,45 +68,45 @@ check('glob: the pattern is ANCHORED to the search root (unanchored matches noth
     translateGlob('/**/*.ts') === '*.ts' && argv.includes('/ws/*.ts'),
     { translated: translateGlob('/**/*.ts'), argv })
 }
-check('glob: mtime is printed for the sort, NUL-terminated so spaces survive',
-  globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 100 }).join(' ').includes('-printf'))
+
+// GOLDEN VECTORS — the whole argv of each builder, compared literally (Task 1 review, Finding 1).
+// MEASURED before they existed, on this suite: a glob-side `VCS_EXCLUDES.slice(1)` that drops five
+// of six prunes left it GREEN (15 passed, 0 failed), `%p\n` in place of the -printf format left it
+// GREEN, and swapping the chain to `-o` `-prune` left it GREEN. The weak presence rows those
+// mutations walked past are gone: their facts are measured here instead, once, over the entire
+// vector — every name, the order, the separator and the output format included. A name-blind
+// substring check cannot tell a dropped exclusion from a present one; a literal vector can.
+const GOLDEN_GREP = ['/usr/bin/grep', '-r', '-n', '-H', '-E', '--binary-files=without-match',
+  '--exclude-dir=.git', '--exclude-dir=.svn', '--exclude-dir=.hg', '--exclude-dir=.bzr', '--exclude-dir=.jj', '--exclude-dir=.sl',
+  '--include=*.ts', '--regexp', 'needle', '--', '/ws']
+check('grep: the whole vector is golden (all six exclusions, order, include, separator)',
+  JSON.stringify(grepArgv({ pattern: 'needle', path: '/ws', include: '*.ts' }, { maxMatches: 1 })) === JSON.stringify(GOLDEN_GREP),
+  JSON.stringify(grepArgv({ pattern: 'needle', path: '/ws', include: '*.ts' }, { maxMatches: 1 })))
+const GOLDEN_GLOB = ['/usr/bin/find', '/ws',
+  '-name', '.git', '-prune', '-o', '-name', '.svn', '-prune', '-o', '-name', '.hg', '-prune', '-o',
+  '-name', '.bzr', '-prune', '-o', '-name', '.jj', '-prune', '-o', '-name', '.sl', '-prune', '-o',
+  '-path', '/ws/*.ts', '-type', 'f', '-printf', '%T@ %p\\0']
+check('glob: the whole vector is golden (six prunes in order, anchored path, NUL format)',
+  JSON.stringify(globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 1 })) === JSON.stringify(GOLDEN_GLOB),
+  JSON.stringify(globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 1 })))
 
 console.log('\nthe properties the vectors above stand on')
-// The `--` is the other half of the row above: `--regexp` already consumes the pattern, and
-// this is what keeps the PATH from being read as an option when a model value begins with
-// one. Asserted separately so a failure names which half broke.
-{
-  const argv = grepArgv({ pattern: 'x', path: '/ws' }, { maxMatches: 1 })
-  check('grep: -- stands between the model values and the path, so a leading dash is never an option',
-    argv.at(-2) === '--' && argv.at(-1) === '/ws', argv)
-}
 // The host's list, item for item (host parity: tool-fs-search/src/glob.ts:37). Pinned as
 // the literal list rather than as a length: a reorder or an added name is a behaviour
-// change against the host, and this is the one place it would be noticed.
+// change against the host, and this is the one place it would be noticed. (The golden
+// vectors are built FROM this constant, so they notice it too — this row names the diff.)
 check('glob: the VCS list is the host list, in the host order — no extension, no reorder',
   JSON.stringify(VCS_EXCLUDES) === JSON.stringify(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl']),
   VCS_EXCLUDES)
-// The exclusions ride on grep OPTIONS, so where they sit in the vector is part of the
-// vector: the presence row above proves all six are in it, this one proves none of them
-// landed after `--`, where grep would read it as just another path operand.
+// The exclusions ride on grep OPTIONS, so where they sit is part of the vector: past the `--`
+// grep reads one as just another PATH OPERAND and stops excluding anything. (Their ORDER among
+// themselves has no such consequence — GNU grep options commute — so it is not asserted here.)
 {
   const argv = grepArgv({ pattern: 'x', path: '/ws', include: '*.ts' }, { maxMatches: 1 })
   const lastExclude = argv.map((element) => element.startsWith('--exclude-dir=')).lastIndexOf(true)
-  const include = argv.findIndex((element) => element.startsWith('--include='))
   const separator = argv.indexOf('--')
-  check('grep: the exclusions precede both --include= and the -- separator',
-    lastExclude !== -1 && lastExclude < include && lastExclude < separator,
-    { lastExclude, include, separator, argv })
-}
-// `-o` binds looser than the implicit `-a`, so the chain is a sequence of alternatives and
-// the LAST prune must still precede the match action: an action placed inside the chain
-// would fire only for a path that matched no earlier alternative.
-{
-  const argv = globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 100 })
-  const lastPrune = argv.lastIndexOf('-prune')
-  const matchAction = argv.indexOf('-path')
-  check('glob: the whole prune chain stands before the match action',
-    lastPrune !== -1 && matchAction !== -1 && lastPrune < matchAction, { lastPrune, matchAction, argv })
+  check('grep: the exclusions precede the -- separator, because past it they are path operands',
+    lastExclude !== -1 && lastExclude < separator, { lastExclude, separator, argv })
 }
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
