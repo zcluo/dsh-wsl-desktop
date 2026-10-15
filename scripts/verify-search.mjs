@@ -228,6 +228,30 @@ check('glob: the cap reports truncation, because a silent cap reads as a complet
   check('glob: the cap keeps the OLDEST records — the sort runs before the slice',
     JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
 }
+// Carried from the controller's ruling 22 (Task 2 report, C3) rather than invented here: the two
+// parsers must refuse the same class of input. The vector's own `-printf '%T@ %p'` ALWAYS emits the
+// space, so a record without one did not come from a whole print — the tool or the vector is in
+// trouble — and inventing a path out of a broken record is worse than dropping it. The fixture is
+// that cut in BOTH of its measured shapes: a valid mtime with its space never printed (the old code
+// answered the phantom path '1759050000.5'; its prefix is a perfectly good number, so checking the
+// number alone would NOT catch this — it is the SPACE that says the record is whole), and the flat
+// 'nospace' of the original measurement, which became a phantom path too. The drop is silent by
+// design (`truncated` is about the CAP, not about damage), which is why it is stated here and in
+// the parser's docblock instead of being left to be discovered.
+{
+  const out = parseGlobOutput('1.0 /ws/a.ts\0' + '1759050000.5\0' + 'nospace\0', { maxResults: 9 })
+  check('glob: a record with no space is skipped, never a phantom path — the -printf always emits one',
+    JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
+}
+// The same rule for the mtime, and it is not a formality: the mtime is what the sort orders by, and
+// ordering is the entire reason this parser exists (the cap keeps the OLDEST). `Number('abc')` is
+// NaN, and a comparator that returns NaN is not an order anyone decided — it is wherever V8 happens
+// to leave the record. So the record is dropped rather than sorted on a value it does not have.
+{
+  const out = parseGlobOutput('1.0 /ws/a.ts\0' + 'abc /ws/b.ts\0', { maxResults: 9 })
+  check('glob: a record whose mtime is not a number is skipped, not ordered on NaN',
+    JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
+}
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
 process.exit(checker.failures === 0 ? 0 : 1)
