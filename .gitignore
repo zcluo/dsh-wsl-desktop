@@ -25,6 +25,11 @@ pnpm-debug.log*
 /%SystemDrive%/
 _debug-*.mjs
 
+# A one-off client probe (it polls /plugins/events on a port that no longer
+# serves). Untracked, harmless, and nothing ignored it — one `git add -A` would
+# have committed it.
+.icon-probe.mjs
+
 # Bytecode cache from py_compile on the shipped bridge source. Hygiene only:
 # "files" in package.json whitelists all of lib/, and npm cannot exclude a
 # files-included path through .gitignore — scripts.prepack is what keeps the

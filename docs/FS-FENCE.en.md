@@ -23,6 +23,8 @@ This is the complete record of the fence on the fs mutation entries: why the fen
 
 Several of the fence's open records cannot be settled by reading source: the 9P share's case semantics, whether `realpath` crosses a Linux symlink, whether two distributions' shares report the same `(dev,ino)`, whether the fs-fence fixture root exists — these are properties of **this machine**, not of the repository. Writing a fix for a guessed answer is writing a fix for another machine, so measure first and record after. This table is the ruling input for D8 and the four pending records (token / argv / FIFO / budget).
 
+> **How to read the sample blocks**: the samples below are **verbatim output from the measuring machine** (the probe resolves the login name and bakes it into the label), so they carry that machine's login name; the prose writes the same path as `<home>`. Stripping the name out of a sample would turn a quotation into something the probe cannot produce, which is worse than leaving it.
+
 `scripts/probe-fence-facts.mjs` is read-only: every probe is a stat / realpath, it creates nothing and writes nothing; the second distribution is passed as argv[2], and when it is absent F3/F5 report `UNMEASURED` honestly — **UNMEASURED is a result, not a failure**. When argv[2] names the same distribution as the primary (case-insensitively) they likewise report `UNMEASURED` and say why: comparing one share against itself gives every F3 row a vacuous `COLLIDES`, and F5 would even report `true` — that is the lexical fast path containing itself, not the walk's verdict, while the annotation beside it would falsely claim the walk had short-circuited on the missing root.
 
 Measured **2026-10-01**; primary distribution `debian`, second distribution `debian-dev`:
