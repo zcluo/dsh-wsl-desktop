@@ -138,29 +138,29 @@ check('grep: the path ends at the FIRST colon, the number sits between the two, 
 // Not an edge case: the print has no escaping, so a matching line that CONTAINS a colon arrives
 // with three or more of them. Reaching for the last one — or taking the third field of a plain
 // split — reads such a line as less than it is, and the text is the field that must keep its
-// colons. (The other direction of the same ambiguity is read one row down — and it is a decision
-// rather than a gap: a colon in the PATH mis-splits the record and nothing here can undo it.)
+// colons. (The other direction of the same ambiguity is read one row down — and it is a SKIP rather
+// than a pin: nothing here can undo it, but the record it damages can be dropped.)
 {
   const out = parseGrepOutput('/ws/a.ts:12:x = 1: done\n', { maxMatches: 5, maxLineBytes: 99 })
   check('grep: a colon in the TEXT stays text — the split never reaches for the last colon',
     out.matches[0].path === '/ws/a.ts' && out.matches[0].lineNumber === 12 && out.matches[0].text === 'x = 1: done', out)
 }
-// Carried from the controller's ruling 20 (Task 2 report, C1) rather than invented here, and this is
-// the SAME ambiguity read the other way — except this direction is UNRECOVERABLE, not merely
-// unfixed. grep prints `path:line:text` with no escaping, so a path containing a colon is
-// indistinguishable from the separators: the information is lost at the PRINT layer, before any
-// parser sees the string, and no implementation could get it back. (The host dodges this by reading
-// ripgrep's JSON; the realm has only this print.) The measured outcome is therefore pinned as a
-// DECISION, so the next reader meets something decided instead of an accident: the path is cut at
-// the first colon, the number field is `b.ts`, and `Number('b.ts')` is NaN — which the DETAIL prints
-// as `null`, because JSON has no NaN (that is why the row asks Number.isNaN and not === NaN). The
-// gap itself belongs in Task 5's docs/SEARCH.md list of the realm's differences from the host.
+// Carried from the controller's ruling 25, which REVERSES ruling 20, rather than invented here. It
+// reads the SAME ambiguity as the row above from the other side — a colon inside the PATH — and this
+// direction cannot be resolved from the print at all: grep prints `path:line:text` with no escaping,
+// so the field boundaries are gone before this function sees the string (the host dodges this by
+// reading ripgrep's JSON; the realm has only this print). What is left is which FAILURE to take, and
+// the ruling takes the recoverable one. Ruling 20 pinned the outcome as a decision — path cut at the
+// first colon, number field `b.ts`, NaN — on the sound ground that the print cannot be repaired; what
+// it did not weigh is what a NaN DOES downstream: it is not lossless JSON, so the host's value
+// snapshot rejects the whole value and the ENTIRE call fails (ToolOutputError), taking every other
+// match in the batch with it behind an error that never mentions a colon. A dropped record loses one
+// record, and the model can re-run with `read`, a narrower path, or bash. So the answer here is an
+// EMPTY list and NO truncation: unreadable rather than capped.
 {
   const out = parseGrepOutput('/ws/a:b.ts:7:x\n', { maxMatches: 5, maxLineBytes: 99 })
-  check('grep: a colon in the PATH mis-splits the record and STAYS mis-split — documented, not repaired',
-    out.matches.length === 1 && out.matches[0].path === '/ws/a'
-    && Number.isNaN(out.matches[0].lineNumber) && out.matches[0].text === '7:x'
-    && out.truncated === false, out)
+  check('grep: a colon in the PATH leaves NO record — the unreadable line is skipped, never kept as NaN',
+    JSON.stringify(out) === JSON.stringify({ matches: [], truncated: false }), out)
 }
 // A file authored on Windows keeps its CR, and the terminator belongs to the file's line ending
 // rather than to the line's text — grep prints it verbatim because it is simply the last
@@ -172,6 +172,17 @@ check('grep: CRLF is trimmed, so a Windows-authored line keeps its text',
 // the empty-result family one step on, where a cut answer reads as a complete one.
 check('grep: the cap truncates AND says so, because a silent cap reads as a complete answer',
   parseGrepOutput('/a:1:x\n/a:2:y\n', { maxMatches: 1, maxLineBytes: 99 }).truncated === true)
+// The parked minor the task review named, carried into ruling 25's round rather than invented here:
+// the silent half of a drop. `truncated` is about the CAP — "there was more and the cap stopped me"
+// — so a record the parser could not READ must not set it, and this row exists because the code was
+// already right with nothing saying so. The fixture puts the unreadable record exactly where the cap
+// is full, which is the only place the two can be confused: an implementation that consults the cap
+// first sees a full answer with a record left over and reports a truncation that never happened.
+{
+  const out = parseGrepOutput('/a:1:x\n/b:c.ts:7:y\n', { maxMatches: 1, maxLineBytes: 99 })
+  check('grep: a dropped record does NOT set truncated — the flag is about the cap, not about damage',
+    JSON.stringify(out) === JSON.stringify({ matches: [{ path: '/a', lineNumber: 1, text: 'x' }], truncated: false }), out)
+}
 // The cap's second field: maxMatches bounds how many records come back, maxLineBytes bounds how
 // much of ONE line does. A mutilated line is not a truncation of the ANSWER, so it does not set
 // that flag — it is the record, cut to fit.
