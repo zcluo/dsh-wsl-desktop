@@ -20,7 +20,7 @@ Turns a WSL distribution into a **first-class execution world** inside DSH Deskt
 
 ## Target capabilities
 
-**Honest state after live acceptance** (`verify-post-restart.mjs` all green + 20 offline suites; each item below notes its evidence strength):
+**Honest state after live acceptance** (`verify-post-restart.mjs`: its rows that have run are green, but **the two live search rows have not run yet** and await the operator's live acceptance this round, plus 20 offline suites; each item below notes its evidence strength):
 
 | # | Capability | Status |
 |---|---|---|
