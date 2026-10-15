@@ -4,7 +4,8 @@
  * A WSL realm has NO search tool of the host's: the host's grep/glob are deliberately
  * removed there, because their argv[0] is a packaged WINDOWS ripgrep binary. The realm
  * gets its own instead, run by the distribution's own /usr/bin/grep and /usr/bin/find —
- * and everything this module decides is an ARGV VECTOR. That is what the rows below pin.
+ * and everything this module decides is an ARGV VECTOR, or the reading of what one PRINTS.
+ * That is what the rows below pin.
  *
  * There is no shell anywhere on that path. Every model value (pattern, path, include)
  * must therefore arrive as exactly ONE inert element, and a value that looks like shell
@@ -19,7 +20,7 @@
  */
 import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
-import { globArgv, grepArgv, translateGlob, VCS_EXCLUDES } from '../lib/wsl/search.js'
+import { globArgv, grepArgv, parseGlobOutput, parseGrepOutput, translateGlob, VCS_EXCLUDES } from '../lib/wsl/search.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 300) })
 const { check } = checker
@@ -69,6 +70,7 @@ check('glob: the pattern is ANCHORED to the search root (unanchored matches noth
     { translated: translateGlob('/**/*.ts'), argv })
 }
 
+
 // GOLDEN VECTORS — the whole argv of each builder, compared literally (Task 1 review, Finding 1).
 // MEASURED before they existed, on this suite: a glob-side `VCS_EXCLUDES.slice(1)` that drops five
 // of six prunes left it GREEN (15 passed, 0 failed), `%p\n` in place of the -printf format left it
@@ -109,6 +111,72 @@ check('glob: the VCS list is the host list, in the host order — no extension, 
   const separator = argv.indexOf('--')
   check('grep: the exclusions precede the -- separator, because past it they are path operands',
     lastExclude !== -1 && lastExclude < separator, { lastExclude, separator, argv })
+}
+
+console.log('\nthe parsers (host shape, without the host binary)')
+
+// The other half of the module, and the half no argv row can reach: a perfect vector is still
+// read WRONG if what the tool PRINTS never becomes the host's shape. The subject here is a
+// string, so no distribution is involved — and every string is the format the vectors above
+// ask for. The splits are where it can go wrong: grep prints `path:line:text` with no escaping
+// and find prints `%T@ %p` NUL-separated, so WHICH separator is a separator is the whole game.
+const grepOut = parseGrepOutput('/ws/a.ts:12:const x = 1\n/ws/b.ts:3:export {}\n', { maxMatches: 10, maxLineBytes: 1024 })
+check('grep: the path ends at the FIRST colon, the number sits between the two, the text follows the second',
+  grepOut.matches[0].path === '/ws/a.ts' && grepOut.matches[0].lineNumber === 12
+  && grepOut.matches[0].text === 'const x = 1' && grepOut.truncated === false, JSON.stringify(grepOut))
+// Not an edge case: the print has no escaping, so a matching line that CONTAINS a colon arrives
+// with three or more of them. Reaching for the last one — or taking the third field of a plain
+// split — reads such a line as less than it is, and the text is the field that must keep its
+// colons. (The other direction of the same ambiguity, a colon in the PATH, is a gap this parser
+// cannot resolve — grep offers no escaping — and is disclosed rather than asserted here.)
+{
+  const out = parseGrepOutput('/ws/a.ts:12:x = 1: done\n', { maxMatches: 5, maxLineBytes: 99 })
+  check('grep: a colon in the TEXT stays text — the split never reaches for the last colon',
+    out.matches[0].path === '/ws/a.ts' && out.matches[0].lineNumber === 12 && out.matches[0].text === 'x = 1: done', out)
+}
+// A file authored on Windows keeps its CR, and the terminator belongs to the file's line ending
+// rather than to the line's text — grep prints it verbatim because it is simply the last
+// character. Left in, every match's text differs from the line the model asked about.
+check('grep: CRLF is trimmed, so a Windows-authored line keeps its text',
+  parseGrepOutput('/ws/a.txt:1:hello\r\n', { maxMatches: 5, maxLineBytes: 99 }).matches[0].text === 'hello')
+// The cap is applied HERE, in Node, not on the command line: the vector asks the tool for
+// everything, so the parser is the only thing that can stop — and a cap that says nothing is
+// the empty-result family one step on, where a cut answer reads as a complete one.
+check('grep: the cap truncates AND says so, because a silent cap reads as a complete answer',
+  parseGrepOutput('/a:1:x\n/a:2:y\n', { maxMatches: 1, maxLineBytes: 99 }).truncated === true)
+// The cap's second field: maxMatches bounds how many records come back, maxLineBytes bounds how
+// much of ONE line does. A mutilated line is not a truncation of the ANSWER, so it does not set
+// that flag — it is the record, cut to fit.
+{
+  const out = parseGrepOutput(`/a:1:${'x'.repeat(20)}\n`, { maxMatches: 5, maxLineBytes: 4 })
+  check('grep: a line over maxLineBytes is cut to the cap',
+    out.matches[0].text === 'xxxx' && out.truncated === false, out)
+}
+
+// The mtime field is the FIRST space's business only, because a path may contain one; the NUL
+// separator is what keeps that path whole. And the order is the host's MEASURED one: the host
+// sorts by mtime ASCENDING (oldest first), and the sort is Node's here because a realm has no
+// shell to pipe into `sort`.
+{
+  const out = parseGlobOutput('3.0 /ws/b c.ts\0' + '1.0 /ws/a.ts\0', { maxResults: 9 })
+  check('glob: NUL-separated records, ordered by mtime ASCENDING (host parity), spaces intact',
+    JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts', '/ws/b c.ts']) && out.truncated === false, out)
+}
+// The same separator seen from the other side: the character a line-based record could never
+// carry. A path with a newline in it is legal in Linux, and this is the row that says why the
+// record format is NUL rather than a line.
+check('glob: a newline inside a path survives — the NUL separator exists for exactly this',
+  JSON.stringify(parseGlobOutput('1.0 /ws/a\nb.ts\0', { maxResults: 9 }).paths) === JSON.stringify(['/ws/a\nb.ts']))
+// Truncation, said out loud, for the same reason as the grep row above.
+check('glob: the cap reports truncation, because a silent cap reads as a complete listing',
+  parseGlobOutput('1.0 /a\0' + '2.0 /b\0', { maxResults: 1 }).truncated === true)
+// WHICH records the cap keeps is a second decision, and the sort makes it: the cap keeps the
+// OLDEST — the first N by mtime, not the first N find happened to print. The fixture's find
+// order is deliberately the reverse of its mtime order, so the two answers differ.
+{
+  const out = parseGlobOutput('3.0 /ws/b.ts\0' + '1.0 /ws/a.ts\0', { maxResults: 1 })
+  check('glob: the cap keeps the OLDEST records — the sort runs before the slice',
+    JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
 }
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
