@@ -41,7 +41,7 @@ const HOST_HALF_CHECKS = [
 
 
 /** Modules that import nothing from the harness, so the source tree can load them. */
-const PURE = ['lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/http-admission.js']
+const PURE = ['lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/wsl/search.js', 'lib/http-admission.js']
 
 /** Every module the host half loads, including the ones that need the host's resolution. */
 const ALL = [
@@ -55,6 +55,12 @@ const ALL = [
   'lib/wsl/shell.js',
   'lib/wsl/fs.js',
   'lib/wsl/publish.js',
+  // The realm's search: `search.js` is the pure half (a `PURE` member above, imported for
+  // real), `search-tool.js` is the row module the loader imports, so it is checked here the
+  // structural way — its `extends HarnessError` is the kind of missing import that surfaces
+  // inside the host as a row that never started.
+  'lib/wsl/search.js',
+  'lib/wsl/search-tool.js',
   'lib/wsl/subprocess.js',
   'lib/wsl/pty.js',
   'lib/wsl/host-refs.js',

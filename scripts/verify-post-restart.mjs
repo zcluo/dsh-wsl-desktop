@@ -295,6 +295,48 @@ try {
   check('the tool layer confines a write outside the workspace', confinedTool?.sandbox?.denied === true, confinedTool)
   check('the tool layer reports the same completeness', confinedTool?.sandbox?.enforcement === 'partial', confinedTool?.sandbox)
 
+  // The realm's own search tools. A WSL realm REMOVES the host's grep/glob rows on
+  // purpose (their argv[0] is a packaged Windows ripgrep) and this plugin's two rows put
+  // the two names back, running the distribution's own grep/find. They are the only tools
+  // here with no offline observer at all: `lib/wsl/search-tool.js` imports harness
+  // packages, so no offline suite in this repo can drive it through the registry — the
+  // selftest records the two rows, and these two checks are what reads them.
+  //
+  // The fixture names, the token and the line number are spelled AGAIN here on purpose:
+  // lib/index.js writes them and this file asserts on their Linux paths — the pairing
+  // `dsh-wsl-selftest.txt` already has between the two files (nothing derives one from
+  // the other, so a rename has to move both copies).
+  const searchProbe = `${wslScratch}/src/dsh-wsl-search-probe.ts`
+  const searchNested = `${wslScratch}/src/a/b/deep.ts`
+  const searchToken = 'dsh-wsl-search-needle'
+  const grepStep = step('tool.search.grep')
+  const grepText = grepStep?.text ?? ''
+  // The LINE NUMBER, not merely the file: a hit on line 1 of the probe satisfies any
+  // "the file was searched" reading, and the probe's match is deliberately on line 3.
+  check('the search tools run inside the distribution',
+    grepStep?.ok === true
+    && grepText.includes(searchProbe)
+    && grepText.includes('"lineNumber":3')
+    && grepText.includes(searchToken),
+    grepStep === undefined
+      ? 'the selftest recorded no tool.search.grep step — the record name is spelled in lib/index.js'
+      : grepText.slice(0, 300))
+  // `.git` is the whole point of the exclusion list, and the fixture under `src/.git/`
+  // carries the SAME token, INSIDE the pattern's reach: a find that stopped pruning the
+  // six VCS names lists a third path here (measured). The nested file sits TWO directories
+  // below the pattern's own prefix — a pattern not anchored to the search root matches
+  // nothing at all (measured), which is the defect this clause pins.
+  const globStep = step('tool.search.glob')
+  const globText = globStep?.text ?? ''
+  check('the glob tool lists without descending into VCS metadata',
+    globStep?.ok === true
+    && globText.includes(searchProbe)
+    && globText.includes(searchNested)
+    && !globText.includes('.git'),
+    globStep === undefined
+      ? 'the selftest recorded no tool.search.glob step — the record name is spelled in lib/index.js'
+      : globText.slice(0, 300))
+
   // The scratch workspace is removed again, so a run leaves nothing behind in the
   // home — the fixture file it holds lives inside it. The removal REPORTS its own outcome: the
   // previous `.catch(() => ({ exitCode: -1 }))` turned every failure into a value nobody read, so

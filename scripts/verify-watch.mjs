@@ -117,7 +117,7 @@ console.log('\ndirectory polling')
   check('disposing twice does not clear again', io.cleared === 1, io.cleared)
 }
 
-console.log('\nabsence is an empty entry set, not a failure')
+console.log('\nabsence is a key of its own, not a failure')
 {
   const io = fakeIo()
   io.readdirError = ENOENT()
@@ -131,6 +131,37 @@ console.log('\nabsence is an empty entry set, not a failure')
   await armed.tick()
   check('the directory disappearing notifies', armed.notifications.length === 2, armed.notifications.length)
   check('absence is never reported as an error', armed.errors.length === 0, armed.errors.map((error) => error.message))
+  await armed.dispose()
+}
+{
+  // The two readings this row hands the watch are exactly the two the injected io seam exists
+  // for: ENOENT first, then a reading of an EMPTY directory. If absence and an empty entry set
+  // answer the same key, the empty directory's creation notifies nobody — the blindness
+  // `docs/WATCH.md` used to accept as a declared limitation.
+  const io = fakeIo()
+  io.readdirError = ENOENT()
+  const armed = await armDirWatch(io)
+  io.readdirError = null
+  io.entries = []
+  await armed.tick()
+  check('an absent directory becoming an EMPTY one notifies — absence and an empty entry set are different keys',
+    armed.notifications.length === 1, armed.notifications.length)
+  await armed.dispose()
+}
+{
+  // The SAME two keys with the arms mirrored, because `docs/WATCH.md` and the docblock both
+  // claim the conversion either way, and a one-directional inequality would satisfy the row
+  // above alone: the armed baseline is a real reading of an EMPTY directory here, and the tick
+  // after it is absence. A sentinel that only answered absence — or a key that read both as the
+  // same value — is what this row is for. MEASURED: the sentinel reverted to `''` reddens THIS
+  // row and the one above together (38 passed, 2 failed), so those two rows read one key pair in
+  // two directions and that mutant is shared input, not an isolating one.
+  const io = fakeIo({ entries: [] })
+  const armed = await armDirWatch(io)
+  io.readdirError = ENOENT()
+  await armed.tick()
+  check('an EMPTY directory becoming absent notifies — the same two keys, read the other way',
+    armed.notifications.length === 1, armed.notifications.length)
   await armed.dispose()
 }
 

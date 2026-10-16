@@ -20,7 +20,7 @@ Turns a WSL distribution into a **first-class execution world** inside DSH Deskt
 
 ## Target capabilities
 
-**Honest state after live acceptance** (`verify-post-restart.mjs` all green + 19 offline suites; each item below notes its evidence strength):
+**Honest state after live acceptance** (`verify-post-restart.mjs`: its rows that have run are green, but **the two live search rows have not run yet** and await the operator's live acceptance this round, plus 20 offline suites; each item below notes its evidence strength):
 
 | # | Capability | Status |
 |---|---|---|
@@ -29,7 +29,7 @@ Turns a WSL distribution into a **first-class execution world** inside DSH Deskt
 | ③ | Windows and WSL workspaces coexist in the same instance | **Live acceptance PASS**: Windows workspaces stay on the host preset (PowerShell available, no bash); WSL sessions run the confined realm in parallel |
 | ④ | Linux-side sandbox constraints on the WSL side | **Shell side fixed and live-verified**: at runtime, all `rw` mounts are enumerated and remounted read-only one by one (observed `/mnt/c`, `/dev/shm`, `/run/user/<uid>` going WRITABLE → READONLY); any failure rejects (exit code 97 preserved); `enforcement` honestly reports `partial`. **fs-side fence implemented and live-verified** (out-of-bounds write rejected, PASS — see [The fs tool fence](docs/FS-FENCE.md)) |
 
-**Which capabilities are qualified**: the evidence strength is the wording of the status column above. The `grep` / `glob` tools do not exist in a WSL session and the terminal has no `stdio.control` — both are stated under "Known limitations" rather than left out.
+**Which capabilities are qualified**: the evidence strength is the wording of the status column above. The terminal has no `stdio.control` — it is stated under "Known limitations" rather than left out.
 
 ## Install / Update / Uninstall
 
@@ -69,7 +69,7 @@ After every DSH Desktop update, the plugin may break because of harness internal
 
 ## Known limitations
 
-**The grep / glob tools do not exist in a WSL session.** `tool-fs-search` is launched via `ctx.subprocess.spawn()` (`search-core.ts:238`), but its argv[0] is the **bundled Windows rg.exe** from `@vscode/ripgrep` (`search-core.ts:174-178`) — it does not exist inside the distro and cannot work with Linux arguments. So the WSL preset removes it from the execution world, and the model in a WSL session can only use bash's `grep` / `find` (both present in the distro). This is a capability regression, not an omission — making it equivalent would require giving the WSL world its own search implementation.
+**The grep / glob tools are available in a WSL session, backed by the distribution's own `grep` / `find`.** The host's two rows are still removed, for the two measured facts: `tool-fs-search` is launched via `ctx.subprocess.spawn()` (`search-core.ts:238`), but its `argv[0]` is the **bundled Windows rg.exe** from `@vscode/ripgrep` (`search-core.ts:174-178`) — it does not exist inside the distro and cannot work with Linux arguments; the distro, meanwhile, ships `/usr/bin/grep` and `/usr/bin/find` (measured: `command -v rg` inside the distro answers nothing). So the `wsl-world` group mounts the two names back onto this plugin's own implementation (`lib/wsl/search-tool.js`), and the model calls `grep` / `glob` in a WSL session as usual — **with the distribution's semantics**: POSIX ERE (no `\d`, no `(?i)`) · `.gitignore` not parsed (only the six VCS directories are skipped) · dotted directories searched · `include` matching the base name only and without brace expansion · patterns interpreted relative to the search root, with `*` and `**/` crossing `/` · a record whose path contains `:` possibly dropped or silently mis-attributed · binary files never matched · a capped result not saved anywhere. **That list is a summary; the document is authoritative for the eight gaps** (gaps 5 and 6 are merged into one item here, and the last item, "a capped result not saved anywhere", is a limit rather than a gap). The eight gaps, the limits, what was not measured and how to verify it yourself are in [Search inside the distribution](docs/SEARCH.en.md).
 
 **The terminal goes through the PTY bridge, and PTC's `stdio.control` (fd channel) stays explicitly rejected** — `wsl.exe` cannot forward arbitrary descriptors. How the bridge is driven, and its measured preconditions, are in [docs/PTY-BRIDGE.md](docs/PTY-BRIDGE.md).
 
@@ -80,7 +80,7 @@ After every DSH Desktop update, the plugin may break because of harness internal
 ## Verification
 
 ```powershell
-node scripts/verify-all.mjs          # all offline suites (19)
+node scripts/verify-all.mjs          # all offline suites (20)
 node scripts/verify-all.mjs --live   # additionally the suites needing the installed plugin + a running host
 ```
 
