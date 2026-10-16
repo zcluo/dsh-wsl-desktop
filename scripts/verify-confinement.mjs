@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runWslShell } from '../lib/wsl/world.js'
+import { buildConfinedTerminalArgv } from '../lib/wsl/confined-argv.js'
 import {
   DENIAL_SIGNATURES,
   HELPER_PATH,
@@ -667,6 +668,66 @@ check('read-only never grants the helper a writable workspace', !helperReadOnly.
 const helperWrite = buildConfinedCommand({ command: 'true', linuxCwd: '/ws', mode: 'workspace-write', runner: RUNNER_HELPER, workspaceLinuxRoot: '/ws', identity: helperIdentity })
 check('workspace-write routes through the helper with the workspace bound',
   helperWrite.includes('--workspace') && helperWrite.includes(HELPER_PATH), helperWrite)
+
+// The argv a confined TERMINAL spawn hands to the distribution. The realm mounts its own
+// `sandbox` provider for exactly this argv: `terminal-bash` wraps its shell command through
+// `ctx.get('sandbox')` for every mode but `danger-full-access`, and without that provider the
+// caller's argv reached the PTY unfenced — while WITH the host's provider it never reached
+// one at all (its Windows runner grants an ACL on the workspace root, which fails on a 9P UNC
+// spelling). These five rows are pure: they read the shipped builder and the shipped argv
+// translation, and they need no distribution.
+//
+// `isolateProcesses: false` is what the provider passes for this path (its Config default):
+// a PID namespace re-parents an INTERACTIVE shell to PID 1 with a process group the PTY's own
+// foreground queries cannot address, which is why the helper carries `--no-pidns`.
+const terminalArgvInput = ['/bin/bash', '--noprofile', '--norc', '-i']
+const terminalFenceOptions = (runner, mode = 'workspace-write') => ({
+  argv: terminalArgvInput,
+  linuxCwd: '/ws',
+  mode,
+  workspaceLinuxRoot: mode === 'workspace-write' ? '/ws' : undefined,
+  identity: helperIdentity,
+  runner,
+  isolateProcesses: false,
+})
+const confinedTerminalHelper = buildConfinedTerminalArgv(terminalFenceOptions(RUNNER_HELPER))
+const confinedTerminalDirect = buildConfinedTerminalArgv(terminalFenceOptions(RUNNER_SUDO_UNSHARE))
+check('the confined terminal argv carries the fence entry point on both runners',
+  confinedTerminalHelper[0] === 'bash' && confinedTerminalHelper[1] === '-lc'
+    && confinedTerminalHelper[2].includes(`sudo -n ${shellQuote(HELPER_PATH)}`)
+    && confinedTerminalDirect[2].includes('sudo -n unshare --mount'),
+  { helper: confinedTerminalHelper, direct: confinedTerminalDirect })
+// The caller's argv must survive verbatim: both runners hand their command to a shell, so a
+// path or an argument containing a space, a quote or a dollar would be re-read as syntax if
+// the elements were pasted instead of quoted. The two runners transport the command through a
+// DIFFERENT number of quoting layers (the helper takes it as one shell word after `--`; the
+// direct runner embeds it in its namespace script, which the drop re-quotes), so the sequence
+// this row reads is compared with the quote characters stripped from both sides. What remains
+// is the property that has to hold on either transport: `exec`, then the program, then its
+// arguments, in the caller's order. The QUOTING half is the next row's subject.
+const quoteFree = (text) => text.replace(/['\\]/g, '')
+check('the caller\'s program travels into the fence as exec argv',
+  quoteFree(confinedTerminalHelper[2]).includes(quoteFree(`exec ${terminalArgvInput.join(' ')}`))
+    && quoteFree(confinedTerminalDirect[2]).includes(quoteFree(`exec ${terminalArgvInput.join(' ')}`)),
+  { helper: confinedTerminalHelper[2], direct: confinedTerminalDirect[2] })
+check('the terminal fence is the shell executor\'s own builder text, not a second mechanism',
+  confinedTerminalHelper[2] === buildConfinedCommand({
+    command: `exec ${terminalArgvInput.map((element) => shellQuote(element)).join(' ')}`,
+    linuxCwd: '/ws',
+    mode: 'workspace-write',
+    workspaceLinuxRoot: '/ws',
+    identity: helperIdentity,
+    runner: RUNNER_HELPER,
+    isolateProcesses: false,
+  }),
+  'one builder owns the fence: the PTY path presents its output, it does not build its own')
+check('the confined terminal argv names no Windows runner',
+  [...confinedTerminalHelper, ...confinedTerminalDirect]
+    .every((element) => !/\.exe$/i.test(element) && !/windows-acl/i.test(element)),
+  { helper: confinedTerminalHelper, direct: confinedTerminalDirect })
+check('the terminal fence keeps the PTY\'s own process group (no PID namespace)',
+  confinedTerminalHelper[2].includes('--no-pidns') && !confinedTerminalDirect[2].includes('--pid'),
+  { helper: confinedTerminalHelper[2], direct: confinedTerminalDirect[2] })
 
 // The producer refuses the spelling BEFORE either runner turns the value into a
 // pattern, and the helper branch and the in-process branch are separate code

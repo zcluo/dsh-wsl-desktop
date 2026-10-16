@@ -21,6 +21,7 @@ const MODULES = {
   shellPath: 'file:///live/lib/wsl/shell.js',
   fsPath: 'file:///live/lib/wsl/fs.js',
   searchPath: 'file:///live/lib/wsl/search-tool.js',
+  sandboxPath: 'file:///live/lib/wsl/sandbox.js',
 }
 console.log('\nwsl-minimal persistent-shell group (shipped-prevalence regression)')
 // The shipped minimal preset nests ENABLED host PowerShell persistent rows
@@ -180,17 +181,17 @@ const { plugins, removed } = buildVariantPlugins(basePlugins, { ...MODULES, dist
 check('host world rows removed', removed.includes('tool-pwsh') && removed.includes('tool-fs-search'), removed)
 check('non-world rows survive', plugins.some((row) => row.id === 'tool-web'), plugins.map((row) => row.id))
 check('wsl-world group appended', plugins.at(-1)?.id === 'wsl-world', plugins.at(-1)?.id)
-check('group isolates shell/fs/subprocess/terminals', JSON.stringify(plugins.at(-1)?.isolate) === '{"shell":true,"fs":true,"subprocess":true,"terminals":true}', plugins.at(-1)?.isolate)
-check('group carries the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.some((row) => row.id === id)), plugins.at(-1).config.map((row) => row.id))
+check('group isolates shell/fs/subprocess/terminals/sandbox', JSON.stringify(plugins.at(-1)?.isolate) === '{"shell":true,"fs":true,"subprocess":true,"terminals":true,"sandbox":true}', plugins.at(-1)?.isolate)
+check('group carries the four providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl', 'sandbox-wsl'].every((id) => plugins.at(-1).config.some((row) => row.id === id)), plugins.at(-1).config.map((row) => row.id))
 // Under `config`, where the loader actually delivers it: a sibling `distro` key
 // is read by nobody, so pinning THAT certified an inert shape while every
 // provider silently ran with config.distro === undefined.
-check('distro pinned under config on the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.config?.distro === 'debian-dev'), plugins.at(-1).config.map((row) => [row.id, row.config?.distro]))
-check('no provider carries a bare row-level distro', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.distro === undefined), plugins.at(-1).config.map((row) => [row.id, row.distro]))
+check('distro pinned under config on the four providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl', 'sandbox-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.config?.distro === 'debian-dev'), plugins.at(-1).config.map((row) => [row.id, row.config?.distro]))
+check('no provider carries a bare row-level distro', ['subprocess-wsl', 'shell-wsl', 'fs-wsl', 'sandbox-wsl'].every((id) => plugins.at(-1).config.find((row) => row.id === id)?.distro === undefined), plugins.at(-1).config.map((row) => [row.id, row.distro]))
 check('tool rows carry no distro pin', plugins.at(-1).config.filter((row) => row.id.startsWith('tool') || row.id === 'str-replace-editor').every((row) => row.config?.distro === undefined && row.distro === undefined), plugins.at(-1).config.map((row) => [row.id, row.config?.distro]))
 check('editor re-mounted inside the group', plugins.at(-1).config.some((row) => row.id === 'str-replace-editor'), plugins.at(-1).config.map((row) => row.id))
 check('persona amended with the path-dialect sentence', plugins[0].config.suffix.includes('wsl.localhost'), plugins[0].config.suffix?.slice(0, 80))
-check('provider modules are absolute file paths', [MODULES.subprocessPath, MODULES.shellPath, MODULES.fsPath].every((p) => plugins.at(-1).config.some((row) => row.name === p)))
+check('provider modules are absolute file paths', [MODULES.subprocessPath, MODULES.shellPath, MODULES.fsPath, MODULES.sandboxPath].every((p) => plugins.at(-1).config.some((row) => row.name === p)))
 // The realm's searching is re-mounted the way bash and fs are: two rows in the SAME group,
 // named by a module of THIS plugin. Both halves of the claim are one assertion because they
 // are one decision — a row pointed at the host's package would be a row the transform
@@ -210,6 +211,27 @@ check('provider modules are absolute file paths', [MODULES.subprocessPath, MODUL
   check('each search row names the tool its own instance registers',
     searchRows.every((row) => row !== undefined && row.config?.tool === row.id),
     searchRows.map((row) => [row?.id, row?.config]))
+}
+
+// The realm's OWN confinement provider. Two facts, measured separately because they
+// became true for different reasons:
+//
+//   - the row exists, and it is a module of THIS plugin (not a host sandbox package —
+//     the host's is `@deepseek-ai/dsh-sandbox-local`, whose win32 rung ACLs the
+//     workspace path and cannot do that for a 9P UNC spelling);
+//   - the group isolates `sandbox`, which is what makes the row's service land in the
+//     REALM instead of the root realm. The loader refuses a preset whose subtree
+//     publishes a service into the root (`mount.ts:213`, the same rule the `terminals`
+//     key above satisfies), and an unisolated `sandbox` is also what made the backend
+//     reach the HOST provider: `ctx.get('sandbox')` inside the realm resolved to
+//     sandbox-local, whose workspace-write grant fails on a UNC workspace.
+{
+  const group = plugins.at(-1)
+  const sandboxRow = group.config.find((row) => row.id === 'sandbox-wsl')
+  check('the realm mounts its own sandbox provider inside the group',
+    sandboxRow?.name === MODULES.sandboxPath, group.config.map((row) => [row.id, row.name]))
+  check('the group declares the sandbox isolation its own provider requires',
+    group.isolate?.sandbox === true, group.isolate)
 }
 
 // The realm's own terminal stack: three rows mounted INSIDE the group, and the isolation a

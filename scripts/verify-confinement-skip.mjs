@@ -330,6 +330,9 @@ function copySuiteTree(prefix) {
     ['lib/wsl', 'world.js'],
     ['lib/wsl', 'confinement.js'],
     ['lib/wsl', 'paths.js'],
+    // The suite's terminal-argv rows import this module, so a copy without it fails to
+    // load — the same class of omission the two comments below name.
+    ['lib/wsl', 'confined-argv.js'],
     // The finding-1 source pin reads shell.js as TEXT, so a copy without it crashes
     // the suite before the first SKIP line is printed.
     ['lib/wsl', 'shell.js'],
