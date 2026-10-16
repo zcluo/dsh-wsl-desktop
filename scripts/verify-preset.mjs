@@ -180,7 +180,7 @@ const { plugins, removed } = buildVariantPlugins(basePlugins, { ...MODULES, dist
 check('host world rows removed', removed.includes('tool-pwsh') && removed.includes('tool-fs-search'), removed)
 check('non-world rows survive', plugins.some((row) => row.id === 'tool-web'), plugins.map((row) => row.id))
 check('wsl-world group appended', plugins.at(-1)?.id === 'wsl-world', plugins.at(-1)?.id)
-check('group isolates shell/fs/subprocess', JSON.stringify(plugins.at(-1)?.isolate) === '{"shell":true,"fs":true,"subprocess":true}', plugins.at(-1)?.isolate)
+check('group isolates shell/fs/subprocess/terminals', JSON.stringify(plugins.at(-1)?.isolate) === '{"shell":true,"fs":true,"subprocess":true,"terminals":true}', plugins.at(-1)?.isolate)
 check('group carries the three providers', ['subprocess-wsl', 'shell-wsl', 'fs-wsl'].every((id) => plugins.at(-1).config.some((row) => row.id === id)), plugins.at(-1).config.map((row) => row.id))
 // Under `config`, where the loader actually delivers it: a sibling `distro` key
 // is read by nobody, so pinning THAT certified an inert shape while every
@@ -210,6 +210,30 @@ check('provider modules are absolute file paths', [MODULES.subprocessPath, MODUL
   check('each search row names the tool its own instance registers',
     searchRows.every((row) => row !== undefined && row.config?.tool === row.id),
     searchRows.map((row) => [row?.id, row?.config]))
+}
+
+// The realm's own terminal stack: three rows mounted INSIDE the group, and the isolation a
+// service provider requires (F11). `dsh-terminal` PROVIDES `terminals`; a provider that
+// would land in the ROOT realm is refused at mount
+// (`packages/preset/agent-preset-registry/src/mount.ts:213`
+// "Preset services require isolate realms: terminals"). The suite can only pin the
+// DECLARATION here; the refusal itself is the loader's, and Task 1's probe observes it live.
+{
+  const group = plugins.at(-1)
+  const terminalRows = ['pty', 'terminal-bash', 'persistent-bash']
+    .map((id) => group.config.find((row) => row.id === id))
+  check('the realm mounts its own terminal stack inside the group',
+    terminalRows.every((row) => row !== undefined),
+    group.config.map((row) => [row.id, row.name]))
+  check('the realm mounts the registry, the bash backend and the persistent shell, in that order',
+    JSON.stringify(terminalRows.map((row) => row?.name)) === JSON.stringify([
+      '@deepseek-ai/dsh-terminal',
+      '@deepseek-ai/dsh-terminal-bash',
+      '@deepseek-ai/dsh-tool-bash-persistent',
+    ]),
+    terminalRows.map((row) => row?.name))
+  check('the group declares the terminals isolation a service provider requires',
+    group.isolate?.terminals === true, group.isolate)
 }
 
 // The re-mounted tool rows must carry the operator's own config. Re-declaring
