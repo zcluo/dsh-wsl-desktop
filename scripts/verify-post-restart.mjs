@@ -245,6 +245,30 @@ const wslScratch = `${home}/.dsh-wsl-selftest-${process.pid}`
 // path, and it is deliberately best-effort so a cleanup fault cannot mask the original throw.
 try {
   await call('execInWsl', { cwd: home, distro, command: `rm -rf ${wslScratch} && mkdir -p ${wslScratch}` })
+  // The reclaim pair is a BEFORE/AFTER, not a count of zero: a Web terminal panel of the
+  // operator's own may legitimately hold a bridge open, and a suite that demanded an empty
+  // distribution would redden on somebody else's session. What must not happen is OUR run
+  // ADDING one that outlives it.
+  //
+  // Both readings are IDENTITIES, not counts. A count makes "our bridge appeared and one of
+  // the operator's closed" indistinguishable from "nothing appeared" — the two collisions a
+  // criterion about leakage cannot afford. Set containment is what "this run added nothing"
+  // actually means.
+  //
+  // The bridge discriminator is NOT the bridge's filename. `lib/wsl/pty.js` runs the bridge as
+  // `python3 -c <entire source>`, so `terminal-bridge.py` appears in no process's argv at all
+  // (measured on a live bridge's /proc/<pid>/cmdline); `pgrep -f terminal-bridge.py` matches
+  // only the wrapping `bash -lc` whose command text contains that spelling — measured as 1
+  // with ZERO bridges. The string below is the bridge's own module docstring, which is in the
+  // argv by construction, and the bracketed first letter keeps the pattern from matching
+  // itself in that same wrapper (measured 2 with two bridges, 0 for a nonsense pattern).
+  const probeDistro = async (command) => String((await call('execInWsl', { cwd: home, distro, command })).stdout ?? '')
+  const linesOf = (text) => text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
+  const bridgePids = async () => linesOf(await probeDistro(`pgrep -f -- '[P]TY bridge for the WSL execution world' || true`)).sort()
+  const pluginFifos = async () => linesOf(await probeDistro('ls -1 /tmp/dsh-pty-*.fifo 2>/dev/null; echo END'))
+    .filter((line) => line.startsWith('/tmp/dsh-pty-'))
+  const bridgesBefore = await bridgePids()
+  const fifosBefore = await pluginFifos()
   const selftest = await call('selftest', { preset: 'wsl-standard', cwd: `\\\\wsl.localhost\\${distro}${wslScratch}` }).catch((error) => ({ steps: [{ name: 'error', message: error.message }] }))
   const step = (name) => selftest.steps.find((entry) => entry.name === name)
   const created = step('create')
@@ -281,19 +305,31 @@ try {
   // The selftest reports each tool outcome as a bounded JSON string, so the
   // assertions read the raw text rather than re-parsing a possibly truncated
   // document.
+  //
+  // Task 1 measured M1 = P2: the realm's `bash` IS the persistent tool now. Its result is the
+  // terminal text, not the one-shot tool's `{ stdout, sandbox, … }` JSON envelope — so the
+  // marker this row reads is the command's OWN output (`uname -s` prints Linux on this path
+  // too), and the `sandbox` field the two rows below used to read is simply absent from it.
+  // Keeping those two rows would have pinned two `undefined`s.
   const bashText = step('tools.bash')?.text ?? ''
-  check('the bash tool runs inside the distribution', bashText.includes('"isError":false') && bashText.includes('Linux'), bashText.slice(0, 200))
+  check('the bash tool runs inside the distribution',
+    step('tools.bash')?.ok === true && bashText.includes('Linux'), bashText.slice(0, 200))
   const readText = step('tools.read')?.text ?? ''
   check('the read tool addresses a Linux path', readText.includes('"isError":false') && readText.includes(`${wslScratch}/dsh-wsl-selftest.txt`), readText.slice(0, 200))
   const pwshText = step('tools.pwsh')?.text ?? ''
   check('the session exposes no PowerShell tool', pwshText.includes('UNKNOWN_TOOL'), pwshText.slice(0, 200))
-  const sandboxMode = /"sandbox":\{"mode":"([^"]+)"/.exec(bashText)?.[1]
-  if (sandboxMode !== undefined) {
-    console.log(`        tool-layer sandbox mode: ${sandboxMode} (a session resolves this from its permission preset)`)
-  }
-  const confinedTool = step('tools.bashConfined')
-  check('the tool layer confines a write outside the workspace', confinedTool?.sandbox?.denied === true, confinedTool)
-  check('the tool layer reports the same completeness', confinedTool?.sandbox?.enforcement === 'partial', confinedTool?.sandbox)
+  // The confinement question is asked of the FILE SYSTEM rather than of the tool's own
+  // report: the persistent shell tried to write $HOME/.dsh-wsl-persist-outside, one level
+  // above its workspace. Under the distribution-side confinement that write is refused, and
+  // the file's absence is the outcome — not the shell's own diagnostic (measured M3: the
+  // write is refused in-distro with `Read-only file system`, `write-exit=1`).
+  //
+  // This row deliberately does NOT replace `shell.confined` (the service-level row above):
+  // that one keeps pinning the confinement itself, which no longer rides on this tool.
+  const outsideVerdict = String((await call('execInWsl', { cwd: home, distro, command: `test -e ${home}/.dsh-wsl-persist-outside && echo PRESENT || echo ABSENT` })).stdout ?? '').trim()
+  check('the shell in a WSL session cannot write outside its workspace',
+    outsideVerdict === 'ABSENT',
+    { outsideVerdict, note: 'PRESENT means the persistent PTY is not confined in the distribution — Task 1 measured M3 and the docs must declare it (Task C1-b)' })
 
   // The realm's own search tools. A WSL realm REMOVES the host's grep/glob rows on
   // purpose (their argv[0] is a packaged Windows ripgrep) and this plugin's two rows put
@@ -336,6 +372,93 @@ try {
     globStep === undefined
       ? 'the selftest recorded no tool.search.glob step — the record name is spelled in lib/index.js'
       : globText.slice(0, 300))
+
+  // ---- criterion 1: the persistent shell, observed only here -------------------------------
+  // The FIRST call established a cwd and exported a variable; the SECOND read both back. A
+  // one-shot tool answers the second call with a fresh process, so these two rows ARE
+  // criterion 1 — and they are its ONLY observation: no offline suite in this repository can
+  // drive the harness's terminal stack, so an offline copy of this row would be a row about
+  // nothing.
+  const persistA = step('tools.bashPersist.a')
+  const persistB = step('tools.bashPersist.b')
+  // The recorded text is the whole tool-result envelope; the shell's own output is what the
+  // cwd and the variable have to appear in. Parsed rather than substring-matched so a match
+  // on the ENVELOPE (say, an echoed command line in `error`) cannot satisfy the row.
+  const persistText = (() => {
+    const raw = persistB?.text ?? ''
+    try {
+      const envelope = JSON.parse(raw)
+      return String(envelope?.value ?? envelope?.content?.[0]?.text ?? '')
+    } catch {
+      return raw
+    }
+  })()
+  check('the persistent shell keeps its working directory across calls',
+    persistA?.ok === true && persistB?.ok === true && persistText.includes('.dsh-wsl-persist-cwd'),
+    persistB === undefined
+      ? 'the selftest recorded no tools.bashPersist.b step — the record name is spelled in lib/index.js'
+      : persistText.slice(0, 300))
+  check('the persistent shell keeps an exported variable across calls',
+    persistB?.ok === true && persistText.includes('dsh-wsl-persist-probe'), persistText.slice(0, 300))
+
+  // ---- criterion 2: the session gives its PTY back ------------------------------------------
+  // TWO answers are required, not one (R28/R32). The bridge process going away is not the same
+  // statement as the NAME going away: measured while this sweep was written, a session's end
+  // leaves a 0-byte FIFO behind exactly when the bridge's own `finally` cannot run, and the
+  // reclaim rule is a GENERATION rule, so a name can outlive its bridge. And neither is a
+  // count: containment in an interned set says "this run added nothing", which is the claim.
+  const bridgesAfter = await bridgePids()
+  const fifosAfter = await pluginFifos()
+  const addedBridges = bridgesAfter.filter((pid) => !bridgesBefore.includes(pid))
+  const addedFifos = fifosAfter.filter((name) => !fifosBefore.includes(name))
+  check('the session leaves neither a PTY bridge process nor a plugin-named FIFO behind',
+    addedBridges.length === 0 && addedFifos.length === 0,
+    { bridgesBefore, bridgesAfter, addedBridges, fifosBefore, fifosAfter, addedFifos })
+
+  // ---- the fence guard: a mode change is refused while the shell is open --------------------
+  // The backend owns this rule (`terminal-bash/src/index.ts:52-62`) and refuses by throwing.
+  // The selftest drives it from the realm after its persistent calls, so `refused` here is
+  // the guard actually firing — the sentence is asserted too, because a throw for any other
+  // reason (a dead agent, a bad payload) must not read as this guard.
+  const fence = step('tools.persistFence')
+  check('changing the sandbox mode is refused while a persistent terminal session is open',
+    fence?.refused === true && /persistent terminal sessions/.test(String(fence?.reason ?? '')),
+    fence ?? 'the selftest recorded no tools.persistFence step — the record name is spelled in lib/index.js')
+
+  // ---- the interactive dialect: no prompt and no echo leak into the tool's text ------------
+  // The distribution's interactive bash is driven through the backend's sanitize layer, and
+  // this is the first time anything observes that. A leaked prompt or an echoed command line
+  // is what "not sanitized" looks like, and it would be visible here.
+  //
+  // The prompt is matched by the backend's own CONTROLLED_PROMPT spelling (`dsh> `,
+  // `terminal-bash/src/sanitize.ts:9`) and by bash's own `bash-5.2$` default, NOT by the
+  // placeholder `__DSH_PERSISTENT_BASH_PROMPT__` the brief carried: that literal exists in no
+  // implementation — measured with grep over the harness and this plugin — so a row keyed on
+  // it could only ever pass vacuously.
+  //
+  // The echo clause quotes a fragment of the SECOND command verbatim (`lib/index.js` spells the
+  // same command): a sanitizer that passed the terminal's echo through would put that line in
+  // the text, and no legitimate output of this command contains a `"` or that assignment.
+  check('the interactive shell’s prompt and echo do not leak into the tool’s output',
+    persistB?.ok === true
+    && !/(?:^|\n)\s*dsh> /m.test(persistText)
+    && !/^\s*(bash|sh)-[\d.]+\$/m.test(persistText)
+    && !persistText.includes('echo "$DSH_WSL_PERSIST_PROBE"'),
+    persistText.slice(0, 300))
+
+  // ---- the sweep judges age in the distribution's clock (R47) -------------------------------
+  // The behavioural landing place for a SOURCE-SHAPE pin: no fixture can make two clocks
+  // disagree, so `verify-pty-handle.mjs` can only pin the sweep's shape. This row is the
+  // behaviour — a fresh LEGACY name must survive, a backdated one must go, and the verdicts
+  // must not move when a host-side reading is shifted, because the host contributes only the
+  // set difference.
+  const sweepProbe = step('tools.persistSweep')
+  check('the orphan sweep judges age in the distribution’s clock, not the host’s',
+    sweepProbe?.youngKept === true && sweepProbe?.agedSwept === true,
+    sweepProbe ?? 'the selftest recorded no tools.persistSweep step — the record name is spelled in lib/index.js')
+  check('shifting the host-side reading does not change either sweep verdict',
+    sweepProbe?.youngKeptAfterShift === true && sweepProbe?.agedSweptAfterShift === true,
+    sweepProbe ?? 'the selftest recorded no tools.persistSweep step — the record name is spelled in lib/index.js')
 
   // The scratch workspace is removed again, so a run leaves nothing behind in the
   // home — the fixture file it holds lives inside it. The removal REPORTS its own outcome: the
@@ -387,6 +510,27 @@ try {
   check('no realm-scoped shell is mounted', !(winStep('shell.service')?.proto ?? '').includes('confinementFor'), winStep('shell.service'))
   check('the host PowerShell tool works', (winStep('tools.pwsh')?.text ?? '').includes('"isError":false'), winStep('tools.pwsh')?.text?.slice(0, 160))
   check('no bash tool exists in the host world', (winStep('tools.bash')?.text ?? '').includes('UNKNOWN_TOOL'), winStep('tools.bash')?.text?.slice(0, 160))
+  // Criterion 3 for the NEW capability: the host world must not have gained a persistent
+  // shell either. The probe rows run in this selftest too, so the host session answers them
+  // itself — `bash` does not exist in the host world (the shipped row is win32-disabled), and
+  // the persistent one was never mounted here. Both halves are asserted because the pair is
+  // what distinguishes "no persistent shell" from "no bash at all": a host world that answered
+  // the persistent pair would mean the realm's tool row leaked out of its isolate.
+  const winPersistA = winStep('tools.bashPersist.a')
+  const winPersistB = winStep('tools.bashPersist.b')
+  // The fence probe must not report a REFUSAL here either: a host world with no terminal
+  // session has nothing for the guard to protect, so the append is accepted or fails for an
+  // unrelated reason — but "refused while a persistent terminal session is open" would mean
+  // the realm's session is live inside the host world.
+  const winFence = winStep('tools.persistFence')
+  check('no persistent bash tool leaked into the host world',
+    (winPersistA?.text ?? '').includes('UNKNOWN_TOOL')
+    && (winPersistB?.text ?? '').includes('UNKNOWN_TOOL'),
+    {
+      a: winPersistA?.text?.slice(0, 160) ?? 'no tools.bashPersist.a step was recorded',
+      b: winPersistB?.text?.slice(0, 160) ?? 'no tools.bashPersist.b step was recorded',
+      fence: winFence?.refused === true ? winFence.reason : 'the mode change was not refused in the host world',
+    })
 } finally {
   await rm(windowsRoot, { recursive: true, force: true })
 }
