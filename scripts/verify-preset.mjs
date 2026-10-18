@@ -267,7 +267,8 @@ check('provider modules are absolute file paths', [MODULES.subprocessPath, MODUL
 // The harness's own text and timeout for the persistent shell, restated here VERBATIM. It
 // has to be restated in the realm because nothing carries it: the host row is removed by
 // MODULE NAME (`WORLD_MODULE_NAMES`), while `prune()` records `toolConfig` only for the five
-// canonical WORLD_ROWS ids plus the editor (`lib/wsl/preset.js:421-446`). Source:
+// canonical WORLD_ROWS ids plus the editor (`lib/wsl/preset.js:442-466` — `prune` starts at
+// `:442`, and its two `toolConfig.set` sites are `:449` and `:466`). Source:
 // `packages/bundle/web-app/presets/minimal.patch.yml:50-59`.
 const PERSISTENT_BASH_DESCRIPTION = [
   'Run commands in a bash shell',

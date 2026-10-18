@@ -638,6 +638,72 @@ check('a cancelled allocation does not sweep (the sweep is handed the allocation
 if (cancelledHandle !== null) { try { await cancelledHandle.terminate() } catch { /* already over */ } }
 await runWslShell({ distro, linuxCwd: '/', command: `rm -f ${shellQuote(CANCEL_ORPHAN)}`, loginShell: false, timeoutMs: 30_000 })
 
+// --- the sweep's AGE DECISION lives in the distribution's clock (ruling R37) -----------
+//
+// The defect this replaces was a CROSS-CLOCK comparison: the distro's mtimes came back as
+// `%T@` and were subtracted from the HOST's `Date.now()`. A distribution whose clock lags the
+// host by more than the legacy window then made a name that was still inside its own
+// mkfifo→open creation window look old, and the sweep removed it.
+//
+// It cannot be pinned with a FIXTURE, and this row is structured the way it is because of
+// that: every fixture below sets its timestamp with `touch -t`, which fixes the mtime no
+// matter what either clock says, so no arrangement of fixtures makes the two clocks disagree.
+// A skew is the whole trigger, and a test cannot create one without setting the distro clock
+// (which needs privileges this suite must not want). What IS observable is the shape that
+// removes the class of bug: the age question is asked and answered inside ONE command, in the
+// distro's own clock domain. So this row reads the sweep's COMMAND TEXT.
+//
+// Comments are stripped, string bodies KEPT — the inverse of `blankLiterals`, whose blanking
+// would erase exactly the tokens under test. The file carries `-printf` and `Date.now` inside
+// the doc comment that explains their removal, and a raw read would be satisfied by prose.
+const withoutComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+{
+  const ptySource = withoutComments(await readFile(join(here, '..', 'lib', 'wsl', 'pty.js'), 'utf8'))
+  const sweepStart = ptySource.indexOf('export async function sweepOrphanFifos')
+  const sweepEnd = ptySource.indexOf('export async function spawnWslTerminal')
+  const sweepBody = sweepStart > -1 && sweepEnd > sweepStart ? ptySource.slice(sweepStart, sweepEnd) : ''
+  check('the sweep asks the distribution whether a legacy name is old, instead of comparing its mtime to this host’s clock',
+    sweepBody !== ''
+    && /-mmin \+/.test(sweepBody)
+    // `\b` matters: `-printf` CONTAINS the substring `-print`, so a plain `/-print/` would be
+    // satisfied by the very predicate the next arm refuses.
+    && /-print\b/.test(sweepBody)
+    // A GNU-only predicate is not merely unportable: with stderr discarded its refusal is
+    // SILENT, so the sweep collects nothing and a busybox `find` reads as a clean distro.
+    && !/-printf/.test(sweepBody)
+    && !/%T@/.test(sweepBody)
+    // The host's clock must not appear in the sweep at all: any use of it here is the other
+    // half of a two-clock comparison.
+    && !/Date\.now/.test(sweepBody)
+    && !/new Date\(/.test(sweepBody),
+    {
+      mmin: /-mmin \+/.test(sweepBody),
+      print: /-print\b/.test(sweepBody),
+      gnuPrintf: /-printf/.test(sweepBody),
+      mtimeToken: /%T@/.test(sweepBody),
+      hostClock: /Date\.now|new Date\(/.test(sweepBody),
+      length: sweepBody.length,
+    })
+}
+
+// --- the live set is registered after the probe that can refuse the allocation (R39) ----
+//
+// `liveFifoNames.add(fifo)` used to stand BEFORE `await requireBridgeRuntime(...)`, so a probe
+// that threw (no python3, or a probe that could not run at all) left a permanent entry for a
+// FIFO that was never created — and no `cleanupFifo()` ever exists to remove it, because no
+// session did. The set is module-private, so the ORDER is what a suite can observe.
+{
+  const ptySource = withoutComments(await readFile(join(here, '..', 'lib', 'wsl', 'pty.js'), 'utf8'))
+  const allocateStart = ptySource.indexOf('export async function spawnWslTerminal')
+  const allocateBody = allocateStart > -1 ? ptySource.slice(allocateStart) : ''
+  const probeAt = allocateBody.indexOf('await requireBridgeRuntime(')
+  const sweepAt = allocateBody.indexOf('await sweepOrphanFifos(')
+  const addAt = allocateBody.indexOf('liveFifoNames.add(')
+  check('the session name joins the live set only after the probe and the sweep that can refuse or reclassify it',
+    allocateBody !== '' && probeAt > -1 && sweepAt > probeAt && addAt > sweepAt,
+    { probeAt, sweepAt, addAt })
+}
+
 // Cleanup is scoped to what THIS section created: an unconditional
 // `rm -f /tmp/dsh-pty-*.fifo` would also unlink the control channel of a terminal a
 // running desktop owns, which is a side effect on the operator's machine, not a fixture.
