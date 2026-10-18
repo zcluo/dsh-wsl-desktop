@@ -258,6 +258,77 @@ check('provider modules are absolute file paths', [MODULES.subprocessPath, MODUL
     group.isolate?.terminals === true, group.isolate)
 }
 
+// The harness's own text and timeout for the persistent shell, restated here VERBATIM. It
+// has to be restated in the realm because nothing carries it: the host row is removed by
+// MODULE NAME (`WORLD_MODULE_NAMES`), while `prune()` records `toolConfig` only for the five
+// canonical WORLD_ROWS ids plus the editor (`lib/wsl/preset.js:347-370`). Source:
+// `packages/bundle/web-app/presets/minimal.patch.yml:50-59`.
+const PERSISTENT_BASH_DESCRIPTION = [
+  'Run commands in a bash shell',
+  '* When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.',
+  '* Network access depends on the task environment. Prefer configured mirrors/proxies when they are available.',
+  '* State is persistent across command calls and discussions with the user.',
+  "* To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p /path/to/the/file'.",
+  '* Please avoid commands that may produce a very large amount of output.',
+  "* Please run long lived commands in the background, e.g. 'sleep 10 &' or start a server in the background.",
+].join('\n')
+
+{
+  const group = plugins.at(-1)
+  const persistent = group.config.find((row) => row.id === 'persistent-bash')
+  check('the persistent shell row restates the harness config literally',
+    JSON.stringify(persistent?.config) === JSON.stringify({ timeoutMs: 300_000, description: PERSISTENT_BASH_DESCRIPTION }),
+    persistent?.config)
+  // ONE owner of the model-facing name `bash`: the persistent row registers `bash`
+  // (`tool-bash-persistent/src/index.ts:415`) and so did the one-shot row
+  // (`tool-bash/src/index.ts:369`); a second registration in one layer throws
+  // (`core/scope/src/store.ts:43-45`). The harness's own minimal preset settles the same
+  // question the same way (`apps/cli/tests/windows-shell.spec.ts:127-134`).
+  //
+  // WHICH one actually answered was MEASURED, not assumed: Task 1's live probe read P2 —
+  // the persistent shell completed `tools.bashPersist.b` and read back the cwd the first
+  // call made (`.superpowers/sdd/WSL-PERSIST/task-2-brief.md`, M1 = P2). That is what makes
+  // the one-shot row dead weight rather than a working tool: it could only ever re-win the
+  // name on a registration-order change.
+  check('the group mounts exactly one owner of the model-facing name `bash`',
+    group.config.filter((row) => row.id === 'persistent-bash').length === 1
+    && !group.config.some((row) => row.id === 'tool-bash'),
+    group.config.map((row) => row.id))
+  // The stated NON-GOAL has a pin too, or it drifts silently: the distribution has no
+  // PowerShell, so the pwsh persistent tool must never appear in this group.
+  check('no PowerShell persistent tool is mounted inside the realm',
+    !group.config.some((row) => typeof row.name === 'string' && row.name.includes('pwsh-persistent')),
+    group.config.map((row) => row.name))
+}
+
+// Design §3's two directions, pinned together because they pull in OPPOSITE directions.
+{
+  const group = plugins.at(-1)
+  const terminalRows = ['pty', 'terminal-bash', 'persistent-bash']
+    .map((id) => group.config.find((row) => row.id === id))
+  // Direction ②: the three rows are present AND their modules are names the removal rule
+  // OWNS — presence therefore proves the prune pass never saw them (the group is appended
+  // after it), not that the rule is lenient.
+  check('the realm’s terminal rows survive under names the removal rule owns',
+    terminalRows.every((row) => row !== undefined && isHostWorldModule(row.name)),
+    group.config.map((row) => [row.id, row.name]))
+  // Direction ①: the same names arriving from the BASE preset are still pruned — including
+  // the host-only pwsh twin, whose absence from the realm is a stated non-goal.
+  const baseTerminals = buildVariantPlugins([
+    { id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} },
+    { id: 'host-persistent-shell', name: 'cordis:group', group: true, isolate: { terminals: true }, config: [
+      { id: 'host-pty', name: '@deepseek-ai/dsh-terminal' },
+      { id: 'host-terminal-bash', name: '@deepseek-ai/dsh-terminal-bash' },
+      { id: 'host-persistent-bash', name: '@deepseek-ai/dsh-tool-bash-persistent' },
+      { id: 'host-persistent-pwsh', name: '@deepseek-ai/dsh-tool-pwsh-persistent' },
+    ] },
+  ], MODULES)
+  check('a base preset’s host terminal group is still pruned away, row for row and group with it',
+    !baseTerminals.plugins.some((row) => row.id === 'host-persistent-shell')
+    && baseTerminals.removed.includes('host-persistent-shell'),
+    baseTerminals.removed)
+}
+
 // The re-mounted tool rows must carry the operator's own config. Re-declaring
 // them bare silently dropped whatever the base preset had set — a value honoured
 // in the host world simply vanished in the WSL world — and nothing pinned it.
@@ -267,13 +338,15 @@ check('provider modules are absolute file paths', [MODULES.subprocessPath, MODUL
     { id: 'str-replace-editor', name: '@deepseek-ai/dsh-tool-str-replace-editor', config: { maxOutputChars: 16000 } },
   ]
   const carried = buildVariantPlugins(withConfig, { ...MODULES, distro: 'debian-dev' }).plugins.at(-1)
-  const bashRow = carried.config.find((row) => row.id === 'tool-bash')
   const editorRow = carried.config.find((row) => row.id === 'str-replace-editor')
-  check('the re-mounted tool rows keep the operator config',
-    bashRow?.config?.enableRunInBackground === false && editorRow?.config?.maxOutputChars === 16000,
+  // The one-shot `bash` row is NOT re-mounted any more (one owner of the name, above), so the
+  // only row left carrying operator config is the editor — kept because dropping a setting
+  // the base preset had set is exactly the failure this block was written for.
+  check('the editor row keeps the operator config',
+    editorRow?.config?.maxOutputChars === 16000,
     carried.config.map((row) => [row.id, row.config]))
   check('the carried config is a copy, not the base preset object',
-    bashRow !== undefined && bashRow.config !== withConfig[0].config,
+    editorRow !== undefined && editorRow.config !== withConfig[1].config,
     'the registry shares the base preset rows by reference, so the variant must not alias them')
 }
 

@@ -506,12 +506,58 @@ check('a FAILED allocation leaves no FIFO behind',
   { fifo: fifoC, stillThere: (await fifos()).filter((path) => path === fifoC), before: fifoBeforeC })
 if (terminalC !== null) { try { await terminalC.terminate() } catch { /* already gone */ } }
 
+// --- scenario D: an orphan from a PREVIOUS host generation -------------------------
+//
+// A host restart is not a teardown: the session's bridge dies with the host, so its own
+// `finally` (terminal-bridge.py) never runs and nobody calls removeFifo. Measured on this
+// machine after a restart: two 0-byte /tmp/dsh-pty-*.fifo files, one per probe run, and no
+// owner. The sweep at allocation is that owner, and this scenario is its pin.
+//
+// The orphan is MADE, not waited for: the row is about the sweep, so the input has to be a
+// fact of the run rather than of whatever the operator's distribution happened to hold. Its
+// mtime is then set two hours back, because AGE is the sweep's rule — a name is removed only
+// once it is older than the window a session needs to open it (pty.js SWEEP_MIN_AGE_MINUTES).
+// Setting the time instead of sleeping keeps the row fast and makes the input exact; the
+// companion row below pins the other side of that rule, so this one cannot be satisfied by
+// a sweep that removes everything.
+const ORPHAN = '/tmp/dsh-pty-previous-generation-orphan.fifo'
+const FRESH = '/tmp/dsh-pty-current-generation-live.fifo'
+const orphansBefore = await fifos()
+check('no orphan of this scenario survives from an earlier run of it (the row below cannot pass vacuously)',
+  !orphansBefore.includes(ORPHAN) && !orphansBefore.includes(FRESH),
+  { orphan: ORPHAN, fresh: FRESH, present: orphansBefore.filter((path) => path === ORPHAN || path === FRESH) })
+await runWslShell({ distro, linuxCwd: '/', command: `rm -f ${shellQuote(ORPHAN)} ${shellQuote(FRESH)}`, loginShell: false, timeoutMs: 30_000 })
+// `touch -m -t` on a FIFO sets the mtime the age rule reads; `mkfifo` alone would leave both
+// names young and the row below would then pass on a sweep that did nothing at all.
+await runWslShell({ distro, linuxCwd: '/', command: `mkfifo ${shellQuote(ORPHAN)} ${shellQuote(FRESH)} && touch -m -t 202401010000 ${shellQuote(ORPHAN)}`, loginShell: false, timeoutMs: 30_000 })
+const madeBoth = (await fifos())
+check('the previous-generation orphan (aged) and the fresh name both exist before the next allocation',
+  madeBoth.includes(ORPHAN) && madeBoth.includes(FRESH), { orphan: madeBoth.includes(ORPHAN), fresh: madeBoth.includes(FRESH) })
+const terminalD = await allocateFifoTerminal()
+const afterSweep = await fifos()
+check('allocating a session sweeps the FIFO a previous host generation left behind',
+  madeBoth.includes(ORPHAN) && !afterSweep.includes(ORPHAN), { orphan: ORPHAN, swept: !afterSweep.includes(ORPHAN) })
+// The same rule must NOT take a name a session may still be opening: two minutes is the
+// window between the bridge's mkfifo and the control writer's open, and a sweep that ignored
+// it would delete the name a starting session is about to connect to.
+check('the sweep leaves a name younger than that window alone',
+  madeBoth.includes(FRESH) && afterSweep.includes(FRESH), { fresh: FRESH, kept: afterSweep.includes(FRESH) })
+try { await terminalD.terminate() } catch { /* already over */ }
+
 // Cleanup is scoped to what THIS section created: an unconditional
 // `rm -f /tmp/dsh-pty-*.fifo` would also unlink the control channel of a terminal a
 // running desktop owns, which is a side effect on the operator's machine, not a fixture.
 const createdFifos = [...fifoLiveA, ...fifoLiveB, ...(fifoC === null ? [] : [fifoC])]
 const leftoverFifos = (await fifos()).filter((path) => createdFifos.includes(path))
+// The FRESH fixture is NOT part of this claim: the sweep refusing to touch it is the row
+// above, and this suite then removes it as a fixture of its own. Asserting it absent here
+// would either fail every run or turn the row above into one that cannot pass.
 check('no FIFO of these sessions is left behind', leftoverFifos.length === 0, { createdFifos, leftoverFifos })
+for (const path of [...leftoverFifos, ORPHAN, FRESH]) {
+  await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
+}
+const fixturesLeft = (await fifos()).filter((path) => path === ORPHAN || path === FRESH)
+check('the scenario D fixtures are removed by this suite', fixturesLeft.length === 0, { fixturesLeft })
 for (const path of leftoverFifos) {
   await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
 }
