@@ -333,6 +333,12 @@ function copySuiteTree(prefix) {
     // The suite's terminal-argv rows import this module, so a copy without it fails to
     // load — the same class of omission the two comments below name.
     ['lib/wsl', 'confined-argv.js'],
+    // The sandbox-provider pin imports the provider itself, and that module imports the
+    // confinement core, the argv translation, the world seam and the shipped helper
+    // selection text. A copy without them fails at MODULE LOAD, before the first SKIP
+    // line — and the provider row would then read as a FAILED check of the suite rather
+    // than as the absent-precondition skip this pin exists to certify.
+    ['lib/wsl', 'sandbox.js'],
     // The finding-1 source pin reads shell.js as TEXT, so a copy without it crashes
     // the suite before the first SKIP line is printed.
     ['lib/wsl', 'shell.js'],

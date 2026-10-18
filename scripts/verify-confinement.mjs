@@ -19,11 +19,16 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+// The provider pin below installs a module-resolution hook, and the API is read through the
+// NAMESPACE for the reason the no-no-new-privs imports state above: a named import of an
+// export this Node does not carry is a module-load SyntaxError, so the whole suite would end
+// with a stack trace instead of the labelled FAIL that names the missing symbol.
+import * as nodeModule from 'node:module'
 import { runWslShell } from '../lib/wsl/world.js'
 import { buildConfinedTerminalArgv } from '../lib/wsl/confined-argv.js'
 import {
@@ -728,6 +733,285 @@ check('the confined terminal argv names no Windows runner',
 check('the terminal fence keeps the PTY\'s own process group (no PID namespace)',
   confinedTerminalHelper[2].includes('--no-pidns') && !confinedTerminalDirect[2].includes('--pid'),
   { helper: confinedTerminalHelper[2], direct: confinedTerminalDirect[2] })
+
+// The realm's SANDBOX PROVIDER, pinned BEHAVIOURALLY. The row above pins the BUILDER given
+// `isolateProcesses: false`; nothing pinned the value the PROVIDER actually hands it, and no
+// committed suite imported `lib/wsl/sandbox.js` at all — `verify-preset` pins only the module
+// SPECIFIER string, and `verify-modules` is a declared skip on a machine with no dependency
+// directory. Measured consequence: flipping the Config default to `true` left every committed
+// suite green while the property above silently inverted, and weakening any of the provider's
+// fail-closed branches reddened nothing either.
+//
+// These rows are behavioural, not source-text. The provider is imported and constructed for
+// real and each row reads an OBSERVABLE of that construction: the argv `confine` returns (the
+// PID-namespace difference is right there in it), the error it throws, and whether it probed
+// at all. The distribution is replaced at the ONE seam the provider reaches it through —
+// `runWslShell` — by a stub that answers from a plan file; everything above that seam is the
+// shipped code, `planWsl` and the real `resolveIdentity`/`detectRunner`/`detectNoNewPrivs`
+// included, which is why the three fail-closed branches are exercised rather than described.
+//
+// Two seams are stubbed, and neither is the code under test:
+//   - `@deepseek-ai/dsh-sandbox` and `@deepseek-ai/schemastery` resolve to nothing in this
+//     checkout (no node_modules; `verify-modules`' declared skip names exactly that). The
+//     sandbox stub reproduces the two exports the provider extends/throws with; the
+//     schemastery stub models only what this Config uses (`z.object`, `z.string`,
+//     `z.boolean`, `.default()`), RECORDS every declared field to a log — so the config shape
+//     is observed instead of grepped — and throws on a shape it does not model, which turns a
+//     Config rewritten into something else into a named FAIL rather than a silent pass;
+//   - `./world.js` is diverted for the provider's own import only (matched by the PARENT URL),
+//     so the suite's own wsl.exe probes in the sections below still reach the real module.
+//
+// The plan is strict in the same spirit: a probe the provider runs but this arm did not plan
+// is an ERROR, not a default answer. That is what keeps a "probe the direct runner's setpriv
+// on the helper path too" edit in the branches' loop visible without a row for it — the stub
+// refuses to answer, and the arm that expected a fence fails with the reason.
+console.log('\nthe realm sandbox provider (offline: constructed for real, wsl.exe stubbed at one seam)')
+{
+  /** The distribution the standalone provider arms run as; never reached, never spawned. */
+  const PIN_DISTRO = 'dsh-sandbox-pin'
+  /** A UNC workspace root, the spelling a WSL session's cwd actually carries. */
+  const PIN_UNC = '\\\\wsl.localhost\\dsh-sandbox-pin\\home\\pin\\proj'
+  /** The argv the terminal stack hands the seam (the shipped terminal-bash shape). */
+  const PIN_ARGV = ['/bin/bash', '-i']
+  const pinDir = mkdtempSync(join(tmpdir(), 'dsh-wsl-sandbox-provider-'))
+  const planFile = join(pinDir, 'probe-plan.json')
+  const probeLogFile = join(pinDir, 'probe-log.txt')
+  const schemaLogFile = join(pinDir, 'schema-log.json')
+  const sandboxStubFile = join(pinDir, 'sandbox-stub.mjs')
+  const schemaStubFile = join(pinDir, 'schemastery-stub.mjs')
+  const worldStubFile = join(pinDir, 'world-stub.mjs')
+  const sandboxUrl = new URL('../lib/wsl/sandbox.js', import.meta.url).href
+  const worldRealUrl = new URL('../lib/wsl/world.js', import.meta.url).href
+  writeFileSync(sandboxStubFile, [
+    'export class SandboxUnavailableError extends Error {',
+    '  constructor(mode, detail) {',
+    '    super(`SANDBOX_UNAVAILABLE: ${mode}${detail === undefined ? \'\' : `: ${detail}`}`)',
+    '    this.name = \'SandboxUnavailableError\'',
+    '    this.mode = mode',
+    '    this.detail = detail',
+    '  }',
+    '}',
+    'export class SandboxProvider {',
+    '  constructor(ctx) { this.ctx = ctx }',
+    '}',
+    'export default SandboxProvider',
+    '',
+  ].join('\n'), 'utf8')
+  writeFileSync(schemaStubFile, [
+    'import { writeFileSync } from \'node:fs\'',
+    `const LOG = ${JSON.stringify(schemaLogFile)}`,
+    'class Field {',
+    '  constructor(kind) { this.kind = kind; this.hasDefault = false; this.defaultValue = undefined }',
+    '  default(value) { this.hasDefault = true; this.defaultValue = value; return this }',
+    '}',
+    'export function object(shape) {',
+    '  const fields = Object.entries(shape)',
+    '  for (const [name, field] of fields) {',
+    '    if (!(field instanceof Field)) throw new Error(`PIN: z.object() field ${name} is not a schemastery field this pin models`)',
+    '  }',
+    '  writeFileSync(LOG, JSON.stringify(fields.map(([name, field]) => ({ name, kind: field.kind, hasDefault: field.hasDefault, defaultValue: field.defaultValue }))))',
+    '  const schema = (data = {}) => {',
+    '    const out = {}',
+    '    for (const [name, field] of fields) {',
+    '      if (data[name] !== undefined) { out[name] = data[name]; continue }',
+    '      if (field.hasDefault) out[name] = field.defaultValue',
+    '    }',
+    '    return out',
+    '  }',
+    '  return schema',
+    '}',
+    'export function string() { return new Field(\'string\') }',
+    'export function boolean() { return new Field(\'boolean\') }',
+    'export default { object, string, boolean }',
+    '',
+  ].join('\n'), 'utf8')
+  writeFileSync(worldStubFile, [
+    'import { appendFileSync, readFileSync } from \'node:fs\'',
+    `import { planWsl } from ${JSON.stringify(worldRealUrl)}`,
+    'export { planWsl }',
+    `const PLAN = ${JSON.stringify(planFile)}`,
+    `const LOG = ${JSON.stringify(probeLogFile)}`,
+    'const which = (command) => {',
+    '  if (command.includes(\'__DSH_IDENTITY__\')) return \'identity\'',
+    '  if (command.includes(\'dsh-wsl-confine\')) return \'helper\'',
+    '  if (command.includes(\'command -v unshare\')) return \'direct\'',
+    '  if (command.includes(\'setpriv --help\')) return \'nnp\'',
+    '  return null',
+    '}',
+    'export async function runWslShell(options) {',
+    '  const command = String(options?.command ?? \'\')',
+    '  const key = which(command)',
+    '  if (key === null) throw new Error(`PIN: the provider ran an unrecognised probe: ${command}`)',
+    '  appendFileSync(LOG, `${key}\\n`)',
+    '  const planned = JSON.parse(readFileSync(PLAN, \'utf8\'))[key]',
+    '  if (planned === undefined) throw new Error(`PIN: the provider ran the ${key} probe, which this arm did not plan`)',
+    '  if (planned.throws === true) throw new Error(planned.message ?? \'PIN: the planned probe fault\')',
+    '  return planned',
+    '}',
+    '',
+  ].join('\n'), 'utf8')
+  const PROBE_YES = { exitCode: 0, stdout: 'yes\n', stderr: '', timedOut: false }
+  const PROBE_NO = { exitCode: 0, stdout: 'no\n', stderr: '', timedOut: false }
+  // A distro-level wsl.exe failure: non-zero, empty stdout, its reason on stderr — the shape
+  // detectNoNewPrivs reports as NOT MEASURED rather than as an unsupported setpriv.
+  const PROBE_SILENT = { exitCode: 258, stdout: '', stderr: 'no such distribution', timedOut: false }
+  const PROBE_IDENTITY = { exitCode: 0, stdout: '__DSH_IDENTITY__\n1000\n1000\n/home/pin\npin\n', stderr: '', timedOut: false }
+  const PROBE_IDENTITY_GARBAGE = { exitCode: 0, stdout: 'not an identity\n', stderr: '', timedOut: false }
+  let WslSandboxProvider = null
+  let providerLoadProblem = ''
+  const registerHooks = nodeModule.registerHooks
+  if (typeof registerHooks !== 'function') {
+    // A named import would have made this a load-time SyntaxError (the convention stated with
+    // the no-new-privs imports), so the absence is a ROW: the pin cannot run here, and the
+    // suite says which symbol is missing instead of printing a stack trace.
+    //
+    // Deliberately a FAIL and not a skip: package.json's engines floor is node >= 22.19, and
+    // `module.registerHooks` landed in 22.15, so a Node without it is outside this package's
+    // supported range. Failing here is the honest reading of that, and unlike a skip it cannot
+    // turn the aggregate green on a machine the provider was never exercised on.
+    providerLoadProblem = `this Node (${process.version}) exposes no module.registerHooks, so the provider's @deepseek-ai/dsh-sandbox and ./world.js seams cannot be stubbed: the behavioural pin cannot run here (engines >= 22.19 provides it)`
+  } else {
+    try {
+      const hook = registerHooks({
+        resolve(specifier, context, nextResolve) {
+          // The bare specifiers this checkout cannot resolve: the two harness packages.
+          if (specifier === '@deepseek-ai/dsh-sandbox') return { url: pathToFileURL(sandboxStubFile).href, shortCircuit: true }
+          if (specifier === '@deepseek-ai/schemastery') return { url: pathToFileURL(schemaStubFile).href, shortCircuit: true }
+          // ONLY the provider's own world import, never the suite's: every other probe in
+          // this file must keep spawning the real wsl.exe path.
+          if (specifier === './world.js' && context.parentURL === sandboxUrl) {
+            return { url: pathToFileURL(worldStubFile).href, shortCircuit: true }
+          }
+          return nextResolve(specifier, context)
+        },
+      })
+      try {
+        const loaded = await import(sandboxUrl)
+        WslSandboxProvider = loaded?.WslSandboxProvider
+      } finally {
+        // Deregistered at once: this hook must not be in force for anything the suite loads
+        // later, and a leaked hook would silently redirect someone else's world.js.
+        hook?.deregister?.()
+      }
+      if (typeof WslSandboxProvider !== 'function' || typeof WslSandboxProvider.Config !== 'function') {
+        providerLoadProblem = `the module loaded without a WslSandboxProvider class carrying a static Config (got ${typeof WslSandboxProvider})`
+      }
+    } catch (error) {
+      providerLoadProblem = error instanceof Error ? error.message : String(error)
+    }
+  }
+  check('the realm sandbox provider module loads for a behavioural pin (its class and its Config)',
+    providerLoadProblem === '',
+    providerLoadProblem)
+  if (providerLoadProblem === '') {
+    /**
+     * Construct the provider from a resolved config and run one `confine`, with the probes
+     * answered by `plan`. Caches are cleared first: the probe results are cached per
+     * distribution, and an arm that inherited the previous arm's runner would not be
+     * measuring the plan it was given.
+     * @param {object} plan - one answer per probe key (identity, helper, direct, nnp).
+     * @param {object} [options] - the call this arm makes.
+     * @param {object} [options.policy] - the file-effect policy handed to `confine`.
+     * @param {object} [options.config] - explicit Config fields (the default is the subject).
+     * @returns {Promise<{ ok: boolean, argv?: string[], error?: Error }>} the settled attempt.
+     */
+    const confineWith = async (plan, { policy = { mode: 'workspace-write', workspaceRoot: PIN_UNC }, config = {} } = {}) => {
+      writeFileSync(planFile, JSON.stringify(plan), 'utf8')
+      writeFileSync(probeLogFile, '', 'utf8')
+      resetConfinementCache()
+      const provider = new WslSandboxProvider({}, WslSandboxProvider.Config({ distro: PIN_DISTRO, ...config }))
+      try {
+        const confined = await provider.confine(PIN_ARGV, policy)
+        return { ok: true, argv: confined.argv }
+      } catch (error) {
+        return { ok: false, error }
+      }
+    }
+    /** The refusal shape the provider must produce: the seam's own error class, not a bare Error. */
+    const isRefusal = (attempt) => attempt.ok === false
+      && attempt.error?.name === 'SandboxUnavailableError'
+      && attempt.error?.mode === 'workspace-write'
+    const refusalDetail = (attempt) => String(attempt.error?.detail ?? '')
+    const providerLog = () => readFileSync(probeLogFile, 'utf8')
+    const defaultConfig = WslSandboxProvider.Config({ distro: PIN_DISTRO })
+    const declaredFields = (() => {
+      try {
+        const parsed = JSON.parse(readFileSync(schemaLogFile, 'utf8'))
+        return Array.isArray(parsed) ? parsed : []
+      } catch {
+        return []
+      }
+    })()
+    const isolateField = declaredFields.find((field) => field?.name === 'isolateProcesses')
+    // The default is pinned at BOTH ends it can be observed from: what the provider DECLARES
+    // to schemastery (a boolean defaulting to false — recorded by the stub as the Config is
+    // built) and what a provider built from that declaration actually does to the argv.
+    check('the provider declares isolateProcesses to schemastery as a boolean whose default is false',
+      isolateField !== undefined && isolateField.kind === 'boolean'
+        && isolateField.hasDefault === true && isolateField.defaultValue === false
+        && defaultConfig.isolateProcesses === false,
+      { declared: isolateField ?? '(the field is not declared)', config: defaultConfig, fields: declaredFields.map((field) => field?.name) })
+    // The property the row above protects, read off the argv the PROVIDER returns rather than
+    // off a literal handed to the builder: a flipped default re-parents the interactive shell
+    // to PID 1 and the PTY's foreground queries can no longer address it. The helper arm fails
+    // closed too if the direct runner's NO_NEW_PRIVS probe starts running on the helper path —
+    // this plan carries no `nnp` answer for it.
+    const defaultHelper = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_YES })
+    const defaultDirect = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_NO, direct: PROBE_YES, nnp: PROBE_YES })
+    check('the provider\'s DEFAULT fence keeps the interactive PTY out of a PID namespace on both runners',
+      defaultHelper.ok === true && defaultHelper.argv[2].includes('--no-pidns')
+        && defaultDirect.ok === true && !defaultDirect.argv[2].includes('--pid'),
+      { helper: defaultHelper.ok === true ? defaultHelper.argv[2] : defaultHelper.error?.message, direct: defaultDirect.ok === true ? defaultDirect.argv[2] : defaultDirect.error?.message })
+    // ...and the config value is not decoration: asking for the namespace has to CHANGE the
+    // argv. Without this row a provider that hardcoded `false` at the builder would satisfy
+    // the row above forever, and the option would be dead.
+    const isolatedHelper = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_YES }, { config: { isolateProcesses: true } })
+    const isolatedDirect = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_NO, direct: PROBE_YES, nnp: PROBE_YES }, { config: { isolateProcesses: true } })
+    check('isolateProcesses reaches the fence builder, so the default is load-bearing rather than hardcoded',
+      isolatedHelper.ok === true && !isolatedHelper.argv[2].includes('--no-pidns')
+        && isolatedDirect.ok === true && isolatedDirect.argv[2].includes('--pid'),
+      { helper: isolatedHelper.ok === true ? isolatedHelper.argv[2] : isolatedHelper.error?.message, direct: isolatedDirect.ok === true ? isolatedDirect.argv[2] : isolatedDirect.error?.message })
+    // Fail-closed branch 1: a workspace root the distribution cannot express. The plan is
+    // EMPTY on purpose — the refusal must come before any probe, so a provider that quietly
+    // substituted a fallback root would go on to probe and hit "no answer planned" instead of
+    // returning a fence for a directory nobody asked about (whether the substitution produced
+    // a fence or a different error, this row reddens).
+    const unmappable = await confineWith({}, { policy: { mode: 'workspace-write', workspaceRoot: 'not-a-path' } })
+    check('the provider refuses a workspace root the distribution cannot express, before any probe runs',
+      isRefusal(unmappable) && refusalDetail(unmappable).includes('工作区根目录无法映射到发行版内')
+        && providerLog() === '',
+      { error: unmappable.error?.message, probes: providerLog() })
+    // Fail-closed branch 2: an identity probe that answered something unparsable. The plan
+    // carries a working helper answer past it, so a provider that swallowed the parse fault
+    // and carried on would RETURN a fence — the state this refuses.
+    const badIdentity = await confineWith({ identity: PROBE_IDENTITY_GARBAGE, helper: PROBE_YES })
+    check('the provider refuses a spawn whose identity probe cannot be parsed',
+      isRefusal(badIdentity) && refusalDetail(badIdentity).includes('无法解析发行版内的用户身份'),
+      { error: badIdentity.error?.message, argv: badIdentity.argv })
+    // Fail-closed branch 3: a distribution with no usable runner. Everything needed for a
+    // SUCCESS is planned if the provider falls back to the direct runner instead of refusing,
+    // so a weakened branch returns an argv here rather than a differently-shaped error.
+    const noRunner = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_NO, direct: PROBE_NO, nnp: PROBE_YES })
+    check('the provider refuses a distribution with no usable confinement runner',
+      isRefusal(noRunner) && refusalDetail(noRunner).includes('没有可用的约束运行器'),
+      { error: noRunner.error?.message, argv: noRunner.argv })
+    // Fail-closed branch 4, both of its states: the direct runner's drop sets NO_NEW_PRIVS, so
+    // a measured-unsupported setpriv and an UNMEASURED one are both refusals — with the SAME
+    // texts `shell.js` throws with, read from the exports rather than restated here. A provider
+    // that treated "not measured" as "unsupported but proceed" (or as "fine") returns an argv.
+    const nnpUnsupported = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_NO, direct: PROBE_YES, nnp: PROBE_NO })
+    check('the provider refuses a direct runner whose setpriv cannot set NO_NEW_PRIVS',
+      isRefusal(nnpUnsupported) && refusalDetail(nnpUnsupported) === noNewPrivsProbe.NO_NEW_PRIVS_UNSUPPORTED,
+      { error: nnpUnsupported.error?.message, expected: noNewPrivsProbe.NO_NEW_PRIVS_UNSUPPORTED, argv: nnpUnsupported.argv })
+    const nnpUnmeasured = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_NO, direct: PROBE_YES, nnp: PROBE_SILENT })
+    check('the provider refuses a direct runner whose NO_NEW_PRIVS probe measured nothing (and names that state)',
+      isRefusal(nnpUnmeasured) && refusalDetail(nnpUnmeasured) === noNewPrivsProbe.NO_NEW_PRIVS_UNMEASURED
+        && refusalDetail(nnpUnmeasured) !== noNewPrivsProbe.NO_NEW_PRIVS_UNSUPPORTED,
+      { error: nnpUnmeasured.error?.message, expected: noNewPrivsProbe.NO_NEW_PRIVS_UNMEASURED, argv: nnpUnmeasured.argv })
+    resetConfinementCache()
+  }
+  rmSync(pinDir, { recursive: true, force: true })
+}
 
 // The producer refuses the spelling BEFORE either runner turns the value into a
 // pattern, and the helper branch and the in-process branch are separate code
