@@ -84,10 +84,16 @@ const SPELLINGS = [
   { name: 'file:///opt/x/%40deepseek-ai/dsh-terminal/lib/index.js', survives: false },
   { name: 'E:\\node_modules\\@deepseek-ai\\dsh-tool-str-replace-editor\\lib\\index.js', survives: false },
   { name: '/opt/x/@deepseek-ai/dsh-terminal-bash/src/config.ts', survives: false },
-  // Controls: the same shapes, naming packages that are NOT host-world. tool-bash
-  // and tool-fs are deliberately absent from WORLD_MODULE_NAMES (their WSL forms
-  // are re-mounted inside the wsl-world group), so a fix that widened the set
-  // instead of resolving the package would redden here.
+  // Controls: the same shapes, naming packages that are NOT host-world. `tool-bash` and
+  // `tool-fs` are deliberately absent from WORLD_MODULE_NAMES, and the reason is NOT that a
+  // WSL form is re-mounted under the same package name: `tool-fs` is re-mounted from
+  // `@deepseek-ai/dsh-tool-fs`, but the realm's shell owner is
+  // `@deepseek-ai/dsh-tool-bash-persistent`, so a base row naming
+  // `@deepseek-ai/dsh-tool-bash` under a NON-canonical id survives the transform (it is
+  // reported as unclassified, not removed) and would register a second `bash`. What keeps the
+  // realm's single owner is the row set in `lib/wsl/preset.js`, pinned by the module-keyed
+  // owner check above; the transform's removal list is a separate, narrower decision. A fix
+  // that widened this set instead of resolving the package would redden these controls.
   { name: './tool-bootstrap.mjs', survives: true },
   { name: 'file:///E:/src/preset/tool-bootstrap.mjs', survives: true },
   { name: '@deepseek-ai/dsh-tool-web/src/index.ts', survives: true },
@@ -261,7 +267,7 @@ check('provider modules are absolute file paths', [MODULES.subprocessPath, MODUL
 // The harness's own text and timeout for the persistent shell, restated here VERBATIM. It
 // has to be restated in the realm because nothing carries it: the host row is removed by
 // MODULE NAME (`WORLD_MODULE_NAMES`), while `prune()` records `toolConfig` only for the five
-// canonical WORLD_ROWS ids plus the editor (`lib/wsl/preset.js:347-370`). Source:
+// canonical WORLD_ROWS ids plus the editor (`lib/wsl/preset.js:421-446`). Source:
 // `packages/bundle/web-app/presets/minimal.patch.yml:50-59`.
 const PERSISTENT_BASH_DESCRIPTION = [
   'Run commands in a bash shell',
@@ -279,21 +285,30 @@ const PERSISTENT_BASH_DESCRIPTION = [
   check('the persistent shell row restates the harness config literally',
     JSON.stringify(persistent?.config) === JSON.stringify({ timeoutMs: 300_000, description: PERSISTENT_BASH_DESCRIPTION }),
     persistent?.config)
-  // ONE owner of the model-facing name `bash`: the persistent row registers `bash`
-  // (`tool-bash-persistent/src/index.ts:415`) and so did the one-shot row
-  // (`tool-bash/src/index.ts:369`); a second registration in one layer throws
-  // (`core/scope/src/store.ts:43-45`). The harness's own minimal preset settles the same
-  // question the same way (`apps/cli/tests/windows-shell.spec.ts:127-134`).
+  // ONE owner of the model-facing name `bash`. The registered NAME is a property of the
+  // MODULE, not of the row id: the persistent module registers `bash`
+  // (`tool-bash-persistent/src/index.ts:415`) and the one-shot module did too
+  // (`tool-bash/src/index.ts:369`), whatever id either row carries. So this pins the module
+  // set, AND that no row re-declares the one-shot module under a non-canonical id — an
+  // id-keyed check would pass while a `{ id: 'bash-two', name: '@deepseek-ai/dsh-tool-bash' }`
+  // row re-owned the name. The harness's own minimal preset settles the same question the same
+  // way: it mounts no one-shot shell row BECAUSE it mounts the persistent stack
+  // (`apps/cli/tests/windows-shell.spec.ts:127-134`).
   //
-  // WHICH one actually answered was MEASURED, not assumed: Task 1's live probe read P2 —
-  // the persistent shell completed `tools.bashPersist.b` and read back the cwd the first
-  // call made (`.superpowers/sdd/WSL-PERSIST/task-2-brief.md`, M1 = P2). That is what makes
-  // the one-shot row dead weight rather than a working tool: it could only ever re-win the
-  // name on a registration-order change.
+  // WHICH one actually answered was MEASURED, not assumed: the live probe read M1 = P2 — the
+  // persistent shell completed `tools.bashPersist.b` and read back the cwd the first call made
+  // (the ledger's 活体验证 section, ruling R29, and `artifacts/live-M1-M3-c1.txt:1550`). What
+  // that does NOT license: the pre-change inventory showed BOTH bash rows `fiberState: 2` with
+  // no `broken`, so re-registration did not throw here (ruling R33 — the store's duplicate
+  // contract is not this realm's observed mount). The one-shot row was a second, still-live
+  // registrant of the name, not a row that had already lost — which is exactly why removing it
+  // is a change rather than a tidy-up.
+  const bashOwners = group.config.filter((row) => (
+    row.name === '@deepseek-ai/dsh-tool-bash-persistent' || row.name === '@deepseek-ai/dsh-tool-bash'
+  ))
   check('the group mounts exactly one owner of the model-facing name `bash`',
-    group.config.filter((row) => row.id === 'persistent-bash').length === 1
-    && !group.config.some((row) => row.id === 'tool-bash'),
-    group.config.map((row) => row.id))
+    bashOwners.length === 1 && bashOwners[0]?.id === 'persistent-bash',
+    group.config.map((row) => [row.id, row.name]))
   // The stated NON-GOAL has a pin too, or it drifts silently: the distribution has no
   // PowerShell, so the pwsh persistent tool must never appear in this group.
   check('no PowerShell persistent tool is mounted inside the realm',
@@ -334,7 +349,6 @@ const PERSISTENT_BASH_DESCRIPTION = [
 // in the host world simply vanished in the WSL world — and nothing pinned it.
 {
   const withConfig = [
-    { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash', config: { enableRunInBackground: false } },
     { id: 'str-replace-editor', name: '@deepseek-ai/dsh-tool-str-replace-editor', config: { maxOutputChars: 16000 } },
   ]
   const carried = buildVariantPlugins(withConfig, { ...MODULES, distro: 'debian-dev' }).plugins.at(-1)
@@ -346,7 +360,7 @@ const PERSISTENT_BASH_DESCRIPTION = [
     editorRow?.config?.maxOutputChars === 16000,
     carried.config.map((row) => [row.id, row.config]))
   check('the carried config is a copy, not the base preset object',
-    editorRow !== undefined && editorRow.config !== withConfig[1].config,
+    editorRow !== undefined && editorRow.config !== withConfig[0].config,
     'the registry shares the base preset rows by reference, so the variant must not alias them')
 }
 

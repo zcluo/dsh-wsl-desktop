@@ -510,57 +510,145 @@ if (terminalC !== null) { try { await terminalC.terminate() } catch { /* already
 //
 // A host restart is not a teardown: the session's bridge dies with the host, so its own
 // `finally` (terminal-bridge.py) never runs and nobody calls removeFifo. Measured on this
-// machine after a restart: two 0-byte /tmp/dsh-pty-*.fifo files, one per probe run, and no
-// owner. The sweep at allocation is that owner, and this scenario is its pin.
+// machine after a restart: two 0-byte /tmp/dsh-pty-*.fifo files, ONE PER PROBE RUN, still
+// held open by that generation's bridges (reparented to /init, alive an hour later).
 //
-// The orphan is MADE, not waited for: the row is about the sweep, so the input has to be a
-// fact of the run rather than of whatever the operator's distribution happened to hold. Its
-// mtime is then set two hours back, because AGE is the sweep's rule — a name is removed only
-// once it is older than the window a session needs to open it (pty.js SWEEP_MIN_AGE_MINUTES).
-// Setting the time instead of sleeping keeps the row fast and makes the input exact; the
-// companion row below pins the other side of that rule, so this one cannot be satisfied by
-// a sweep that removes everything.
-const ORPHAN = '/tmp/dsh-pty-previous-generation-orphan.fifo'
-const FRESH = '/tmp/dsh-pty-current-generation-live.fifo'
+// The sweep's rule is a GENERATION rule, and this scenario pins all four of its branches
+// because three of them are refusals — a sweep that removed everything would satisfy the
+// orphan row alone, and a sweep that removed nothing would satisfy the refusals alone:
+//
+//   · a LEGACY name (no pid, written by a version that recorded no generation) that is OLD
+//     is removed, and a legacy name that is YOUNG is kept — age is the only protection a name
+//     with no owner field can have, and the young one stands for the window between a
+//     bridge's mkfifo and the control writer's open;
+//   · a name whose OWNER PID IS DEAD is removed — that is the previous-generation orphan, and
+//     its owner's liveness is the fact that condemns it;
+//   · a name whose owner pid is ALIVE (here: a real helper process) is kept — a previous
+//     generation's bridges are alive too, so nothing about "a live process holds this" may
+//     be read as evidence either way;
+//   · a LIVE session of THIS generation, whose FIFO has been backdated past any age
+//     threshold, is kept. This is the row the age rule could not pass: a FIFO's mtime never
+//     advances after mkfifo, so "older than two minutes" is the NORMAL state of a long-lived
+//     session, and an age-keyed sweep unlinks live sessions' names.
+//
+// The fixtures are MADE, not waited for, so every input is a fact of the run rather than of
+// whatever the operator's distribution happened to hold. Each name carries this process's pid:
+// a FIXED name under /tmp is one a concurrent run of this suite would delete out from under
+// this one (`verify-all-skip.mjs` section H polices exactly that), and the LEGACY ones stay
+// legacy by keeping a word where the generation field would be.
+const ORPHAN_LEGACY = `/tmp/dsh-pty-legacy-previous-${String(process.pid)}.fifo`
+const FRESH_LEGACY = `/tmp/dsh-pty-legacy-just-created-${String(process.pid)}.fifo`
+// A pid that is really dead: this suite's own child, reaped. Reuse is possible in principle,
+// so the pid is CHECKED before it is used — a fixture whose owner is alive would invert the
+// meaning of the row it feeds.
+function reapedPid() {
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore', windowsHide: true })
+  return new Promise((resolve) => child.on('close', () => resolve(child.pid)))
+}
+/**
+ * Whether a host pid is alive, by the same signal-0 probe pty.js uses.
+ * @param {number} pid - candidate pid.
+ * @returns {boolean} whether it is running.
+ */
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true } catch (error) { return error?.code !== 'ESRCH' }
+}
+const deadPid = await reapedPid()
+const deadOwnerName = `/tmp/dsh-pty-${String(deadPid)}-deadbeef0001.fifo`
+// A LIVE foreign owner: a helper that outlives the sweep. Its name must survive.
+const liveOwner = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore', windowsHide: true })
+const liveOwnerName = `/tmp/dsh-pty-${String(liveOwner.pid)}-cafebabe0002.fifo`
+const fixturesD = [ORPHAN_LEGACY, FRESH_LEGACY, deadOwnerName, liveOwnerName]
+const fixturePresent = (entries, name) => entries.includes(name)
 const orphansBefore = await fifos()
-check('no orphan of this scenario survives from an earlier run of it (the row below cannot pass vacuously)',
-  !orphansBefore.includes(ORPHAN) && !orphansBefore.includes(FRESH),
-  { orphan: ORPHAN, fresh: FRESH, present: orphansBefore.filter((path) => path === ORPHAN || path === FRESH) })
-await runWslShell({ distro, linuxCwd: '/', command: `rm -f ${shellQuote(ORPHAN)} ${shellQuote(FRESH)}`, loginShell: false, timeoutMs: 30_000 })
-// `touch -m -t` on a FIFO sets the mtime the age rule reads; `mkfifo` alone would leave both
-// names young and the row below would then pass on a sweep that did nothing at all.
-await runWslShell({ distro, linuxCwd: '/', command: `mkfifo ${shellQuote(ORPHAN)} ${shellQuote(FRESH)} && touch -m -t 202401010000 ${shellQuote(ORPHAN)}`, loginShell: false, timeoutMs: 30_000 })
-const madeBoth = (await fifos())
-check('the previous-generation orphan (aged) and the fresh name both exist before the next allocation',
-  madeBoth.includes(ORPHAN) && madeBoth.includes(FRESH), { orphan: madeBoth.includes(ORPHAN), fresh: madeBoth.includes(FRESH) })
+check('no fixture of this scenario survives from an earlier run of it (every row below would pass vacuously)',
+  fixturesD.every((name) => !fixturePresent(orphansBefore, name)) && pidAlive(deadPid) === false,
+  { present: orphansBefore.filter((name) => fixturesD.includes(name)), deadPid, deadAlive: pidAlive(deadPid) })
+await runWslShell({ distro, linuxCwd: '/', command: `rm -f ${fixturesD.map((name) => shellQuote(name)).join(' ')}`, loginShell: false, timeoutMs: 30_000 })
+// The session whose FIFO is backdated: allocated FIRST, so its bridge makes the name, and
+// only then is the mtime moved into the past. `touch -m -t` is what makes the input exact
+// instead of a two-minute sleep.
 const terminalD = await allocateFifoTerminal()
+const fifoLiveD = (await fifos()).filter((path) => !orphansBefore.includes(path))
+const liveSessionFifo = fifoLiveD.find((path) => path.startsWith(`/tmp/dsh-pty-${String(process.pid)}-`))
+await runWslShell({ distro, linuxCwd: '/', command: `mkfifo ${shellQuote(ORPHAN_LEGACY)} ${shellQuote(FRESH_LEGACY)} ${shellQuote(deadOwnerName)} ${shellQuote(liveOwnerName)} && touch -m -t 202401010000 ${shellQuote(ORPHAN_LEGACY)} ${shellQuote(deadOwnerName)} && touch -m -t 202401010000 ${shellQuote(liveSessionFifo ?? '/nonexistent')}`, loginShell: false, timeoutMs: 30_000 })
+const madeAll = await fifos()
+check('every scenario-D fixture exists before the next allocation, including a LIVE session backdated past any age threshold',
+  fixturesD.every((name) => fixturePresent(madeAll, name)) && liveSessionFifo !== undefined && fixturePresent(madeAll, liveSessionFifo),
+  { fixtures: madeAll.filter((name) => fixturesD.includes(name)), liveSessionFifo, livePresent: fixturePresent(madeAll, liveSessionFifo ?? '') })
+const terminalE = await allocateFifoTerminal()
 const afterSweep = await fifos()
-check('allocating a session sweeps the FIFO a previous host generation left behind',
-  madeBoth.includes(ORPHAN) && !afterSweep.includes(ORPHAN), { orphan: ORPHAN, swept: !afterSweep.includes(ORPHAN) })
-// The same rule must NOT take a name a session may still be opening: two minutes is the
-// window between the bridge's mkfifo and the control writer's open, and a sweep that ignored
-// it would delete the name a starting session is about to connect to.
-check('the sweep leaves a name younger than that window alone',
-  madeBoth.includes(FRESH) && afterSweep.includes(FRESH), { fresh: FRESH, kept: afterSweep.includes(FRESH) })
+check('allocating a session sweeps the LEGACY FIFO a previous host generation left behind',
+  fixturePresent(madeAll, ORPHAN_LEGACY) && !fixturePresent(afterSweep, ORPHAN_LEGACY),
+  { orphan: ORPHAN_LEGACY, swept: !fixturePresent(afterSweep, ORPHAN_LEGACY) })
+check('allocating a session sweeps a FIFO whose OWNER PID is dead',
+  fixturePresent(madeAll, deadOwnerName) && !fixturePresent(afterSweep, deadOwnerName),
+  { orphan: deadOwnerName, swept: !fixturePresent(afterSweep, deadOwnerName) })
+// The three refusals. Each stands for a case the removal side above cannot distinguish.
+check('the sweep leaves a LEGACY name younger than the creation window alone',
+  fixturePresent(madeAll, FRESH_LEGACY) && fixturePresent(afterSweep, FRESH_LEGACY),
+  { fresh: FRESH_LEGACY, kept: fixturePresent(afterSweep, FRESH_LEGACY) })
+check('the sweep leaves a name whose OWNER PID is alive alone',
+  fixturePresent(madeAll, liveOwnerName) && fixturePresent(afterSweep, liveOwnerName),
+  { name: liveOwnerName, kept: fixturePresent(afterSweep, liveOwnerName), ownerAlive: pidAlive(liveOwner.pid) })
+// The R31 row: a live session of THIS generation, older than any age rule would tolerate.
+check('a LIVE session’s FIFO older than any age threshold is not swept',
+  liveSessionFifo !== undefined && fixturePresent(madeAll, liveSessionFifo) && fixturePresent(afterSweep, liveSessionFifo),
+  { fifo: liveSessionFifo, present: fixturePresent(afterSweep, liveSessionFifo ?? ''), ageNote: 'mtime backdated to 2024-01-01, as an old live session’s mtime really is' })
+try { await terminalE.terminate() } catch { /* already over */ }
 try { await terminalD.terminate() } catch { /* already over */ }
+try { liveOwner.kill() } catch { /* already gone */ }
+
+// --- the sweep is CANCELLED with the allocation (blocker 3 of the Task 2 review) ------
+//
+// The sweep is AWAITED before the spawn, and it used to make 1–2 bound (10 s) wsl.exe calls
+// with no way to interrupt them: an allocation whose signal aborted during that window still
+// waited out the sweep. The pin is behavioural and allocation-level, because that is where the
+// cost is paid: with an ALREADY-ABORTED signal, a real previous-generation orphan must survive
+// the allocation. Pre-fix the sweep ran regardless of the signal and deleted it.
+const CANCEL_ORPHAN = `/tmp/dsh-pty-legacy-cancelled-${String(process.pid)}.fifo`
+await runWslShell({ distro, linuxCwd: '/', command: `rm -f ${shellQuote(CANCEL_ORPHAN)} && mkfifo ${shellQuote(CANCEL_ORPHAN)} && touch -m -t 202401010000 ${shellQuote(CANCEL_ORPHAN)}`, loginShell: false, timeoutMs: 30_000 })
+const cancelPresent = (await fifos()).includes(CANCEL_ORPHAN)
+const preAborted = new AbortController()
+preAborted.abort()
+let cancelledHandle = null
+let cancelledFailure = null
+try {
+  cancelledHandle = await Promise.race([
+    spawnWslTerminal({
+      local: { spawn: fifoAdapter },
+      plan,
+      bridgeSource,
+      argv: ['/bin/bash', '--noprofile', '--norc', '-i'],
+      cols: 80,
+      rows: 24,
+      graceMs: 500,
+      controlTimeoutMs: 5_000,
+      signal: preAborted.signal,
+    }),
+    new Promise((resolve) => setTimeout(() => resolve(null), 60_000)),
+  ])
+} catch (error) {
+  cancelledFailure = error instanceof Error ? error.message : String(error)
+}
+const cancelSurvived = (await fifos()).includes(CANCEL_ORPHAN)
+check('a cancelled allocation does not sweep (the sweep is handed the allocation’s own signal)',
+  cancelPresent && cancelSurvived,
+  { orphan: CANCEL_ORPHAN, presentBefore: cancelPresent, survived: cancelSurvived, failure: cancelledFailure, allocated: cancelledHandle !== null })
+if (cancelledHandle !== null) { try { await cancelledHandle.terminate() } catch { /* already over */ } }
+await runWslShell({ distro, linuxCwd: '/', command: `rm -f ${shellQuote(CANCEL_ORPHAN)}`, loginShell: false, timeoutMs: 30_000 })
 
 // Cleanup is scoped to what THIS section created: an unconditional
 // `rm -f /tmp/dsh-pty-*.fifo` would also unlink the control channel of a terminal a
 // running desktop owns, which is a side effect on the operator's machine, not a fixture.
-const createdFifos = [...fifoLiveA, ...fifoLiveB, ...(fifoC === null ? [] : [fifoC])]
+const createdFifos = [...fifoLiveA, ...fifoLiveB, ...(fifoC === null ? [] : [fifoC]), ...(liveSessionFifo === undefined ? [] : [liveSessionFifo])]
 const leftoverFifos = (await fifos()).filter((path) => createdFifos.includes(path))
-// The FRESH fixture is NOT part of this claim: the sweep refusing to touch it is the row
-// above, and this suite then removes it as a fixture of its own. Asserting it absent here
-// would either fail every run or turn the row above into one that cannot pass.
 check('no FIFO of these sessions is left behind', leftoverFifos.length === 0, { createdFifos, leftoverFifos })
-for (const path of [...leftoverFifos, ORPHAN, FRESH]) {
+for (const path of [...leftoverFifos, ...fixturesD]) {
   await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
 }
-const fixturesLeft = (await fifos()).filter((path) => path === ORPHAN || path === FRESH)
+const fixturesLeft = (await fifos()).filter((path) => fixturesD.includes(path))
 check('the scenario D fixtures are removed by this suite', fixturesLeft.length === 0, { fixturesLeft })
-for (const path of leftoverFifos) {
-  await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
-}
 for (const entry of fifoChildren) { try { entry.child.kill() } catch { /* already gone */ } }
 console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
 process.exitCode = checker.failures === 0 ? 0 : 1
