@@ -448,14 +448,49 @@ try {
           observedAdded,
           note: 'an empty observedAdded means the pgrep pattern no longer matches a live bridge (the discriminator is broken), or the persistent tool parked its session before this probe ran',
         })
-  const bridgesAfter = await bridgePids()
-  const fifosAfter = await pluginFifos()
+  // THE RECLAIM ROW READS ONLY AFTER THE SESSION IS KNOWN TO BE TORN DOWN (root cause A of the
+  // 2026-10-19 17:23 run).
+  //
+  // The session is released in the selftest's own `finally`, so a delta read right after the
+  // selftest returns is a read of a session that may still be live — measured: a bridge pid AND
+  // `/tmp/dsh-pty-45580-dbab20de-63d.fifo` present at that instant. Two defects in one:
+  //   · the row could never pass for a session this run created, so it reported a leak that was a
+  //     timing artefact; and
+  //   · worse, it hid real ones — a residue that was genuinely leaked and one that was merely
+  //     not-yet-cleaned read identically, so the row could not be trusted either way.
+  //
+  // The selftest now records `tools.persistTeardown` AFTER its disposal await, and this row is
+  // gated on it. The gate is the fix for the READ POINT; the FIFO/bridge delta below is still the
+  // EVIDENCE, and it can still redden on a real leak — teardown.ok true plus a leftover name is
+  // exactly that, because the removal has been awaited by then.
+  //
+  // A FAILED disposal (`ok: false`) does NOT make the row pass by being "not observed": it
+  // reddens, because the whole claim is that the session gives its PTY back, and a disposal that
+  // threw is a session that may not have.
+  const teardownStep = step('tools.persistTeardown')
+  const teardownOk = teardownStep?.ok === true
+  const bridgesAfter = teardownOk ? await bridgePids() : bridgesBefore
+  const fifosAfter = teardownOk ? await pluginFifos() : fifosBefore
   const addedBridges = bridgesAfter.filter((pid) => !bridgesBefore.includes(pid))
   const addedFifos = fifosAfter.filter((name) => !fifosBefore.includes(name))
   check('the session leaves neither a PTY bridge process nor a plugin-named FIFO behind',
-    bridgeProbe?.ok === true && observedAdded.length > 0
+    bridgeProbe?.ok === true && observedAdded.length > 0 && teardownOk
     && addedBridges.length === 0 && addedFifos.length === 0,
-    { bridgesBefore, bridgesAfter, addedBridges, fifosBefore, fifosAfter, addedFifos, probePids, observedAdded })
+    {
+      teardown: teardownStep ?? 'the selftest recorded no tools.persistTeardown step — the record name is spelled in lib/index.js',
+      readPoint: teardownOk ? 'after the disposal await' : 'NOT TAKEN — the session was never released, so a delta here would measure a live session',
+      bridgesBefore,
+      bridgesAfter,
+      addedBridges,
+      fifosBefore,
+      fifosAfter,
+      addedFifos,
+      probePids,
+      observedAdded,
+      note: teardownOk
+        ? 'teardown succeeded and the delta is read AFTER it, so a leftover name is a real leak'
+        : 'the reclaim claim cannot be evaluated: disposal did not succeed, so the session may still be live',
+    })
 
   // ---- the fence guard: a mode change is refused while the shell is open --------------------
   // The backend owns this rule (`terminal-bash/src/index.ts:52-62`) and refuses by throwing.

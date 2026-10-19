@@ -698,10 +698,167 @@ const withoutComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(
   const allocateBody = allocateStart > -1 ? ptySource.slice(allocateStart) : ''
   const probeAt = allocateBody.indexOf('await requireBridgeRuntime(')
   const sweepAt = allocateBody.indexOf('await sweepOrphanFifos(')
-  const addAt = allocateBody.indexOf('liveFifoNames.add(')
+  // The registration is the CLAIM, which owns both halves of the live state (membership and the
+  // registration time the age bound reads). Asking for `liveFifoNames.add(` here would now be
+  // satisfied by nothing — the claim helper is the only writer, deliberately, so the two pieces
+  // of state cannot drift apart. The property is unchanged: the claim is taken after the probe
+  // and the sweep that can refuse or reclassify this name.
+  const addAt = allocateBody.indexOf('claimFifoName(fifo)')
   check('the session name joins the live set only after the probe and the sweep that can refuse or reclassify it',
     allocateBody !== '' && probeAt > -1 && sweepAt > probeAt && addAt > sweepAt,
     { probeAt, sweepAt, addAt })
+  // The two writers of the live state must be the claim helper and its release — a stray
+  // `liveFifoNames.add(`/`.delete(` anywhere ELSE is how the membership and its timestamp drift
+  // apart, which reads as "expired" for a live session (the unsafe direction). Scoped to the
+  // allocate body on purpose: the helper itself lives above it, and counting its own three writes
+  // would redden this row for the code that makes the pairing correct in the first place.
+  const liveWritesInAllocate = (allocateBody.match(/liveFifoNames\.(?:add|delete)\(/g) ?? []).length
+  check('membership and its age are written only through the claim helper, so they cannot drift apart',
+    liveWritesInAllocate === 0,
+    { liveWritesInAllocate, note: 'every write belongs to claimFifoName / its release, which own both maps' })
+}
+
+// --- scenario E: the read point the live gate uses (root cause A of the 2026-10-19 red row) ---
+//
+// THE LIVE GATE READ OF THE SESSION'S OWN FIFO WAS TAKEN AT THE WRONG MOMENT. Measured on the
+// 17:23 run: `bridgesAfter` was `["64751"]` and `fifosAfter` held
+// `/tmp/dsh-pty-45580-dbab20de-63d.fifo` — read immediately after the selftest returned, while the
+// session's own teardown was still in flight. That read point can NEVER be green for a session
+// this run created, so the row was structurally unable to pass: it reported a leak that was a
+// timing artefact. What the row must read instead is the moment the session is KNOWN to be torn
+// down, and the DELTA must still be zero there. This scenario pins the distinction the suite has
+// to respect, with the production handle and no polling:
+//
+//   read the instant `terminate()` settles → the FIFO must already be gone, with NO grace;
+//   read the instant `done` settles after a killed bridge → same.
+//
+// A row that has to POLL to see the FIFO go away is a row that would pass a leak that never
+// fully clears; `terminate()` is the promise the harness awaits (`terminal-bash/src/session.ts:781`
+// in `closeOnce`), so by its settlement the session's own cleanup has to be finished, not started.
+console.log('\nscenario E: the read point the live gate uses (a torn-down session reads zero, with no grace)')
+{
+  // E1: the ordinary close. `terminate()` is awaited and the FIFO is read with NO `untilAsync`.
+  const beforeE1 = await fifos()
+  const terminalE1 = await allocateFifoTerminal()
+  const liveE1 = (await fifos()).filter((path) => !beforeE1.includes(path))
+  check('E1: the session created its FIFO (so the row below cannot pass vacuously)',
+    liveE1.length === 1, { live: liveE1, baseline: beforeE1 })
+  await Promise.race([terminalE1.terminate(), new Promise((resolve) => setTimeout(() => resolve(null), 20_000))])
+  const instantE1 = await fifos()
+  const stillE1 = liveE1.filter((path) => instantE1.includes(path))
+  check('E1: the FIFO of a torn-down session is gone the instant terminate() settles (no polling)',
+    liveE1.length === 1 && stillE1.length === 0,
+    {
+      fifo: liveE1,
+      stillThere: stillE1,
+      note: 'the live reclaim row reads here. A FIFO that needs a poll to disappear is the residue this row exists to refuse',
+    })
+  const afterGraceE1 = await untilAsync(async () => (await fifos()).every((path) => !liveE1.includes(path)), 10_000)
+  check('E1: and it does not come back later (the instant read was removal, not a race that lost)',
+    afterGraceE1 === true, { stillThere: (await fifos()).filter((path) => liveE1.includes(path)) })
+
+  // E2 was written first as "the FIFO is gone the instant `done` settles", and MEASURED as RACY:
+  // 0/5 red in a standalone driver, and in this suite one run red and the next green with no code
+  // change between them. It is NOT kept, because a row whose verdict depends on which side of a
+  // race the cleanup lands on is worse than a red row — it reports a leak on some runs and
+  // certifies the same code on others. What replaces it is the claim that is actually TRUE and
+  // actually load-bearing:
+  //
+  //   · the `data.done` handlers cannot await (they are `.then` callbacks nobody settles), so the
+  //     removal they start is a BACKSTOP, not an owner. It must still finish.
+  //   · the OWNER is `terminate()`, which awaits one bounded `cleanupFifo()`. E1 above is that
+  //     row, and it is the reason a disposed session leaves nothing: if that await is dropped the
+  //     only cleanup left is the backstop, and E1 reddens deterministically (that is its red
+  //     variant).
+  const beforeE2 = await fifos()
+  const recordsBeforeE2 = fifoChildren.length
+  const terminalE2 = await allocateFifoTerminal()
+  const liveE2 = (await fifos()).filter((path) => !beforeE2.includes(path))
+  check('E2: the killed-bridge session created its FIFO (so the row below cannot pass vacuously)',
+    liveE2.length === 1, { live: liveE2, baseline: beforeE2 })
+  const killerE2 = fifoChildren.slice(recordsBeforeE2).find((entry) => entry.argv.some((arg) => arg === 'python3'))
+  check('E2: the data process is the python3 bridge', killerE2 !== undefined,
+    { spawns: fifoChildren.slice(recordsBeforeE2).map((entry) => entry.argv[0] + ' ' + entry.argv[1]) })
+  if (killerE2 !== undefined) killerE2.child.kill('SIGKILL')
+  await Promise.race([terminalE2.done, new Promise((resolve) => setTimeout(() => resolve(null), 20_000))])
+  // The backstop is ALLOWED to be late here — that is the honest shape of a fire-and-forget path.
+  // What it may not be is absent.
+  const backstopE2 = await untilAsync(async () => (await fifos()).every((path) => !liveE2.includes(path)), 15_000)
+  check('E2: the `done` handler’s backstop still settles a killed bridge’s FIFO (it is late by construction, never absent)',
+    liveE2.length === 1 && backstopE2 === true,
+    {
+      fifo: liveE2,
+      stillThere: (await fifos()).filter((path) => liveE2.includes(path)),
+      note: 'the handler cannot await, so this removal is a backstop; terminate() owns the prompt removal (E1). If this row reddens the backstop is gone and a session nobody terminates leaks',
+    })
+  try { await terminalE2.terminate() } catch { /* the session is already over */ }
+  for (const path of [...liveE1, ...liveE2]) {
+    await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
+  }
+}
+
+// --- scenario F: the uncollectable name must be able to recover (root cause C, ruling R58) ----
+//
+// Root cause B leaks a FIFO. Before this scenario existed, that leak was PERMANENT in a way
+// nothing could repair: the name stayed in `liveFifoNames` because only `cleanupFifo().finally`
+// ever removed it, and the sweep's branch 2 asks that set whether a name of THIS generation is
+// live. A name whose cleanup never ran therefore answered "live" for the rest of the process's
+// life, so the sweep that exists to collect orphans skipped it on every later allocation. One
+// missed cleanup became a FIFO that outlives everything short of a host restart.
+//
+// The fix is a bound on how long an entry may make that claim, and this is its behaviour: a
+// session left live (never terminated), with the host clock moved past the bound, must have its
+// name COLLECTED by the next allocation — and the session itself must still be usable, because
+// unlinking a name does not disturb descriptors.
+//
+// `Date.now` is patched here, so this is a SHARED-INPUT MUTATION and is declared as one: it is
+// process-global, the window holds exactly one allocation (whose sweep is the subject) and one
+// listing, and it is restored in `finally` on every path. Nothing else in this suite reads the
+// clock inside the window.
+console.log('\nscenario F: a live claim whose cleanup never ran becomes collectable (R58)')
+{
+  const beforeF = await fifos()
+  const recordsBeforeF = fifoChildren.length
+  const terminalF = await allocateFifoTerminal()
+  const liveF = (await fifos()).filter((path) => !beforeF.includes(path))
+  check('F: the stale-claim session created its FIFO (so the row below cannot pass vacuously)',
+    liveF.length === 1, { live: liveF, baseline: beforeF })
+  // The claim this session holds is the one that goes stale. `terminalF` is deliberately NOT
+  // terminated before the next allocation: a session whose claim was released by its own teardown
+  // would prove nothing about a claim that was never released.
+  const realNow = Date.now
+  const CLAIM_BOUND_MS = 12 * 60 * 60 * 1000
+  let collected = false
+  try {
+    // Past the bound, plus a margin: the claim must be read as EXPIRED, not merely old.
+    Date.now = () => realNow() + CLAIM_BOUND_MS + 60 * 60 * 1000
+    const recordsBeforeSweep = fifoChildren.length
+    const terminalG = await allocateFifoTerminal()
+    const afterSweep = await fifos()
+    collected = liveF.filter((path) => !afterSweep.includes(path)).length === 1
+    check('F: an allocation collects the FIFO of a prior session whose cleanup never ran',
+      liveF.length === 1 && collected === true,
+      {
+        fifo: liveF,
+        stillThere: liveF.filter((path) => afterSweep.includes(path)),
+        note: 'pre-fix the name stayed in the live set forever, so branch 2 skipped it on every sweep and the leak was uncollectable',
+      })
+    // The session behind the collected name must still be alive: the removal is of the NAME only.
+    check('F: collecting a stale claim does not kill the session that held it',
+      collected === true && terminalF.pid > 0,
+      { pid: terminalF.pid, note: 'unlinking a FIFO does not disturb the descriptors a live session holds' })
+    void recordsBeforeSweep
+    try { await terminalG.terminate() } catch { /* already over */ }
+  } finally {
+    Date.now = realNow
+  }
+  try { await terminalF.terminate() } catch { /* already over */ }
+  for (const path of liveF) {
+    await runWslShell({ distro, linuxCwd: '/', command: 'rm -f ' + shellQuote(path), loginShell: false, timeoutMs: 30_000 })
+  }
+  const leftoversF = (await fifos()).filter((path) => liveF.includes(path))
+  check('F: no FIFO of this scenario is left behind', leftoversF.length === 0, { liveF, leftoversF })
+  void recordsBeforeF
 }
 
 // Cleanup is scoped to what THIS section created: an unconditional
