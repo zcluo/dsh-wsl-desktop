@@ -728,10 +728,34 @@ const indexSites = [
   // travels to that site too — the second site this option legitimately serves.
   ['defaultWorkspaceUnc', /defaultWorkspaceUnc\(\{ wslPath: routeWslPath \}\)/g, 2],
   ['execInWsl runWslShell', /wslPath: routeWslPath,\s*\n\s*\}\)/g, 1],
+  // The selftest's clock-domain probe (R50). NOT redundant with the structural row below: this
+  // row keeps the per-site COUNT honest (a second `...sweepSelect` — say, a second runner — is
+  // a new site and has to be added here), while the row below asserts the FORM. Measured: the
+  // one call site is written single-line, so it never matched the newline-formatted row above.
+  ['sweepShell', /\.\.\.sweepSelect\b/g, 1],
 ]
 check('index.js passes the configured path at every probe site',
   indexSites.every(([, pattern, want]) => countOf(pattern) === want),
   { sites: indexSites.map(([name, pattern, want]) => `${name}=${countOf(pattern)}/${want}`) })
+// STRUCTURAL, and it is the half the row above cannot see (R50). The sweep runner hands
+// `runWslShell` the configured path through a spread rather than a `wslPath:` property:
+//   const sweepSelect = { wslPath: routeWslPath }
+//   const sweepShell = (c) => runWslShell({ …, ...sweepSelect })
+// Two separate facts, each with its own reading, because they fail differently:
+//   - `insideCall`: the spread is INSIDE the runWslShell options object. Delete `...sweepSelect`
+//     and this runner silently falls back to the default `wsl.exe` while every other row in
+//     this suite stays green — that was exactly the case before this row existed.
+//   - `carrier`: the spread is an object that actually carries `routeWslPath`. A `sweepSelect`
+//     that lost its `wslPath` line spreads an empty object, which reads as present above.
+const sweepInsideCall = /runWslShell\(\{[^}]*\.\.\.sweepSelect\s*\}\)/g
+const sweepCarrier = /const sweepSelect = \{ wslPath: routeWslPath \}/g
+check('the selftest’s sweep runner receives the configured path through its select spread',
+  countOf(sweepInsideCall) === 1 && countOf(sweepCarrier) === 1,
+  {
+    insideCall: countOf(sweepInsideCall),
+    carrier: countOf(sweepCarrier),
+    note: 'both must be exactly 1: the spread must sit inside the runWslShell options object, and sweepSelect must carry wslPath: routeWslPath',
+  })
 const subprocessCode = await readBlanked('lib/wsl/subprocess.js')
 // Anchored on the LOOKUP's own request literal and the call that consumes it, not on "the
 // first `runWslShell(`": the lookup now builds its options once and hands that object to an

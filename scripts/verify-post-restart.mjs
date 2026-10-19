@@ -318,19 +318,6 @@ try {
   check('the read tool addresses a Linux path', readText.includes('"isError":false') && readText.includes(`${wslScratch}/dsh-wsl-selftest.txt`), readText.slice(0, 200))
   const pwshText = step('tools.pwsh')?.text ?? ''
   check('the session exposes no PowerShell tool', pwshText.includes('UNKNOWN_TOOL'), pwshText.slice(0, 200))
-  // The confinement question is asked of the FILE SYSTEM rather than of the tool's own
-  // report: the persistent shell tried to write $HOME/.dsh-wsl-persist-outside, one level
-  // above its workspace. Under the distribution-side confinement that write is refused, and
-  // the file's absence is the outcome — not the shell's own diagnostic (measured M3: the
-  // write is refused in-distro with `Read-only file system`, `write-exit=1`).
-  //
-  // This row deliberately does NOT replace `shell.confined` (the service-level row above):
-  // that one keeps pinning the confinement itself, which no longer rides on this tool.
-  const outsideVerdict = String((await call('execInWsl', { cwd: home, distro, command: `test -e ${home}/.dsh-wsl-persist-outside && echo PRESENT || echo ABSENT` })).stdout ?? '').trim()
-  check('the shell in a WSL session cannot write outside its workspace',
-    outsideVerdict === 'ABSENT',
-    { outsideVerdict, note: 'PRESENT means the persistent PTY is not confined in the distribution — Task 1 measured M3 and the docs must declare it (Task C1-b)' })
-
   // The realm's own search tools. A WSL realm REMOVES the host's grep/glob rows on
   // purpose (their argv[0] is a packaged Windows ripgrep) and this plugin's two rows put
   // the two names back, running the distribution's own grep/find. They are the only tools
@@ -384,13 +371,20 @@ try {
   // The recorded text is the whole tool-result envelope; the shell's own output is what the
   // cwd and the variable have to appear in. Parsed rather than substring-matched so a match
   // on the ENVELOPE (say, an echoed command line in `error`) cannot satisfy the row.
+  //
+  // The fallback also UNESCAPES. `lib/index.js` records at 800 bytes, so a longer result is a
+  // TRUNCATED JSON document: `JSON.parse` then fails and the raw text is a single line of
+  // escaped JSON, where the `(?:^|\n)`-anchored prompt clauses can never match past line one.
+  // That would not be a false green — the echo clause still reads the text — but it would be a
+  // row that quietly stopped checking one of its three clauses, so the fallback turns the
+  // escapes back into the characters the clauses are written against.
   const persistText = (() => {
     const raw = persistB?.text ?? ''
     try {
       const envelope = JSON.parse(raw)
       return String(envelope?.value ?? envelope?.content?.[0]?.text ?? '')
     } catch {
-      return raw
+      return raw.replace(/\\r\\n|\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
     }
   })()
   check('the persistent shell keeps its working directory across calls',
@@ -400,6 +394,28 @@ try {
       : persistText.slice(0, 300))
   check('the persistent shell keeps an exported variable across calls',
     persistB?.ok === true && persistText.includes('dsh-wsl-persist-probe'), persistText.slice(0, 300))
+  // The confinement question is asked of the FILE SYSTEM rather than of the tool's own
+  // report: the persistent shell tried to write $HOME/.dsh-wsl-persist-outside, one level
+  // above its workspace. Under the distribution-side confinement that write is refused, and
+  // the file's absence is the outcome — not the shell's own diagnostic (measured M3: the
+  // write is refused in-distro with `Read-only file system`, `write-exit=1`).
+  //
+  // GATED ON `persistB?.ok === true` (R49(a)): the absence of that file is only evidence if
+  // the write was ATTEMPTED. In a P0/P1 world — the realm's `bash` never became the persistent
+  // tool — no attempt happened and the file is absent for a reason that says nothing about
+  // confinement, so an ungated row would read ABSENT and pass vacuously exactly where the
+  // capability is missing. With the gate it reddens there instead.
+  //
+  // This row deliberately does NOT replace `shell.confined` (the service-level row above):
+  // that one keeps pinning the confinement itself, which no longer rides on this tool.
+  const outsideVerdict = String((await call('execInWsl', { cwd: home, distro, command: `test -e ${home}/.dsh-wsl-persist-outside && echo PRESENT || echo ABSENT` })).stdout ?? '').trim()
+  check('the shell in a WSL session cannot write outside its workspace',
+    persistB?.ok === true && outsideVerdict === 'ABSENT',
+    {
+      ok: persistB?.ok,
+      outsideVerdict,
+      note: 'ABSENT alone does not pass: persistB.ok must be true, or the write was never attempted. PRESENT means the persistent PTY is not confined in the distribution — Task 1 measured M3 and the docs must declare it (Task C1-b)',
+    })
 
   // ---- criterion 2: the session gives its PTY back ------------------------------------------
   // TWO answers are required, not one (R28/R32). The bridge process going away is not the same
@@ -407,13 +423,39 @@ try {
   // leaves a 0-byte FIFO behind exactly when the bridge's own `finally` cannot run, and the
   // reclaim rule is a GENERATION rule, so a name can outlive its bridge. And neither is a
   // count: containment in an interned set says "this run added nothing", which is the claim.
+  //
+  // THE BRIDGE HALF NEEDS A POSITIVE CONTROL, and it is the row just below (R49(d), M4). On an
+  // empty baseline `addedBridges.length === 0` is true BY CONSTRUCTION: "no bridge of ours
+  // outlived the session" and "the discriminator matched nothing at all" are the same reading,
+  // and a broken `pgrep` pattern would keep this row green forever. So the selftest records the
+  // bridge set while its own PTY is still open (`tools.persistBridge`, read in `lib/index.js`
+  // before it disposes the session), and this block asserts that the discriminator SAW a bridge
+  // that this run created. The reclaim row is gated on that, so it cannot pass on a reading that
+  // observed nothing. Known failure shape (R52), recorded rather than papered over: a host that
+  // parks an idle persistent session would leave the positive control empty and redden these
+  // two rows for a reason that is not a leak — the detail names both readings so that is
+  // tellable from a real residue.
+  const bridgeProbe = step('tools.persistBridge')
+  const probePids = Array.isArray(bridgeProbe?.pids) ? bridgeProbe.pids : []
+  const observedAdded = probePids.filter((pid) => !bridgesBefore.includes(pid))
+  check('the bridge discriminator observes THIS run’s bridge while the session is open',
+    bridgeProbe?.ok === true && observedAdded.length > 0,
+    bridgeProbe === undefined
+      ? 'the selftest recorded no tools.persistBridge step — the record name is spelled in lib/index.js'
+      : {
+          probePids,
+          bridgesBefore,
+          observedAdded,
+          note: 'an empty observedAdded means the pgrep pattern no longer matches a live bridge (the discriminator is broken), or the persistent tool parked its session before this probe ran',
+        })
   const bridgesAfter = await bridgePids()
   const fifosAfter = await pluginFifos()
   const addedBridges = bridgesAfter.filter((pid) => !bridgesBefore.includes(pid))
   const addedFifos = fifosAfter.filter((name) => !fifosBefore.includes(name))
   check('the session leaves neither a PTY bridge process nor a plugin-named FIFO behind',
-    addedBridges.length === 0 && addedFifos.length === 0,
-    { bridgesBefore, bridgesAfter, addedBridges, fifosBefore, fifosAfter, addedFifos })
+    bridgeProbe?.ok === true && observedAdded.length > 0
+    && addedBridges.length === 0 && addedFifos.length === 0,
+    { bridgesBefore, bridgesAfter, addedBridges, fifosBefore, fifosAfter, addedFifos, probePids, observedAdded })
 
   // ---- the fence guard: a mode change is refused while the shell is open --------------------
   // The backend owns this rule (`terminal-bash/src/index.ts:52-62`) and refuses by throwing.
@@ -523,13 +565,26 @@ try {
   // unrelated reason — but "refused while a persistent terminal session is open" would mean
   // the realm's session is live inside the host world.
   const winFence = winStep('tools.persistFence')
+  // ... and the bridge probe has to have been UNABLE to observe a distribution bridge. That
+  // clause is what makes this row able to fail on its own evidence: the UNKNOWN_TOOL pair above
+  // is also what `:512`'s "no bash tool exists" reads, so on its own this row could only fail
+  // where that one already did. A host world that could SEE a bridge would mean the realm's
+  // terminal (and with it the tool row) is live outside the isolate — a leak this row can name
+  // even while both bash texts still say UNKNOWN_TOOL.
+  const winBridge = winStep('tools.persistBridge')
   check('no persistent bash tool leaked into the host world',
     (winPersistA?.text ?? '').includes('UNKNOWN_TOOL')
-    && (winPersistB?.text ?? '').includes('UNKNOWN_TOOL'),
+    && (winPersistB?.text ?? '').includes('UNKNOWN_TOOL')
+    && winBridge?.ok === false,
     {
       a: winPersistA?.text?.slice(0, 160) ?? 'no tools.bashPersist.a step was recorded',
       b: winPersistB?.text?.slice(0, 160) ?? 'no tools.bashPersist.b step was recorded',
       fence: winFence?.refused === true ? winFence.reason : 'the mode change was not refused in the host world',
+      bridge: winBridge === undefined
+        ? 'no tools.persistBridge step was recorded'
+        : winBridge.ok === true
+          ? `the host world OBSERVED a distribution bridge (${JSON.stringify(winBridge.pids ?? [])}) — the realm's terminal is live outside its isolate`
+          : winBridge.error,
     })
 } finally {
   await rm(windowsRoot, { recursive: true, force: true })
