@@ -898,8 +898,9 @@ console.log('\nscenario F: a live claim whose cleanup never ran becomes collecta
 // `rm` (a permission failure or a read-only /tmp), which an unprivileged suite cannot construct
 // and which a stub `wsl.exe` cannot fake either, because `runWslShell` spawns ONE executable for
 // both the listing and the removal. So what is pinned is the shape that makes the failure
-// observable, and the red variant is the pre-fix source (see the report): it is not a
-// behavioural observation of a refused `rm`.
+// observable, and each row's red variant is a mutation of THIS source, restored byte-exactly
+// from a %TEMP% backup and archived in the report. It is not a behavioural observation of a
+// refused `rm`, and no row here claims to be one.
 console.log('\nscenario G: a removal reports what it did, and reports it without the debug log')
 {
   const ptySource = withoutComments(await readFile(join(here, '..', 'lib', 'wsl', 'pty.js'), 'utf8'))
