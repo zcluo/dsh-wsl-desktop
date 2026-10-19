@@ -758,11 +758,14 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
     afterGraceE1 === true, { stillThere: (await fifos()).filter((path) => liveE1.includes(path)) })
 
   // E2 was written first as "the FIFO is gone the instant `done` settles", and MEASURED as RACY:
-  // 0/5 red in a standalone driver, and in this suite one run red and the next green with no code
-  // change between them. It is NOT kept, because a row whose verdict depends on which side of a
-  // race the cleanup lands on is worse than a red row — it reports a leak on some runs and
-  // certifies the same code on others. What replaces it is the claim that is actually TRUE and
-  // actually load-bearing:
+  // 0/5 red in a standalone driver (archived as artifacts/t3fix4-done-race-rerun.txt, EXIT=0 — a
+  // later re-run; the ORIGINAL run was never archived, and this comment says so rather than
+  // implying evidence it does not have), and in this suite one run red and the next green with no
+  // code change between them (that pair was never archived at all: it is a recollection, recorded
+  // here because it is why the row went, not because it is evidence). It is NOT kept, because a
+  // row whose verdict depends on which side of a race the cleanup lands on is worse than a red row
+  // — it reports a leak on some runs and certifies the same code on others. What replaces it is the
+  // claim that is actually TRUE and actually load-bearing:
   //
   //   · the `data.done` handlers cannot await (they are `.then` callbacks nobody settles), so the
   //     removal they start is a BACKSTOP, not an owner. It must still finish.
@@ -778,9 +781,9 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   //   · deleting the `await cleanupFifo()` from `terminate()` left the whole suite GREEN, 47 PASS,
   //     EXIT=0 (`artifacts/t3fix3-red-E1.txt`), and the saved mutant was byte-identical to HEAD
   //     (`ABC001F4…`), so that archive proves the GREEN, not the mutation;
-  //   · neutralising `cleanupFifo` entirely also left E1 green; what reddened was scenario A and
-  //     E2 (`artifacts/t3fix3-red-E1-noremoval.txt`, EXIT=1) — the killed-bridge paths, where the
-  //     bridge's finally cannot run.
+  //   · neutralising `cleanupFifo` entirely also left E1 green; what reddened was scenario A,
+  //     scenario C's failed-allocation row and E2 (`artifacts/t3fix3-red-E1-noremoval.txt`, EXIT=1)
+  //     — the killed-bridge paths, where the bridge's finally cannot run.
   // The reason is above: on the ordinary-close path the bridge's own `finally` removes the name,
   // so E1 cannot observe whether the host-side removal ran, or whether it was awaited. NO
   // DISCRIMINATING MUTATION FOR THAT AWAIT HAS BEEN FOUND, and none is implied here: making the
