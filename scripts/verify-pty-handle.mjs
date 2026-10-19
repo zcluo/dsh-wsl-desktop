@@ -766,10 +766,29 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   //
   //   · the `data.done` handlers cannot await (they are `.then` callbacks nobody settles), so the
   //     removal they start is a BACKSTOP, not an owner. It must still finish.
-  //   · the OWNER is `terminate()`, which awaits one bounded `cleanupFifo()`. E1 above is that
-  //     row, and it is the reason a disposed session leaves nothing: if that await is dropped the
-  //     only cleanup left is the backstop, and E1 reddens deterministically (that is its red
-  //     variant).
+  //   · the session has a SECOND owner for the ordinary-close case, and it is not this suite's
+  //     host-side removal: the bridge's own `finally` (terminal-bridge.py) unlinks the FIFO. So
+  //     on the ordinary-close path the host-side `rm -f` is a backstop as well.
+  //
+  // WHAT E1 PROVES, AND WHAT IT DOES NOT (R62). E1 is an honest behavioural row: a session closed
+  // through `terminate()` has no FIFO left AT THE INSTANT IT SETTLES. It is NOT a discriminating
+  // pin for the `terminate()` await, and the earlier version of this comment claimed it was
+  // ("if that await is dropped … E1 reddens deterministically (that is its red variant)"). That
+  // claim was measured and is FALSE:
+  //   · deleting the `await cleanupFifo()` from `terminate()` left the whole suite GREEN, 47 PASS,
+  //     EXIT=0 (`artifacts/t3fix3-red-E1.txt`), and the saved mutant was byte-identical to HEAD
+  //     (`ABC001F4…`), so that archive proves the GREEN, not the mutation;
+  //   · neutralising `cleanupFifo` entirely also left E1 green; what reddened was scenario A and
+  //     E2 (`artifacts/t3fix3-red-E1-noremoval.txt`, EXIT=1) — the killed-bridge paths, where the
+  //     bridge's finally cannot run.
+  // The reason is above: on the ordinary-close path the bridge's own `finally` removes the name,
+  // so E1 cannot observe whether the host-side removal ran, or whether it was awaited. NO
+  // DISCRIMINATING MUTATION FOR THAT AWAIT HAS BEEN FOUND, and none is implied here: making the
+  // bridge's finally and the host-side removal both no-ops would redden E1, but that mutation
+  // removes both owners at once and therefore proves nothing about the `terminate()` await
+  // specifically. What actually pins the host-side removal's behaviour is scenario G below
+  // (a removal that does not land must be reported, and must not fail the teardown); what pins
+  // the fire-and-forget the WARNING was about is E2, on the path where no other owner exists.
   const beforeE2 = await fifos()
   const recordsBeforeE2 = fifoChildren.length
   const terminalE2 = await allocateFifoTerminal()
@@ -859,6 +878,95 @@ console.log('\nscenario F: a live claim whose cleanup never ran becomes collecta
   const leftoversF = (await fifos()).filter((path) => liveF.includes(path))
   check('F: no FIFO of this scenario is left behind', leftoversF.length === 0, { liveF, leftoversF })
   void recordsBeforeF
+}
+
+// --- scenario G: a removal that did not land must be REPORTED, not assumed (R57) --------
+//
+// The live gate's 17:23 residue was one FIFO on disk with nothing, anywhere, saying the `rm -f`
+// had not landed. Two defects allowed that, and both are pinned below:
+//
+//   · `removeFifo` answered "success" for ANY spawn that resolved. `runWslShell` resolves for
+//     every exit code (`world.js:611-613`), so a stopped distribution, a permission failure, or
+//     an `rm` that simply failed all read as a successful removal — and the failure log was
+//     suppressed by that false success.
+//   · the diagnostic that did exist went through `termLog`, which is opt-in
+//     (WSL_DESKTOP_TERMINAL_DEBUG), so in the default configuration it was silent.
+//
+// THIS IS A SOURCE-SHAPE PIN, AND ITS LIMITATION IS STATED RATHER THAN HIDDEN (R62). The
+// behaviour — a removal that does not land answers false and reports it — cannot be driven
+// offline on this machine: producing it needs a distribution that will list /tmp but refuse
+// `rm` (a permission failure or a read-only /tmp), which an unprivileged suite cannot construct
+// and which a stub `wsl.exe` cannot fake either, because `runWslShell` spawns ONE executable for
+// both the listing and the removal. So what is pinned is the shape that makes the failure
+// observable, and the red variant is the pre-fix source (see the report): it is not a
+// behavioural observation of a refused `rm`.
+console.log('\nscenario G: a removal reports what it did, and reports it without the debug log')
+{
+  const ptySource = withoutComments(await readFile(join(here, '..', 'lib', 'wsl', 'pty.js'), 'utf8'))
+  const fnStart = ptySource.indexOf('async function removeFifo')
+  const fnEnd = ptySource.indexOf('export async function sweepOrphanFifos')
+  const removeBody = fnStart > -1 && fnEnd > fnStart ? ptySource.slice(fnStart, fnEnd) : ''
+  // The postcondition rides with the command in ONE spawn: `rm -f` alone cannot report a partial
+  // success, and `test ! -e` is the distribution's own answer about the directory entry.
+  check('G: the removal command carries its own postcondition, so one spawn answers "is the name gone"',
+    removeBody !== ''
+    && /&& test ! -e /.test(removeBody),
+    { hasPostcondition: /&& test ! -e /.test(removeBody), length: removeBody.length })
+  // The exit code is the half that was missing: resolving is not removing. `=== 0` is the ONLY
+  // path that answers true, so every other ending (non-zero, killed, timed out) reports failure.
+  check('G: removeFifo answers true only for exitCode 0, and its failure line names the outcome',
+    removeBody !== ''
+    && /result\.exitCode === 0\)\s*return true/.test(removeBody)
+    && /reportAlways\(`removeFifo FAILED[^`]*exit=\$\{String\(result\.exitCode\)\}/.test(removeBody)
+    && /timedOut=\$\{String\(result\.timedOut\)\}/.test(removeBody),
+    {
+      successArm: /result\.exitCode === 0\)\s*return true/.test(removeBody),
+      reportsExit: /reportAlways\(`removeFifo FAILED[^`]*exit=\$\{String\(result\.exitCode\)\}/.test(removeBody),
+      reportsTimeout: /timedOut=\$\{String\(result\.timedOut\)\}/.test(removeBody),
+    })
+  // The diagnostic must not depend on the opt-in log. `reportAlways` writes to the host's stderr
+  // as well, and is defined WITHOUT the environment gate that `termLog` carries.
+  const reportStart = ptySource.indexOf('function reportAlways')
+  const reportClose = reportStart > -1 ? ptySource.indexOf('\n}\n', reportStart) : -1
+  const reportBody = reportStart > -1 && reportClose > reportStart ? ptySource.slice(reportStart, reportClose) : ''
+  check('G: the failure diagnostic is unconditional (stderr), not gated on the debug log',
+    reportBody !== ''
+    && /process\.stderr\.write\(/.test(reportBody)
+    && !/WSL_DESKTOP_TERMINAL_DEBUG/.test(reportBody)
+    && /reportAlways\(`removeFifo FAILED/.test(removeBody),
+    { writesStderr: /process\.stderr\.write\(/.test(reportBody), envGated: /WSL_DESKTOP_TERMINAL_DEBUG/.test(reportBody), usedInRemove: /reportAlways\(`removeFifo FAILED/.test(removeBody), length: reportBody.length })
+  // The failure path must stay FAIL-SAFE: reported, never thrown. A teardown that throws because
+  // the distribution is going down is the regression this whole shape is arranged to avoid.
+  //
+  // Scoped to the CATCH block on purpose: `! /throw/` over the whole function would be satisfied
+  // by the exit-code arm's `return false` alone, which is how the first version of this row stayed
+  // GREEN when the catch was mutated to `throw error` (measured). The fail-safe claim is about
+  // what happens when the spawn itself rejects, so that is the only region examined.
+  const catchAt = removeBody.indexOf('} catch (error) {')
+  const catchBody = catchAt > -1 ? removeBody.slice(catchAt) : ''
+  check('G: the removal still answers instead of throwing, so a teardown cannot fail on it',
+    catchBody !== ''
+    && /return false/.test(catchBody)
+    && !/\bthrow\b/.test(catchBody),
+    { returnsFalse: /return false/.test(catchBody), throws: /\bthrow\b/.test(catchBody), catchAt })
+  // The SAME blindness at the sweep's own `rm -f`: `runWslShell` resolves for any exit code
+  // there too, so returning the name list after a failed `rm` would report removals that never
+  // happened. It is fixed here (answering [] and reporting), and this row is what says so.
+  const sweepStart = ptySource.indexOf('export async function sweepOrphanFifos')
+  const sweepEnd = ptySource.indexOf('export async function spawnWslTerminal')
+  const sweepBody = sweepStart > -1 && sweepEnd > sweepStart ? ptySource.slice(sweepStart, sweepEnd) : ''
+  check('G: the sweep inspects its own rm exit code too, and answers [] when the removal did not land',
+    sweepBody !== ''
+    && /const removed = await runWslShell\(\{/.test(sweepBody)
+    && /removed\.exitCode !== 0\) \{/.test(sweepBody)
+    && /reportAlways\(`sweepOrphanFifos: removal FAILED[^`]*exit=\$\{String\(removed\.exitCode\)\}/.test(sweepBody)
+    && /return \[\]/.test(sweepBody.slice(sweepBody.indexOf('removed.exitCode !== 0'))),
+    {
+      capturedOutcome: /const removed = await runWslShell\(\{/.test(sweepBody),
+      inspects: /removed\.exitCode !== 0\) \{/.test(sweepBody),
+      reportsExit: /reportAlways\(`sweepOrphanFifos: removal FAILED[^`]*exit=\$\{String\(removed\.exitCode\)\}/.test(sweepBody),
+      answersEmpty: /return \[\]/.test(sweepBody.slice(sweepBody.indexOf('removed.exitCode !== 0'))),
+    })
 }
 
 // Cleanup is scoped to what THIS section created: an unconditional
