@@ -786,7 +786,7 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   //     then-HEAD `c7f75c0` (`ABC001F4…` = `c7f75c0:lib/wsl/pty.js`), so that archive proves the
   //     GREEN, not the mutation. That digest describes `c7f75c0`'s file, and it must not be
   //     described with the word "HEAD", which moves: the blob was `5B821CAB…` from `aa0ad6d` until
-  //     this commit, whose comment-only edit leaves the committed blob at `572EE75A…` (56855 B).
+  //     `3f561bf`, whose comment-only edit left the committed blob at `572EE75A…` (56855 B).
   //     The same class of error was reintroduced once already by the round that fixed debt 1, so
   //     every digest here is named with the commit it belonged to;
   //   · neutralising `cleanupFifo` entirely also left E1 green; what reddened was scenario A,
