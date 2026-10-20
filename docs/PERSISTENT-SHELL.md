@@ -14,7 +14,7 @@
 
 工具名是 `bash`，参数**只有** `command`。`timeoutMs` 是 300000（毫秒，与 harness 自己的行一致）；`backendType` 默认 `shell`；后端在发行版里起的是**发行版自己的** `/bin/bash --noprofile --norc -i`。
 
-于是它承诺的是 harness 那句原文：命令在常驻 bash shell 里跑，**当前目录与导出的环境变量跨调用保留**。活体门里这两件事各有一条会红的行：`tools.bashPersist.a` 建立状态，`.b` 读回它。
+于是它承诺的是 harness 那句原文：命令在常驻 bash shell 里跑，**当前目录与导出的环境变量跨调用保留**。活体门里这两件事各有一条会红的行：`tools.bashPersist.a` 建立状态，`.b` 读回它。两条行各自钉一个**只可能由对应的那一半产生**的字面量——cwd 行钉 `.dsh-wsl-persist-cwd`（只可能来自第一次调用建的目录），导出变量行钉 `dsh-wsl-persist-probe`（只可能来自 `echo "$DSH_WSL_PERSIST_PROBE"`，变量没活下来时那行就是空的）。**这个判据成立有一个前提，值得写下来**：活体门的工作区根是 `.dsh-wsl-selftest-<pid>`，它**不含** `dsh-wsl-persist-probe` 这个子串；若工作区根改叫 `.dsh-wsl-persist-probe-<pid>`（M1 探针用的正是这个 scratch 名），`pwd` 打出来的路径就会自带 token，第二条行便会在变量根本没存活时也通过。M1 探针因此**故意只用 cwd 判定**、不用 token——同一个坑的镜像。
 
 ## 缺口清单（逐条，缺一不可）
 
@@ -42,11 +42,11 @@
 
 ## 未测与已知限制
 
-- **PTY 路径没有离线钉子**：`lib/wsl/subprocess.js` 的终端原语与 `lib/wsl/pty.js` 的桥驱动 import 的是 harness 包，离线套件驱动不了它们；唯一的观察者是**活体那几行**与 `scripts/verify-pty-handle.mjs`（后者经真发行版驱动桥与 FIFO，不经模型工具）。
+- **两个终端原语的离线覆盖不一样，必须分开说**：**`lib/wsl/subprocess.js` 的 `spawnTerminal` 没有行为级的离线钉子**——该文件 import 了 harness 包，离线套件驱动不了它的行为；钉住它的只有 `scripts/verify-modules.mjs` 里的一条**源码形状**行（`planFor(spec.cwd, spec.wslDistro)`）加上**活体那几行**，不是行为观察。**`lib/wsl/pty.js` 相反**：它只 import `node:fs/crypto/os/path` 内建模块与两个同目录相对模块，**没有任何 harness 包**，所以 `scripts/verify-pty-handle.mjs` 能 import `spawnWslTerminal` 并**离线驱动**它（真发行版、经桥与 FIFO，不经模型工具）——那个套件就是这一半的离线钉子，不是「驱动不了」的旁证。
 - **两个分界必须知道**：**（a）GUI 的网页终端按设计不受 fence 约束**——终端控制器直接调 `subprocess.spawnTerminal`，它自己就声明走的路由「without Agent sandbox or approval restrictions」，所以「模型的 `bash` 受约束」与「用户的 GUI 终端不受约束」**不同**；**（b）终端那条没有 PID namespace**——`isolateProcesses` 默认 `false`（`lib/wsl/sandbox.js` 的 Config 注释），因为 PID namespace 会把交互 shell 变成 PID 1、其进程组在 PTY 的前台查询里不可寻址（helper 的 `--no-pidns` 是为同一件事）；一次性命令路径**保留** namespace，这是已声明的边界。
 - **12 小时的活 claim 上限及其已声明的残余**：活集合的条目只在**年轻于 12 小时**时才声称「活着」（`lib/wsl/pty.js` 的 `LIVE_FIFO_CLAIM_MS`）。残余情形写在代码里：一个超过 12 小时、cleanup 真的没跑过的会话，**加上**同一窗口里的第二次分配，可能让清扫 unlink 一个活会话仍持有的名字。代价是**名字，不是会话**（桥与控制写入者持有描述符，FIFO 的 inode 比目录项活得久）——这就是这个界为什么以**小时**计而不是分钟。
 - **只在 `debian` 上实测**：本机还有 `debian-dev` 与 `arch`，与它共用同一个 WSL2 内核与 9P 栈，但没有逐个复测。
-- **一次活体绿**：活体门最近一次是 **58 PASS / 0 FAIL**、尾部 `NO AUTOMATED FAILURES; 3 manual step(s) pending`、`EXIT=0`（`artifacts/t3live2-post-restart.txt`）。其中会话释放与 FIFO 回收那条是绿的，桥与 FIFO 的事后计数 `fifos=0 bridges=0`。
+- **一次活体绿**：活体门最近一次是 **58 PASS / 0 FAIL**、尾部 `NO AUTOMATED FAILURES; 3 manual step(s) pending`、`EXIT=0`（`artifacts/t3live2-post-restart.txt`）。其中会话释放与 FIFO 回收那条是绿的。**事后计数是另一次量测、另一份归档**：发行版里的 `plugin fifos in debian: 0` / `pty bridges in debian: 0` 读自 `artifacts/t3fix3-distro-clean.txt` 与 `artifacts/t3fix4-distro-clean.txt`（带括号判别式，见台账的跑后检查）——**不是**上面那份活体门输出，后者没有这两个计数行。
 
 ### 人工核验清单（浏览器专属，不可自动化）
 

@@ -784,9 +784,11 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   //   · deleting the `await cleanupFifo()` from `terminate()` left the whole suite GREEN, 47 PASS,
   //     EXIT=0 (`artifacts/t3fix3-red-E1.txt`), and the saved mutant was byte-identical to the
   //     then-HEAD `c7f75c0` (`ABC001F4…` = `c7f75c0:lib/wsl/pty.js`), so that archive proves the
-  //     GREEN, not the mutation. HEAD's `pty.js` has been `5B821CAB…` since `aa0ad6d`, so the
-  //     digest does NOT describe the current file and `git cat-file blob HEAD:lib/wsl/pty.js`
-  //     does not yield it (debt 1, corrected from measurement);
+  //     GREEN, not the mutation. That digest describes `c7f75c0`'s file, and it must not be
+  //     described with the word "HEAD", which moves: the blob was `5B821CAB…` from `aa0ad6d` until
+  //     this commit, whose comment-only edit leaves the committed blob at `572EE75A…` (56855 B).
+  //     The same class of error was reintroduced once already by the round that fixed debt 1, so
+  //     every digest here is named with the commit it belonged to;
   //   · neutralising `cleanupFifo` entirely also left E1 green; what reddened was scenario A,
   //     scenario C's failed-allocation row and E2 (`artifacts/t3fix3-red-E1-noremoval.txt`, EXIT=1)
   //     — the killed-bridge paths, where the bridge's finally cannot run.
@@ -957,9 +959,10 @@ console.log('\nscenario G: a removal reports what it did, and reports it without
   // `removeBody.slice(catchAt)`, and `removeBody` ends at the NEXT exported function
   // (`sweepOrphanFifos`), so the slice is NOT the catch block alone — it runs from
   // `} catch (error) {` to the end of the declaration run that follows `removeFifo`
-  // (FIFO_PREFIX / isPluginFifoName / fifoNameFor / GENERATION_NAME / the live-set helpers /
-  // LEGACY_PROTECTION_MINUTES). Measured with this file's own `withoutComments`, so the numbers
-  // describe the text the row really examines: removeBody 2248 bytes, catchAt 615, catchBody
+  // (FIFO_PREFIX / FIFO_GLOB / LEGACY_CUT_MARKER / isPluginFifoName / fifoNameFor /
+  // GENERATION_NAME / the live-set helpers / LIVE_FIFO_CLAIM_MS / LEGACY_PROTECTION_MINUTES).
+  // Measured with this file's own `withoutComments`, so the numbers describe the text the row
+  // really examines: removeBody 2248 bytes, catchAt 615, catchBody
   // 1633 — i.e. the examined slice is 2.7x the part before the catch. The row is still sound
   // TODAY because none of those declarations contains `throw` (verified on the same slice), and
   // the earlier sentence ("that is the only region examined") was the over-claim, not the
