@@ -118,10 +118,53 @@ check('grep: the whole vector is golden (all six exclusions, order, include, sep
 const GOLDEN_GLOB = ['/usr/bin/find', '--', '/ws',
   '-name', '.git', '-prune', '-o', '-name', '.svn', '-prune', '-o', '-name', '.hg', '-prune', '-o',
   '-name', '.bzr', '-prune', '-o', '-name', '.jj', '-prune', '-o', '-name', '.sl', '-prune', '-o',
-  '-path', '/ws/*.ts', '-type', 'f', '-printf', '%T@ %p\\0']
-check('glob: the whole vector is golden (six prunes in order, anchored path, NUL format)',
+  '-path', '/ws/*.ts', '-type', 'f',
+  '(', '-exec', 'stat', '-c', '%.9Y', '{}', ';', '-print0', '-o', '-print0', ')']
+check('glob: the whole vector is golden (six prunes in order, anchored path, portable mtime pairing)',
   JSON.stringify(globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 1 })) === JSON.stringify(GOLDEN_GLOB),
   JSON.stringify(globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 1 })))
+// PORTABILITY (the defect this row was added for): `-printf` is a GNU extension, and on a busybox
+// `find` its refusal is SILENT once stderr is not read — an empty stdout that parses as "no files
+// match". This is the row that keeps the glob vector off that class of predicate: it asserts the
+// ABSENCE of the GNU-only spelling over the whole vector, so a future edit that reintroduces
+// `-printf` (or its `%T@` token) fails here rather than shipping a silent empty listing. `\b`
+// matters in the predicate test, because `-print` is a PREFIX of `-printf`.
+{
+  const argv = globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 1 })
+  const text = argv.join(' ')
+  check('glob: the listing vector carries no GNU-only predicate (-printf / %T@) — busybox refuses it silently',
+    !argv.some((element) => /^-printf$/.test(element))
+    && !/-printf\b/.test(text)
+    && !/%T@/.test(text)
+    // The portable half has to be PRESENT, or this row would pass on a vector that prints nothing
+    // at all: `-print0` (busybox FEATURE_FIND_PRINT0) and the `-exec stat … ;` pairing.
+    && argv.includes('-print0')
+    && argv.includes('-exec') && argv.includes('stat') && argv.includes(';'),
+    { argv, printf: /-printf\b/.test(text), mtimeToken: /%T@/.test(text) })
+}
+// The SECOND silent-empty shape, and it is not hypothetical: `-exec stat … ;` and the `-print0`
+// that follows it are joined by find's implicit AND, so a distribution whose `stat` is missing
+// never reaches `-print0` — and MEASURED on GNU find 4.10.0, it still exits **0** with empty
+// stdout, printing only "`stat`: No such file or directory" on stderr (which this tool does not
+// read into the answer). That is the original defect one layer down: a stat-less listing would
+// answer "no files match". The vector's `-o -print0` fallback is what this row exists to keep,
+// and the grouping is what makes it attach to the -path/-type test at all — find's implicit AND
+// binds tighter than `-o`, so without the parentheses the fallback would be an expression of its
+// own and every file in the tree would print. Both facts are asserted: the group exists, and the
+// fallback sits INSIDE it rather than dangling past a bare `-o` chain.
+{
+  const argv = globArgv({ pattern: '**/*.ts', path: '/ws' }, { maxResults: 1 })
+  const open = argv.indexOf('(')
+  const close = argv.lastIndexOf(')')
+  const group = open === -1 || close === -1 ? [] : argv.slice(open + 1, close)
+  check('glob: the listing keeps printing paths when stat is absent — the -o -print0 fallback, inside its own group',
+    // The group holds the mtime pairing followed by the fallback, and both -print0 tokens are IN it.
+    JSON.stringify(group) === JSON.stringify(['-exec', 'stat', '-c', '%.9Y', '{}', ';', '-print0', '-o', '-print0'])
+    && argv.filter((element) => element === '-print0').length === 2
+    // and nothing may sit between the group and the pattern test that would change what it attaches
+    && argv[open - 1] === 'f' && close === argv.length - 1,
+    { open, close, group })
+}
 
 console.log('\nthe properties the vectors above stand on')
 // The host's list, item for item (host parity: tool-fs-search/src/glob.ts:37). Pinned as
@@ -257,44 +300,46 @@ check('grep: the cap truncates AND says so, because a silent cap reads as a comp
     && out.truncated === false, out)
 }
 
-// The mtime field is the FIRST space's business only, because a path may contain one; the NUL
-// separator is what keeps that path whole. And the order is the host's MEASURED one: the host
-// sorts by mtime ASCENDING (oldest first), and the sort is Node's here because a realm has no
+// The mtime field ends at the FIRST newline, because a path may contain a space (and a newline);
+// the NUL separator is what keeps that path whole. And the order is the host's MEASURED one: the
+// host sorts by mtime ASCENDING (oldest first), and the sort is Node's here because a realm has no
 // shell to pipe into `sort`.
 {
-  const out = parseGlobOutput('3.0 /ws/b c.ts\0' + '1.0 /ws/a.ts\0', { maxResults: 9 })
+  const out = parseGlobOutput('3.0\n/ws/b c.ts\0' + '1.0\n/ws/a.ts\0', { maxResults: 9 })
   check('glob: NUL-separated records, ordered by mtime ASCENDING (host parity), spaces intact',
     JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts', '/ws/b c.ts']) && out.truncated === false, out)
 }
 // The same separator seen from the other side: the character a line-based record could never
 // carry. A path with a newline in it is legal in Linux, and this is the row that says why the
-// record format is NUL rather than a line.
+// record format is NUL rather than a line — the mtime's own newline is the FIRST one, so the
+// path's newline is simply part of the path.
 check('glob: a newline inside a path survives — the NUL separator exists for exactly this',
-  JSON.stringify(parseGlobOutput('1.0 /ws/a\nb.ts\0', { maxResults: 9 }).paths) === JSON.stringify(['/ws/a\nb.ts']))
+  JSON.stringify(parseGlobOutput('1.0\n/ws/a\nb.ts\0', { maxResults: 9 }).paths) === JSON.stringify(['/ws/a\nb.ts']))
 // Truncation, said out loud, for the same reason as the grep row above.
 check('glob: the cap reports truncation, because a silent cap reads as a complete listing',
-  parseGlobOutput('1.0 /a\0' + '2.0 /b\0', { maxResults: 1 }).truncated === true)
+  parseGlobOutput('1.0\n/a\0' + '2.0\n/b\0', { maxResults: 1 }).truncated === true)
 // WHICH records the cap keeps is a second decision, and the sort makes it: the cap keeps the
 // OLDEST — the first N by mtime, not the first N find happened to print. The fixture's find
 // order is deliberately the reverse of its mtime order, so the two answers differ.
 {
-  const out = parseGlobOutput('3.0 /ws/b.ts\0' + '1.0 /ws/a.ts\0', { maxResults: 1 })
+  const out = parseGlobOutput('3.0\n/ws/b.ts\0' + '1.0\n/ws/a.ts\0', { maxResults: 1 })
   check('glob: the cap keeps the OLDEST records — the sort runs before the slice',
     JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
 }
 // Carried from the controller's ruling 22 (Task 2 report, C3) rather than invented here: the two
-// parsers must refuse the same class of input. The vector's own `-printf '%T@ %p'` ALWAYS emits the
-// space, so a record without one did not come from a whole print — the tool or the vector is in
-// trouble — and inventing a path out of a broken record is worse than dropping it. The fixture is
-// that cut in BOTH of its measured shapes: a valid mtime with its space never printed (the old code
-// answered the phantom path '1759050000.5'; its prefix is a perfectly good number, so checking the
-// number alone would NOT catch this — it is the SPACE that says the record is whole), and the flat
-// 'nospace' of the original measurement, which became a phantom path too. The drop is silent by
-// design (`truncated` is about the CAP, not about damage), which is why it is stated here and in
-// the parser's docblock instead of being left to be discovered.
+// parsers must refuse the same class of input. The vector's own `stat -c` ALWAYS terminates its
+// line, so a record without a newline did not come from a whole print — the tool or the vector is
+// in trouble — and inventing a path out of a broken record is worse than dropping it. The fixture
+// is that cut in BOTH of its measured shapes: a valid mtime whose newline was never printed (the
+// old code answered the phantom path '1759050000.5'; its prefix is a perfectly good number, so
+// checking the number alone would NOT catch this — it is the NEWLINE that says the record is
+// whole), and the flat 'nospace' of the original measurement, which became a phantom path too
+// (the `%T@ %p` format this replaces used a space; the newline is the same boundary). The drop is
+// silent by design (`truncated` is about the CAP, not about damage), which is why it is stated
+// here and in the parser's docblock instead of being left to be discovered.
 {
-  const out = parseGlobOutput('1.0 /ws/a.ts\0' + '1759050000.5\0' + 'nospace\0', { maxResults: 9 })
-  check('glob: a record with no space is skipped, never a phantom path — the -printf always emits one',
+  const out = parseGlobOutput('1.0\n/ws/a.ts\0' + '1759050000.5\0' + 'nospace\0', { maxResults: 9 })
+  check('glob: a record with no newline is skipped, never a phantom path — stat always emits one',
     JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
 }
 // The same rule for the mtime, and it is not a formality: the mtime is what the sort orders by, and
@@ -302,9 +347,20 @@ check('glob: the cap reports truncation, because a silent cap reads as a complet
 // NaN, and a comparator that returns NaN is not an order anyone decided — it is wherever V8 happens
 // to leave the record. So the record is dropped rather than sorted on a value it does not have.
 {
-  const out = parseGlobOutput('1.0 /ws/a.ts\0' + 'abc /ws/b.ts\0', { maxResults: 9 })
+  const out = parseGlobOutput('1.0\n/ws/a.ts\0' + 'abc\n/ws/b.ts\0', { maxResults: 9 })
   check('glob: a record whose mtime is not a number is skipped, not ordered on NaN',
     JSON.stringify(out.paths) === JSON.stringify(['/ws/a.ts']), out)
+}
+// The portable format's own new risk, pinned rather than assumed: `stat -c '%.9Y'` is coreutils'
+// fractional seconds but busybox's format engine pads the INTEGER to nine digits, so the same file
+// prints `1700000000.250000000` on one and `1700000000.000000000` on the other. Both must read as
+// the same ORDER — the contract is the order, not the precision — and both must sort/keep together
+// with an exact-tie path. An integer mtime (a busybox reading, or a filesystem without sub-second
+// timestamps) is the shape the old `%T@ %p` fixture never had.
+{
+  const out = parseGlobOutput('1700000000.250000000\n/ws/a.ts\0' + '1700000000.000000000\n/ws/b.ts\0', { maxResults: 9 })
+  check('glob: a whole-second (busybox-shaped) mtime sorts beside a fractional one, not after every path',
+    JSON.stringify(out.paths) === JSON.stringify(['/ws/b.ts', '/ws/a.ts']), out)
 }
 
 console.log('\nthe failure vocabulary (the host\'s two classes, told apart at the call boundary)')

@@ -24,8 +24,14 @@
 
 ```text
 /usr/bin/grep -r -n -H -E --binary-files=without-match --exclude-dir=.git … --exclude-dir=.sl [--include=<include>] --regexp <pattern> -- <root>
-/usr/bin/find -- <root> -name .git -prune -o … -name .sl -prune -o -path <root>/<tail> -type f -printf '%T@ %p\0'
+/usr/bin/find -- <root> -name .git -prune -o … -name .sl -prune -o -path <root>/<tail> -type f ( -exec stat -c %.9Y {} \; -print0 -o -print0 )
 ```
+
+**为什么不是 `-printf`**：`-printf` 是 GNU 扩展。busybox 的 `find`（Alpine、很多最小发行版）会拒绝它，拒绝落在 stderr 上，而 stdout 为空——空 stdout 被解析成「没有文件匹配」，也就是**静默的空结果**，与 `lib/wsl/pty.js:572-573` 已经记录并刻意避开的是同一类失败。这里只要求两种每个 `find` 都带的谓词：`-print0`（busybox 的 `FEATURE_FIND_PRINT0` 默认开）与 `-exec … ;`（`FEATURE_FIND_EXEC` 默认开），mtime 由发行版自己的 `stat` 打在每个路径前面。**仍然是一次 spawn**：find 自己按命中逐个执行 `stat`，一条记录的两半因此总是描述同一次命中。`stat` 之所以写**裸名**而不写绝对路径，是因为没有可移植的绝对拼写——coreutils 装在 `/usr/bin/stat`（Debian、Fedora），busybox 的小程序在 `/bin/stat`（Alpine）——`-exec stat` 由 find 自己的 `execvp` 在发行版的 PATH 上解析。
+
+**那个带括号的 `-o -print0` 不是装饰，是实测出来的防线**：`-exec stat … ;` 与紧跟的 `-print0` 之间是**隐式 AND**，所以 `stat` 跑不起来时 `-print0` 根本到不了——而 GNU find 只把这件事写到 stderr，**退出码仍是 0**（实测：exit 0、stdout 为空、stderr 两行 `'stat': No such file or directory`）。只看 stdout 的读者会看到**和本次修复要消除的一模一样的静默空结果**，只是下沉了一层。有回退组之后两种情况都会打印：`stat` 正常时 mtime 在前，`stat` 缺席时是裸的 NUL 分隔路径——而裸路径不是可读记录（`stat -c` 一定带自己的换行，解析器需要那个换行），于是留下**非空的输出却解析不出任何路径**，这正好落进 `search-tool.js` 已有的损坏守卫（"its output could not be read as path records"）。因此缺少 `stat` 的发行版会**响亮**失败，而不是回答「没有文件」。这个组还顺带让单个读不到的文件（`stat` 对某一条失败）只损失那一条记录，而不是整份列表。括号是**必需的**：find 的隐式 AND 比 `-o` 结合得紧，没有括号时回退项会脱离 `-path`/`-type` 测试，导致整棵树都被打印出来。
+
+`%.9Y` 是 mtime 的秒：GNU coreutils 会给出小数部分（正是旧的 `%T@` 交给排序的东西），busybox 的格式引擎把同一个整数补齐到九位小数，解析回来是同一个整秒——所以 busybox 上损失的是小数精度，**文档契约（mtime 升序）不受影响**。
 
 搜索根是**解析后的 Linux 绝对路径**（realm 自己的 `fs` 服务解析模型的路径，见「八条之外」那一段），这也是「以 `-` 开头的路径」到不了向量的原因。
 
@@ -70,7 +76,7 @@
 
 ## 钉子在哪
 
-`scripts/verify-search.mjs`（离线、**无前置条件，因此从不跳过**；`node scripts/verify-search.mjs` → 本机 **33 passed, 0 failed**）按五节钉住：glob 翻译（`**/` 收成 `*`，前导 `/` 与 `./` 剥除，搜索根的尾部斜杠同样剥除）、argv 向量（每个模型值恰好一个惰性元素，加**两条金标向量**——整条 argv 字面相等，VCS 六个名字、顺序、分隔符与输出格式都在里面）、向量所依赖的性质（VCS 清单与宿主同序、排除必须站在 `--` 之前）、两个解析器（首冒号切分、正文里的冒号要保住、`:` 路径的跳过、非整数行号的跳过、CRLF、字节限额与字符边界、cap 与损坏记录的分别、NUL 分隔与路径里的换行、mtime 升序取最旧、无空格与非有限 mtime 的跳过）、失败词表（grep 的 2 是 `SEARCH_INVALID_PATTERN`，find 的同码不是；启动失败是 `SEARCH_FAILED`）。
+`scripts/verify-search.mjs`（离线、**无前置条件，因此从不跳过**；`node scripts/verify-search.mjs` → 本机 **35 passed, 0 failed**）按五节钉住：glob 翻译（`**/` 收成 `*`，前导 `/` 与 `./` 剥除，搜索根的尾部斜杠同样剥除）、argv 向量（每个模型值恰好一个惰性元素，加**两条金标向量**——整条 argv 字面相等，VCS 六个名字、顺序、分隔符与可移植的 mtime 配对都在里面，另有一行断言 glob 向量不含 GNU 专有的 `-printf`/`%T@`——也就是 busybox 上静默的那一类））、向量所依赖的性质（VCS 清单与宿主同序、排除必须站在 `--` 之前）、两个解析器（首冒号切分、正文里的冒号要保住、`:` 路径的跳过、非整数行号的跳过、CRLF、字节限额与字符边界、cap 与损坏记录的分别、NUL 分隔与路径里的换行、mtime 升序取最旧、整秒 mtime 与小数 mtime 并排排序、无换行与非有限 mtime 的跳过）、失败词表（grep 的 2 是 `SEARCH_INVALID_PATTERN`，find 的同码不是；启动失败是 `SEARCH_FAILED`）。
 
 **活体两行**在 `scripts/verify-post-restart.mjs` 里（`tool.search.grep` 与 `tool.search.glob`，需要已安装插件 + 运行中的宿主）：它们断言命中探针文件的**第 3 行**（行号，不只是「搜到了这个文件」）、glob 列出探针**与两层深的嵌套文件**、且结果里**不出现 `.git`**。它们必须在**开发装配**上跑（`developerTools === true`）：production 装配下验收路由按设计回 `HTTP 401`，那**就是这两行从未被执行**的样子（本机实测两次），不是工具的失败。这两行也是上面「没有离线钉子」那条唯一的观察者。
 
