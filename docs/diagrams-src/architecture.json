@@ -121,7 +121,7 @@
       "id": "realm",
       "type": "backend",
       "label": "isolate realm",
-      "sublabel": "preset.js · shell/fs/subprocess 隔离",
+      "sublabel": "shell/fs/subproc/term/sandbox 隔离",
       "tag": "wsl-standard",
       "pos": [
         430,
