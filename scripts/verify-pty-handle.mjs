@@ -874,9 +874,53 @@ console.log('\nscenario F: a live claim whose cleanup never ran becomes collecta
         note: 'pre-fix the name stayed in the live set forever, so branch 2 skipped it on every sweep and the leak was uncollectable',
       })
     // The session behind the collected name must still be alive: the removal is of the NAME only.
+    //
+    // REWRITTEN (review finding N7, ruling R62). This row used to read
+    // `collected === true && terminalF.pid > 0`, and the second conjunct was near-vacuous: the
+    // bridge announces `pid` for a session it has only just forked, so on any successful
+    // allocation that number is positive by construction and carries no evidence about what the
+    // sweep did to the session afterwards. A row that cannot fail for the reason it names is a
+    // claim wearing evidence's clothes.
+    //
+    // What replaces it is the fact that identifies WHICH branch removed the name: the collected
+    // name's generation field. Branch 2 (this generation, not live) is the only branch that can
+    // collect a name carrying THIS process's pid, so requiring it is what separates the recovery
+    // this scenario exists for from "some name went missing for another reason". Measured against
+    // the collected name itself, not against a fixture.
+    //
+    // The grammar is spelled HERE rather than imported: `GENERATION_NAME` is a module-private
+    // constant of pty.js, and reaching for it is what turned the first draft of this row into a
+    // `ReferenceError` that killed the suite instead of reddening a row (the same defect class as
+    // R27). A local literal can only be wrong about THIS name, which is visible in the evidence.
+    const GENERATION_NAME_LOCAL = /^\/tmp\/dsh-pty-(\d+)-[0-9a-f-]{12}\.fifo$/u
+    const collectedGeneration = liveF.length === 1 ? GENERATION_NAME_LOCAL.exec(liveF[0]) : null
+    const collectedIsThisGeneration = collectedGeneration !== null && Number(collectedGeneration[1]) === process.pid
     check('F: collecting a stale claim does not kill the session that held it',
-      collected === true && terminalF.pid > 0,
-      { pid: terminalF.pid, note: 'unlinking a FIFO does not disturb the descriptors a live session holds' })
+      collected === true && collectedIsThisGeneration,
+      {
+        pid: terminalF.pid,
+        collected: liveF,
+        generationPid: collectedGeneration === null ? '(the name does not carry a generation)' : Number(collectedGeneration[1]),
+        thisProcess: process.pid,
+        note: 'only branch 2 (this generation, not live) can collect a name carrying THIS process pid; the announced pid itself is positive by construction and proves nothing',
+      })
+    // ...and the session has to be USABLE afterwards, which is the half the old conjunct pretended
+    // to cover. Unlinking a name does not disturb a session that already opened it: the bridge and
+    // its control writer hold FILE DESCRIPTORS, and the inode outlives the directory entry. A
+    // control round trip is the direct measurement of that claim — it goes through the FIFO's
+    // writer, so a sweep that had closed or stolen the session's descriptors would fail it here.
+    let stillUsable = false
+    let usabilityProblem = ''
+    try {
+      const activity = await terminalF.inspectActivity()
+      stillUsable = activity?.state === 'idle' || activity?.state === 'busy'
+      if (!stillUsable) usabilityProblem = `inspectActivity answered ${JSON.stringify(activity)}`
+    } catch (error) {
+      usabilityProblem = detailText(error)
+    }
+    check('F: the session still answers a control round trip after its FIFO name was collected',
+      collected === true && stillUsable,
+      { collected, stillUsable, problem: usabilityProblem, note: 'the descriptors outlive the directory entry, which is the whole reason a name-only removal is safe' })
     void recordsBeforeSweep
     try { await terminalG.terminate() } catch { /* already over */ }
   } finally {

@@ -27,7 +27,7 @@
           "wsl",
           "distro"
         ],
-        "note": "isolate realm 隔离 shell、fs 与 subprocess；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe。"
+        "note": "isolate realm 隔离 shell、fs、subprocess、terminals 与 sandbox 五个键（sandbox 使终端栈够不到宿主的 Windows ACL runner）；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe。"
       },
       {
         "id": "two-transports",
@@ -413,7 +413,7 @@
       "title": "执行世界",
       "items": [
         "preset 在会话创建请求里命名，创建时组合",
-        "isolate realm 隔离 shell · fs · subprocess；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe"
+        "isolate realm 隔离 shell/fs/subprocess/terminals/sandbox；故终端不碰宿主 ACL 运行器；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe"
       ]
     }
   ]

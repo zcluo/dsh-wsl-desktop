@@ -19,7 +19,7 @@
 ## 缺口清单（逐条，缺一不可）
 
 1. **宿主 `ctx.sandbox` 会包一层**：`terminal-bash` 在模式非 `danger-full-access` 时用 `ctx.get('sandbox')` 包装 argv，而本仓自己判定宿主沙箱对 `wsl.exe` **无法约束**（`lib/wsl/confinement.js` 的头部）。**实测三态落在 b**：包装之后 PTY 仍然跑得起来（`tools.bash` 报 `Linux` + 发行版内路径 + exit 0）。补救不是「接受这层无效包装」，而是 realm 内**自己提供** `sandbox` 服务（`lib/wsl/sandbox.js`），使那层包装变成**发行版内的约束**而不是 Windows 的运行器；没有这个 provider 时，非 `danger-full-access` 模式会**抛错**而不是静默降级。
-2. **常驻 shell 在发行版内是受约束的**（M3）：工作区外写被拒——`Read-only file system`、`write-exit=1`。它与一次性命令路径的差别在**走哪个接缝**：常驻 PTY 经 `sandbox` 接缝拿 argv（`lib/wsl/sandbox.js` → `lib/wsl/confined-argv.js` → `lib/wsl/confinement.js`），一次性命令经 realm 自己的 `ctx.shell`（`lib/wsl/shell.js`），两条路用同一个约束构造器，**但 PTY 路径不经 `ctx.shell`**。
+2. **常驻 shell 在发行版内是受约束的**（M3）：工作区外写被拒——`Read-only file system`、`write-exit=1`。它与一次性命令路径的差别在**走哪个接缝**：常驻 PTY 经 `sandbox` 接缝拿 argv（`lib/wsl/sandbox.js` → `lib/wsl/confined-argv.js` → `lib/wsl/confinement.js`），一次性命令经 realm 自己的 `ctx.shell`（`lib/wsl/shell.js`），两条路用同一个约束构造器，**但 PTY 路径不经 `ctx.shell`**。补充两点：**（i）这条约束是部分的，代码里报作 `enforcement: 'partial'`**，覆盖不到 `/dev`、`/proc`、`/sys` 与 interop，它们仍在可达范围内；**（ii）会话用户保留着约束运行器自己依赖的免密 sudo 授权**，因此被约束的命令可以重新调用它来绕过文件围栏——闭合路径是专用 helper（每次升级后须重装）与 `NO_NEW_PRIVS` 自动缓解。两条事实的判定与实测细节见根目录 [SECURITY.md](../SECURITY.md)（`enforcement: 'partial'` 的枚举与「围栏的已知边界：降权后保留的 sudo 授权」）。
 3. **`sessionProjections` 只有推断**：常驻后端的 `inject` 里有它（`packages/terminal/terminal-bash/src/index.ts`），而 realm 里**没有**在用的消费者。它在 realm 内的可达性靠宿主的回落机制**推断**，**未在 realm 实测**。
 4. **`terminals` 必须在组里隔离**：不隔离则挂载**被拒绝**（服务型插件落在根 realm 会被加载器拒绝），不是静默降级。组的 `isolate` 因此有 `terminals: true`。
 5. **不能照抄 harness 的行**（F12，见上）；反过来，宿主那三行**仍然**按模块名被移除。
@@ -42,7 +42,7 @@
 
 ## 未测与已知限制
 
-- **两个终端原语的离线覆盖不一样，必须分开说**：**`lib/wsl/subprocess.js` 的 `spawnTerminal` 没有行为级的离线钉子**——该文件 import 了 harness 包，离线套件驱动不了它的行为；钉住它的只有 `scripts/verify-modules.mjs` 里的一条**源码形状**行（`planFor(spec.cwd, spec.wslDistro)`）加上**活体那几行**，不是行为观察。**`lib/wsl/pty.js` 相反**：它只 import `node:fs/crypto/os/path` 内建模块与两个同目录相对模块，**没有任何 harness 包**，所以 `scripts/verify-pty-handle.mjs` 能 import `spawnWslTerminal` 并**离线驱动**它（真发行版、经桥与 FIFO，不经模型工具）——那个套件就是这一半的离线钉子，不是「驱动不了」的旁证。
+- **两个终端原语的离线覆盖不一样，必须分开说**：**`lib/wsl/subprocess.js` 的 `spawnTerminal` 没有行为级的离线钉子**——该文件 import 了 harness 包，离线套件驱动不了它的行为；钉住它的只有 `scripts/verify-modules.mjs` 里的一条**源码形状**行（`planFor(spec.cwd, spec.wslDistro)`）加上**活体那几行**，不是行为观察。**而且那条形状行在本机的归档聚合里根本没跑**：`verify-modules.mjs` 在本机是**声明性跳过**（`scripts/verify-all.mjs` 的 `DECLARED_SKIPS` 枚举它，跳过前提是依赖目录不存在），所以 `19/20 … (1 declared skip: verify-modules.mjs)` 那次聚合里它一行都没执行——这条钉的覆盖面因此只有「在装了依赖的机器上会跑」那么多。**`lib/wsl/pty.js` 相反**：它只 import `node:fs/crypto/os/path` 内建模块与两个同目录相对模块，**没有任何 harness 包**，所以 `scripts/verify-pty-handle.mjs` 能 import `spawnWslTerminal` 并**离线驱动**它（真发行版、经桥与 FIFO，不经模型工具）——那个套件就是这一半的离线钉子，不是「驱动不了」的旁证。
 - **两个分界必须知道**：**（a）GUI 的网页终端按设计不受 fence 约束**——终端控制器直接调 `subprocess.spawnTerminal`，它自己就声明走的路由「without Agent sandbox or approval restrictions」，所以「模型的 `bash` 受约束」与「用户的 GUI 终端不受约束」**不同**；**（b）终端那条没有 PID namespace**——`isolateProcesses` 默认 `false`（`lib/wsl/sandbox.js` 的 Config 注释），因为 PID namespace 会把交互 shell 变成 PID 1、其进程组在 PTY 的前台查询里不可寻址（helper 的 `--no-pidns` 是为同一件事）；一次性命令路径**保留** namespace，这是已声明的边界。
 - **12 小时的活 claim 上限及其已声明的残余**：活集合的条目只在**年轻于 12 小时**时才声称「活着」（`lib/wsl/pty.js` 的 `LIVE_FIFO_CLAIM_MS`）。残余情形写在代码里：一个超过 12 小时、cleanup 真的没跑过的会话，**加上**同一窗口里的第二次分配，可能让清扫 unlink 一个活会话仍持有的名字。代价是**名字，不是会话**（桥与控制写入者持有描述符，FIFO 的 inode 比目录项活得久）——这就是这个界为什么以**小时**计而不是分钟。
 - **只在 `debian` 上实测**：本机还有 `debian-dev` 与 `arch`，与它共用同一个 WSL2 内核与 9P 栈，但没有逐个复测。

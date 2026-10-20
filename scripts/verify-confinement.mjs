@@ -943,6 +943,32 @@ console.log('\nthe realm sandbox provider (offline: constructed for real, wsl.ex
       }
     })()
     const isolateField = declaredFields.find((field) => field?.name === 'isolateProcesses')
+    /**
+     * The fence argument of one `confine` arm, or a reason this arm cannot answer.
+     *
+     * WHY THIS EXISTS (R27): both rows below read `argv[2]` and call `.includes` on it. A
+     * provider that returned a SHORTER argv — one rewritten to hand over a bare `wsl.exe`
+     * invocation, or a refusal shape that still resolved — threw `Cannot read properties of
+     * undefined (reading 'includes')`, and the suite died with that TypeError instead of
+     * reddening one row. A crash reports NO verdict for the rows after it and no verdict for
+     * the row that crashed; a length guard turns the same shape change into that row's
+     * failure, which is the only thing it should ever have been.
+     *
+     * The guard is deliberately about the SHAPE `argv[2]` is read through (an array with an
+     * element at index 2), not about the fence's contents — the content assertions stay in
+     * the rows, where their failure text already names the argv.
+     * @param {{ ok: boolean, argv?: string[], error?: Error }} attempt - one settled confine call.
+     * @returns {{ text: string | null, why: string }} the fence argument, or why there is none.
+     */
+    const fenceArgument = (attempt) => {
+      if (attempt.ok !== true) return { text: null, why: `the arm refused: ${String(attempt.error?.message ?? 'no error message').slice(0, 200)}` }
+      if (!Array.isArray(attempt.argv)) return { text: null, why: `argv is not an array (got ${typeof attempt.argv})` }
+      const argument = attempt.argv[2]
+      if (typeof argument !== 'string') {
+        return { text: null, why: `argv[2] is not a string (got ${argument === undefined ? 'undefined' : typeof argument}, argv length ${String(attempt.argv.length)}: ${JSON.stringify(attempt.argv.map((element) => String(element).slice(0, 60)))})` }
+      }
+      return { text: argument, why: '' }
+    }
     // The default is pinned at BOTH ends it can be observed from: what the provider DECLARES
     // to schemastery (a boolean defaulting to false — recorded by the stub as the Config is
     // built) and what a provider built from that declaration actually does to the argv.
@@ -958,19 +984,23 @@ console.log('\nthe realm sandbox provider (offline: constructed for real, wsl.ex
     // this plan carries no `nnp` answer for it.
     const defaultHelper = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_YES })
     const defaultDirect = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_NO, direct: PROBE_YES, nnp: PROBE_YES })
+    const defaultHelperFence = fenceArgument(defaultHelper)
+    const defaultDirectFence = fenceArgument(defaultDirect)
     check('the provider\'s DEFAULT fence keeps the interactive PTY out of a PID namespace on both runners',
-      defaultHelper.ok === true && defaultHelper.argv[2].includes('--no-pidns')
-        && defaultDirect.ok === true && !defaultDirect.argv[2].includes('--pid'),
-      { helper: defaultHelper.ok === true ? defaultHelper.argv[2] : defaultHelper.error?.message, direct: defaultDirect.ok === true ? defaultDirect.argv[2] : defaultDirect.error?.message })
+      defaultHelperFence.text !== null && defaultHelperFence.text.includes('--no-pidns')
+        && defaultDirectFence.text !== null && !defaultDirectFence.text.includes('--pid'),
+      { helper: defaultHelperFence.text ?? defaultHelperFence.why, direct: defaultDirectFence.text ?? defaultDirectFence.why })
     // ...and the config value is not decoration: asking for the namespace has to CHANGE the
     // argv. Without this row a provider that hardcoded `false` at the builder would satisfy
     // the row above forever, and the option would be dead.
     const isolatedHelper = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_YES }, { config: { isolateProcesses: true } })
     const isolatedDirect = await confineWith({ identity: PROBE_IDENTITY, helper: PROBE_NO, direct: PROBE_YES, nnp: PROBE_YES }, { config: { isolateProcesses: true } })
+    const isolatedHelperFence = fenceArgument(isolatedHelper)
+    const isolatedDirectFence = fenceArgument(isolatedDirect)
     check('isolateProcesses reaches the fence builder, so the default is load-bearing rather than hardcoded',
-      isolatedHelper.ok === true && !isolatedHelper.argv[2].includes('--no-pidns')
-        && isolatedDirect.ok === true && isolatedDirect.argv[2].includes('--pid'),
-      { helper: isolatedHelper.ok === true ? isolatedHelper.argv[2] : isolatedHelper.error?.message, direct: isolatedDirect.ok === true ? isolatedDirect.argv[2] : isolatedDirect.error?.message })
+      isolatedHelperFence.text !== null && !isolatedHelperFence.text.includes('--no-pidns')
+        && isolatedDirectFence.text !== null && isolatedDirectFence.text.includes('--pid'),
+      { helper: isolatedHelperFence.text ?? isolatedHelperFence.why, direct: isolatedDirectFence.text ?? isolatedDirectFence.why })
     // Fail-closed branch 1: a workspace root the distribution cannot express. The plan is
     // EMPTY on purpose — the refusal must come before any probe, so a provider that quietly
     // substituted a fallback root would go on to probe and hit "no answer planned" instead of
