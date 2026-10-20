@@ -369,8 +369,8 @@ check('listLinuxDir asks for the documented 60s ceiling and keeps its raw framin
 // added to only the first would leave the second exactly the stall it always was.
 const userProbeRetry = scriptedRunner([
   timedOutProbe,
-  { exitCode: 0, stdout: 'zcluo\n', stderr: '', timedOut: false },
-  { exitCode: 0, stdout: '/home/zcluo\n', stderr: '', timedOut: false },
+  { exitCode: 0, stdout: 'tester\n', stderr: '', timedOut: false },
+  { exitCode: 0, stdout: '/home/tester\n', stderr: '', timedOut: false },
 ])
 const userProbeFacts = await settle(() => resolveDistroHome(distro, undefined, { run: userProbeRetry.run }))
 // The repeated request must be the SAME probe, so the assertion is on the commands, not only
@@ -380,12 +380,12 @@ const userProbeCommands = userProbeRetry.calls.map((call) => call.command)
 check('resolveDistroHome repeats a timed-out login-name probe exactly once',
   userProbeRetry.calls.length === 3
   && userProbeCommands[0] === 'id -un' && userProbeCommands[1] === 'id -un'
-  && userProbeFacts.user === 'zcluo',
+  && userProbeFacts.user === 'tester',
   { calls: userProbeRetry.calls.length, commands: userProbeCommands, facts: userProbeFacts })
 const homeProbeRetry = scriptedRunner([
-  { exitCode: 0, stdout: 'zcluo\n', stderr: '', timedOut: false },
+  { exitCode: 0, stdout: 'tester\n', stderr: '', timedOut: false },
   timedOutProbe,
-  { exitCode: 0, stdout: '/home/zcluo\n', stderr: '', timedOut: false },
+  { exitCode: 0, stdout: '/home/tester\n', stderr: '', timedOut: false },
 ])
 const homeProbeFacts = await settle(() => resolveDistroHome(distro, undefined, { run: homeProbeRetry.run }))
 const homeProbeCommands = homeProbeRetry.calls.map((call) => call.command)
@@ -393,7 +393,7 @@ check('resolveDistroHome repeats a timed-out home probe exactly once and answers
   homeProbeRetry.calls.length === 3
   && homeProbeCommands[0] === 'id -un'
   && homeProbeCommands[1] === homeProbeCommands[2] && homeProbeCommands[1] !== 'id -un'
-  && homeProbeFacts.home === '/home/zcluo',
+  && homeProbeFacts.home === '/home/tester',
   { calls: homeProbeRetry.calls.length, commands: homeProbeCommands, facts: homeProbeFacts })
 check('resolveDistroHome asks for the documented 60s ceiling on both probes',
   homeProbeRetry.calls.length === 3 && homeProbeRetry.calls.every((call) => call.timeoutMs === 60_000),
@@ -444,10 +444,10 @@ const namedLoginShell = scriptedRunner([
   timedOutProbe,
   { exitCode: 0, stdout: '/bin/bash\n', stderr: '', timedOut: false },
 ])
-await settle(() => resolveLoginShell(distro, 'zcluo', { run: namedLoginShell.run }))
+await settle(() => resolveLoginShell(distro, 'tester', { run: namedLoginShell.run }))
 check('the repeat of a NAMED-user login-shell probe keeps the username, so it asks about the same user',
   namedLoginShell.calls.length === 2
-  && namedLoginShell.calls.every((call) => call.username === 'zcluo' && String(call.command).includes("'zcluo'")),
+  && namedLoginShell.calls.every((call) => call.username === 'tester' && String(call.command).includes("'tester'")),
   namedLoginShell.calls.map((call) => ({ username: call.username, command: call.command })))
 // THE defect: a stall that survives the repeat. '/bin/bash' is a plausible shell for this
 // distribution, so returning it here is a wrong ANSWER the caller cannot distinguish from a

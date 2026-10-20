@@ -39,7 +39,7 @@ F2 symlink: realpath(/lib)                           ENOENT -> the link is NOT f
 F3 identity <share root>                             dev 0 vs 0, ino 2 vs 2 -> COLLIDES
 F3 identity /tmp                                     dev 0 vs 0, ino 1 vs 1 -> COLLIDES
 F3 identity /home                                    dev 0 vs 0, ino 16386 vs 16386 -> COLLIDES
-F4 fixture root \\wsl.localhost\debian\home\zcluo\proj ENOENT (verify-fs-fence.mjs never creates it)
+F4 fixture root \\wsl.localhost\debian\home\<user>\proj ENOENT (verify-fs-fence.mjs never creates it)
 F5 isUnderHost(foreign target, root)                 false (root absent, so the walk short-circuits; see F4)
 
 [
@@ -64,7 +64,7 @@ F5 isUnderHost(foreign target, root)                 false (root absent, so the 
     "value": "dev 0 vs 0, ino 16386 vs 16386 -> COLLIDES"
   },
   {
-    "label": "F4 fixture root \\\\wsl.localhost\\debian\\home\\zcluo\\proj",
+    "label": "F4 fixture root \\\\wsl.localhost\\debian\\home\<user>\\proj",
     "value": "ENOENT (verify-fs-fence.mjs never creates it)"
   },
   {
@@ -84,7 +84,7 @@ node scripts/probe-fence-facts.mjs
 F1 case: /TMP resolves                               ENOENT -> CASE-SENSITIVE (Linux semantics)
 F2 symlink: realpath(/lib)                           ENOENT -> the link is NOT followed (control /usr/lib resolves (\\wsl.localhost\debian\usr\lib))
 F3 cross-share identity                              UNMEASURED - pass a second distribution as argv[2]
-F4 fixture root \\wsl.localhost\debian\home\zcluo\proj ENOENT (verify-fs-fence.mjs never creates it)
+F4 fixture root \\wsl.localhost\debian\home\<user>\proj ENOENT (verify-fs-fence.mjs never creates it)
 F5 isUnderHost(foreign target, root)                 UNMEASURED - pass a second distribution as argv[2]
 
 [
@@ -101,7 +101,7 @@ F5 isUnderHost(foreign target, root)                 UNMEASURED - pass a second 
     "value": "UNMEASURED - pass a second distribution as argv[2]"
   },
   {
-    "label": "F4 fixture root \\\\wsl.localhost\\debian\\home\\zcluo\\proj",
+    "label": "F4 fixture root \\\\wsl.localhost\\debian\\home\<user>\\proj",
     "value": "ENOENT (verify-fs-fence.mjs never creates it)"
   },
   {
