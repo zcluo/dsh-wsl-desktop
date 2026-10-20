@@ -761,8 +761,11 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   // 0/5 red in a standalone driver (archived as artifacts/t3fix4-done-race-rerun.txt, EXIT=0 — a
   // later re-run; the ORIGINAL run was never archived, and this comment says so rather than
   // implying evidence it does not have), and in this suite one run red and the next green with no
-  // code change between them (that pair was never archived at all: it is a recollection, recorded
-  // here because it is why the row went, not because it is evidence). It is NOT kept, because a
+  // code change between them. That one-red-one-green pair WAS written to %TEMP%\t3fix3\ (green3.txt
+  // is red on exactly the row later retracted, alongside redB-2.txt and green4.txt), but it was
+  // never COPIED INTO artifacts/ and none of those files carries a captured exit code, so it is a
+  // logged observation with no archived run behind it — not evidence this suite can cite. It is
+  // recorded here because it is why the row went. It is NOT kept, because a
   // row whose verdict depends on which side of a race the cleanup lands on is worse than a red row
   // — it reports a leak on some runs and certifies the same code on others. What replaces it is the
   // claim that is actually TRUE and actually load-bearing:
@@ -779,8 +782,11 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   // ("if that await is dropped … E1 reddens deterministically (that is its red variant)"). That
   // claim was measured and is FALSE:
   //   · deleting the `await cleanupFifo()` from `terminate()` left the whole suite GREEN, 47 PASS,
-  //     EXIT=0 (`artifacts/t3fix3-red-E1.txt`), and the saved mutant was byte-identical to HEAD
-  //     (`ABC001F4…`), so that archive proves the GREEN, not the mutation;
+  //     EXIT=0 (`artifacts/t3fix3-red-E1.txt`), and the saved mutant was byte-identical to the
+  //     then-HEAD `c7f75c0` (`ABC001F4…` = `c7f75c0:lib/wsl/pty.js`), so that archive proves the
+  //     GREEN, not the mutation. HEAD's `pty.js` has been `5B821CAB…` since `aa0ad6d`, so the
+  //     digest does NOT describe the current file and `git cat-file blob HEAD:lib/wsl/pty.js`
+  //     does not yield it (debt 1, corrected from measurement);
   //   · neutralising `cleanupFifo` entirely also left E1 green; what reddened was scenario A,
   //     scenario C's failed-allocation row and E2 (`artifacts/t3fix3-red-E1-noremoval.txt`, EXIT=1)
   //     — the killed-bridge paths, where the bridge's finally cannot run.
@@ -942,10 +948,24 @@ console.log('\nscenario G: a removal reports what it did, and reports it without
   // The failure path must stay FAIL-SAFE: reported, never thrown. A teardown that throws because
   // the distribution is going down is the regression this whole shape is arranged to avoid.
   //
-  // Scoped to the CATCH block on purpose: `! /throw/` over the whole function would be satisfied
-  // by the exit-code arm's `return false` alone, which is how the first version of this row stayed
+  // Scoped to the region that STARTS at the CATCH block on purpose: `! /throw/` over the whole
+  // function was satisfied by other code, which is how the first version of this row stayed
   // GREEN when the catch was mutated to `throw error` (measured). The fail-safe claim is about
-  // what happens when the spawn itself rejects, so that is the only region examined.
+  // what happens when the spawn itself rejects.
+  //
+  // WHAT THE REGION ACTUALLY IS (debt 8, corrected from measurement): `catchBody` is
+  // `removeBody.slice(catchAt)`, and `removeBody` ends at the NEXT exported function
+  // (`sweepOrphanFifos`), so the slice is NOT the catch block alone — it runs from
+  // `} catch (error) {` to the end of the declaration run that follows `removeFifo`
+  // (FIFO_PREFIX / isPluginFifoName / fifoNameFor / GENERATION_NAME / the live-set helpers /
+  // LEGACY_PROTECTION_MINUTES). Measured with this file's own `withoutComments`, so the numbers
+  // describe the text the row really examines: removeBody 2248 bytes, catchAt 615, catchBody
+  // 1633 — i.e. the examined slice is 2.7x the part before the catch. The row is still sound
+  // TODAY because none of those declarations contains `throw` (verified on the same slice), and
+  // the earlier sentence ("that is the only region examined") was the over-claim, not the
+  // assertion: a future `throw` in any later helper would redden this row without the catch
+  // having changed. Stated rather than tightened, because narrowing the slice would change an
+  // assertion this documentation round must not change.
   const catchAt = removeBody.indexOf('} catch (error) {')
   const catchBody = catchAt > -1 ? removeBody.slice(catchAt) : ''
   check('G: the removal still answers instead of throwing, so a teardown cannot fail on it',

@@ -18,16 +18,16 @@
 
 ## 目标能力
 
-**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 已跑过的行全绿，但**搜索的两条活体行尚未运行**、待操作者本轮活体验收，加离线 20 套件；下面每条都注明证据强度）：
+**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 最近一次实跑：**58 PASS / 0 FAIL**、尾部 `NO AUTOMATED FAILURES; 3 manual step(s) pending`、`EXIT=0`——包括搜索的两条活体行与常驻 shell 的那几条；**剩 3 条浏览器专属的人工项**，清单见 [常驻 shell](docs/PERSISTENT-SHELL.md#人工核验清单浏览器专属不可自动化)，加离线 20 套件；下面每条都注明证据强度）：
 
 | # | 能力 | 状态 |
 |---|---|---|
 | ① | 工作区可选择 WSL 发行版里的 Linux 目录 | 对话框与宿主调用已实现并活体通过（listDir/checkPath/resolveHome/工作区注册与清理）；**浏览器内交互已由操作者人工确认**（门控流、目录浏览、终端面板均正常） |
-| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | **活体验收 PASS**：绑定（创建请求命名 preset）、shell 进发行版、fs 工具 Linux 寻址、越界写拒绝、subprocess POSIX 环境、bash 工具、工具层约束；终端传输由 PTY 套件覆盖 |
+| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | **活体验收 PASS**：绑定（创建请求命名 preset）、shell 进发行版、fs 工具 Linux 寻址、越界写拒绝、subprocess POSIX 环境、bash 工具、工具层约束；终端传输由 PTY 套件覆盖。**模型侧的 `bash` 是发行版内的常驻 PTY shell，cwd 与环境变量跨调用保留**（活体验证：两次调用读数一致；缺口清单见 [常驻 shell](docs/PERSISTENT-SHELL.md)） |
 | ③ | 同一实例里 Windows 与 WSL 工作区并存 | **活体验收 PASS**：Windows 工作区停留在宿主 preset（PowerShell 可用、无 bash），WSL 会话并行运行 confined realm |
 | ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并活体验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧围栏已实现并活体验证**（越界写拒绝 PASS，见 [fs 工具的围栏](docs/FS-FENCE.md)）|
 
-**哪些能力有保留**（证据强度就是上表状态列的措辞）：终端不支持 `stdio.control`——写在「已知限制」里，不藏。
+**哪些能力有保留**（证据强度就是上表状态列的措辞）：终端不支持 `stdio.control`——写在「已知限制」里，不藏。常驻 shell 的缺口同样写在「已知限制」里，权威清单在 [常驻 shell](docs/PERSISTENT-SHELL.md)。
 
 ## 安装 / 更新 / 卸载
 
@@ -70,6 +70,8 @@
 **grep / glob 工具在 WSL 会话里可用，后端是发行版自己的 `grep` / `find`。** 宿主那两行依然被移除，理由是实测的两件事：`tool-fs-search` 虽然通过 `ctx.subprocess.spawn()` 启动（`search-core.ts:238`），但它的 `argv[0]` 是 `@vscode/ripgrep` 提供的**打包 Windows rg.exe**（`search-core.ts:174-178`）——在发行版里既不存在、也无法用 Linux 参数工作；而发行版自带 `/usr/bin/grep` 与 `/usr/bin/find`（实测：发行版里 `command -v rg` 回答为空）。所以 `wsl-world` 组把这两个名字挂回本插件自己的实现（`lib/wsl/search-tool.js`），模型在 WSL 会话里照常调用 `grep` / `glob`——**但语义是发行版工具的**：POSIX ERE（没有 `\d`、`(?i)`）· 不解析 `.gitignore`（只排除六个 VCS 目录）· 点目录会被搜到 · `include` 只匹配 basename 且没有花括号 · 模式按搜索根相对解释、`*` 与 `**/` 跨 `/` · 路径含 `:` 的记录可能被丢弃或被静默错配 · 二进制文件永不被匹配 · 达到上限的截断不落盘。**这串要点是摘要，缺口的权威清单在文档里**（文档八条中第 5、6 条在这里并成了一条；末条「截断不落盘」是限额，不是缺口）。八条缺口、限额、未测项与怎么自己验，见 [发行版内搜索](docs/SEARCH.md)。
 
 **终端走 PTY 桥，PTC 的 `stdio.control`（fd 通道）明确拒绝**——`wsl.exe` 无法转发任意描述符。桥的驱动方式与实测前提见 [docs/PTY-BRIDGE.md](docs/PTY-BRIDGE.md)。
+
+**常驻 shell 的缺口摘要**：模型侧的 `bash` 是发行版内的常驻 PTY shell，但它有两条要命的边界——**（1）宿主 `ctx.sandbox` 会包一层 `wsl.exe` 的 argv**，而本仓自己判定宿主沙箱对它**无法约束**（实测：包装之后仍然跑得起来，所以 realm 里自建了 `sandbox` 提供者，把这一层变成发行版内的约束）；**（2）终端这条路没有 PID namespace**，而 GUI 的网页终端按设计**不受 fence 约束**——受约束的是模型的 `bash`，不是用户在终端面板里敲的那条。**这串只是摘要，缺口的权威清单在文档里**：九条缺口、限额、未测项、3 条人工核验清单与怎么自己验，见 [常驻 shell](docs/PERSISTENT-SHELL.md)。
 
 **约束覆盖不到 `/dev`、`/proc`、`/sys` 与 interop**，如实报在 `enforcement: 'partial'` 里；而会话用户保留的免密 sudo 授权可绕过文件围栏，闭合路径见 [SECURITY.md](SECURITY.md)。
 

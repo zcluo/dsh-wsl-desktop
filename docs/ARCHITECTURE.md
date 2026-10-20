@@ -31,7 +31,9 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 
 ## 终端 registry 行
 
-**预设里不需要终端 registry 行。** 侧栏终端面板走的是 `agent.ctx.get('subprocess').spawnTerminal(...)`（`packages/api/terminal-controller/src/index.ts:333,346`）—— 会话作用域，所以 realm 里的 `subprocess-wsl` 自动把 PTY 放进了发行版。隔离 `terminals` 只会服务模型的持久 shell 工具，而这个预设并不挂它；多挂一组 registry + backend 只增加挂载失败的面，所以不加。
+**本 realm 挂这组行：注册表 + 后端 + 模型侧的常驻工具。** 侧栏终端面板本身仍走 `agent.ctx.get('subprocess').spawnTerminal(...)`（`packages/api/terminal-controller/src/index.ts:333,346`）——会话作用域，所以 realm 里的 `subprocess-wsl` 自动把 PTY 放进了发行版，那一条与 terminal 组无关。而这组行服务的**正是模型那支常驻 `bash`**：`@deepseek-ai/dsh-terminal` 提供 `terminals` 服务，`@deepseek-ai/dsh-terminal-bash` 把 PTY 机制注册进它并**经 realm 自己的 `ctx.subprocess`** spawn（即 `lib/wsl/subprocess.js` 的终端原语），`@deepseek-ai/dsh-tool-bash-persistent` 注册模型侧的 `bash`。
+
+于是有一条硬规则：**组必须隔离 `terminals`**。提供服务的插件若所在组没有声明 `isolate: { terminals: true }`，加载器**直接拒绝**这次挂载——不是静默降级。三个图谱之外的细节（为什么这三行不能照抄 harness、缺口清单、限额与人工核验清单）见 [常驻 shell](PERSISTENT-SHELL.md)。
 
 ## 架构
 
@@ -40,14 +42,19 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 ```
 Windows 工作区会话                      WSL 工作区会话
   preset: standard                        preset: wsl-standard
-  ctx.shell = pwsh-sandbox（宿主）          isolate: { shell, fs, subprocess }
-  ctx.fs    = fs-sandbox（宿主）            ├─ shell-wsl  → ctx.shell
-                                            ├─ fs-wsl     → ctx.fs
+  ctx.shell = pwsh-sandbox（宿主）          isolate: { shell, fs, subprocess,
+  ctx.fs    = fs-sandbox（宿主）                       terminals, sandbox }
+                                            ├─ shell-wsl    → ctx.shell
+                                            ├─ fs-wsl       → ctx.fs
                                             ├─ subprocess-wsl → ctx.subprocess
-                                            └─ tool-bash / tool-fs
+                                            ├─ sandbox-wsl  → ctx.sandbox
+                                            ├─ pty + terminal-bash
+                                            └─ persistent-bash / tool-fs
 ```
 
-`wsl.exe` 本身是普通 Windows 进程，所以 WSL 执行器最终仍由**宿主的** subprocess provider 启动它。realm 隔离 `shell`、`fs` 与 `subprocess` 三者，因此 realm 内的 `ctx.subprocess` 解析到 realm 自己的 provider；宿主那一行在根组合里捕获根 provider（`lib/wsl/host-refs.js`），realm 行再读回它 —— 托管进程的终止、输出溢出与回收仍归本地 provider。
+realm 的 `isolate` 是**五**个键，不是三个：`terminals` 与 `sandbox` 同样是必需的，因为组里有插件**提供**这两个服务，而服务型插件不能被放进未隔离的组（加载器拒绝挂载）。`tool-bash` 不在组里：`bash` 这个模型侧名字的唯一拥有者是 `persistent-bash` 那一行。
+
+`wsl.exe` 本身是普通 Windows 进程，所以 WSL 执行器最终仍由**宿主的** subprocess provider 启动它。realm 隔离 `shell`、`fs`、`subprocess`、`terminals` 与 `sandbox`，因此 realm 内的 `ctx.subprocess` 解析到 realm 自己的 provider；宿主那一行在根组合里捕获根 provider（`lib/wsl/host-refs.js`），realm 行再读回它 —— 托管进程的终止、输出溢出与回收仍归本地 provider。`sandbox` 的隔离是**可观察的**：隔离之后 terminal 栈再也够不到宿主的 sandbox provider，也就用不上它那个在 UNC 工作区上会失败的 Windows ACL runner（见 [常驻 shell](PERSISTENT-SHELL.md)）。
 
 **执行世界的命名发生在创建请求里。** 浏览器半边创建 WSL 会话时通过 `wslPresetFor` 把变体 id 写进 `agentPreset`；宿主半边只在 `api-session/added` 里对"没带 preset 的 WSL 路径会话"做兜底并告警（见上面「会话绑定」）。浏览器半边因此不依赖任何 preset 客户端 API 之外的东西。
 

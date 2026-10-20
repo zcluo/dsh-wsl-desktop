@@ -31,7 +31,9 @@ After a distro is selected, the dialog **first asks for the user to enter that d
 
 ## Terminal registry lines
 
-**The preset needs no terminal registry lines.** The sidebar terminal panel goes through `agent.ctx.get('subprocess').spawnTerminal(...)` (`packages/api/terminal-controller/src/index.ts:333,346`) — session-scoped, so the realm's `subprocess-wsl` automatically puts the PTY inside the distro. An isolated `terminals` group would only serve the model's persistent shell tool, and this preset does not mount it; one more registry + backend pair only adds mount-failure surface, so it is not added.
+**This realm mounts the group: the registry, the backend, and the model's persistent tool.** The sidebar terminal panel itself still goes through `agent.ctx.get('subprocess').spawnTerminal(...)` (`packages/api/terminal-controller/src/index.ts:333,346`) — session-scoped, so the realm's `subprocess-wsl` automatically puts the PTY inside the distro, and that path is unrelated to the terminal group. The group serves **the model's persistent `bash`**: `@deepseek-ai/dsh-terminal` provides the `terminals` service, `@deepseek-ai/dsh-terminal-bash` registers the PTY mechanism into it and spawns **through the realm's own `ctx.subprocess`** (that is, the terminal primitive in `lib/wsl/subprocess.js`), and `@deepseek-ai/dsh-tool-bash-persistent` registers the model-facing `bash`.
+
+That brings one hard rule: **the group must isolate `terminals`**. A service-providing plugin whose group does not declare `isolate: { terminals: true }` has that mount **refused outright** by the loader — not silently degraded. Everything beyond the diagrams (why those three rows cannot be copied from the harness, the gap list, the limits and the manual checklist) is in [The persistent shell](PERSISTENT-SHELL.en.md).
 
 ## Architecture
 
@@ -40,13 +42,18 @@ After a distro is selected, the dialog **first asks for the user to enter that d
 ```
 Windows workspace session                 WSL workspace session
   preset: standard                          preset: wsl-standard
-  ctx.shell = pwsh-sandbox (host)           isolate: { shell, fs, subprocess }
-  ctx.fs    = fs-sandbox (host)             ├─ shell-wsl  → ctx.shell
-                                            ├─ fs-wsl     → ctx.fs
+  ctx.shell = pwsh-sandbox (host)           isolate: { shell, fs, subprocess,
+  ctx.fs    = fs-sandbox (host)                         terminals, sandbox }
+                                            ├─ shell-wsl    → ctx.shell
+                                            ├─ fs-wsl       → ctx.fs
                                             ├─ subprocess-wsl → ctx.subprocess
-                                            └─ tool-bash / tool-fs
+                                            ├─ sandbox-wsl  → ctx.sandbox
+                                            ├─ pty + terminal-bash
+                                            └─ persistent-bash / tool-fs
 ```
 
-`wsl.exe` itself is an ordinary Windows process, so the WSL executors still end up launching it through the **host's** subprocess provider. The realm isolates `shell`, `fs` AND `subprocess`, so `ctx.subprocess` inside the realm resolves to the realm's own provider; the host row captures the root provider in the root composition (`lib/wsl/host-refs.js`) and the realm rows read it back — managed-process termination, output overflow, and reaping still belong to the local provider.
+The realm's `isolate` has **five** keys, not three: `terminals` and `sandbox` are required for the same reason, because plugins in the group **provide** those services and a service-providing plugin cannot sit in an unisolated group (the loader refuses the mount). `tool-bash` is not in the group: the single owner of the model-facing name `bash` is the `persistent-bash` row.
+
+`wsl.exe` itself is an ordinary Windows process, so the WSL executors still end up launching it through the **host's** subprocess provider. The realm isolates `shell`, `fs`, `subprocess`, `terminals` AND `sandbox`, so `ctx.subprocess` inside the realm resolves to the realm's own provider; the host row captures the root provider in the root composition (`lib/wsl/host-refs.js`) and the realm rows read it back — managed-process termination, output overflow, and reaping still belong to the local provider. Isolating `sandbox` is **observable**: once isolated, the terminal stack can no longer reach the host's sandbox provider, and therefore not its Windows ACL runner, which fails on this realm's UNC workspace (see [The persistent shell](PERSISTENT-SHELL.en.md)).
 
 **The execution world is named in the create request.** When the browser half creates a WSL session, it writes the variant id into `agentPreset` via `wslPresetFor`; the host half only does fallback + warning in `api-session/added` for "WSL-path sessions without a preset" (see "Session binding" above). The browser half therefore depends on nothing beyond the preset client API.

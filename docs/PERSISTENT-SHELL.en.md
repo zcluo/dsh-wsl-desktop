@@ -1,0 +1,64 @@
+# The persistent shell: the model's `bash` (WSL workspaces) — dsh-wsl-desktop
+
+This is the full record of the model's persistent shell in a WSL world: why the three rows have to be hand-written, the tool and its parameters, the gap list (item by item), the limits, what was not measured and which limitations are known, and where the pins are. The README keeps only the conclusion summary and the entry point.
+
+## Why the three rows have to be hand-written
+
+The host preset's persistent tool and the persistent tool this realm mounts **register the same model-facing tool name, `bash`**, and a name inside one realm can have only one owner. Which owner actually answers was **measured**: the live probe's two calls (`tools.bashPersist.a` / `.b`) prove the persistent row answered the second call — it read back the working directory the first call had made, so the persistent row is this realm's `bash` owner (M1 = P2).
+
+A second fact decides that the host's rows **cannot be copied**: those harness rows carry `disabled: !!js process.platform === 'win32'` (`minimal.patch.yml`). That expression is evaluated in **this host process**, so a copied row would mount **present but disabled** on this Windows desktop — a tool row that looks like it exists and registers nothing (F12).
+
+So the three rows are **hand-written**: the registry (`@deepseek-ai/dsh-terminal`), the backend (`@deepseek-ai/dsh-terminal-bash`) and the persistent tool (`@deepseek-ai/dsh-tool-bash-persistent`), with their configuration restated **literally** (`toolRow` does not carry configuration for a persistent row). In the other direction the host's three rows **are still** removed by module name: neither the removal list nor `prune` changed a single field.
+
+## The tool and its parameters
+
+The tool name is `bash`, and its parameters are **only** `command`. `timeoutMs` is 300000 (milliseconds, the same value the harness's own row uses); `backendType` defaults to `shell`; the backend starts the **distribution's own** `/bin/bash --noprofile --norc -i`.
+
+What it therefore promises is the harness's own sentence: commands run in a persistent bash shell, and the **current directory and exported environment variables persist across calls**. The live gate has one row for each half: `tools.bashPersist.a` establishes the state, `.b` reads it back.
+
+## The gap list (item by item, none optional)
+
+1. **The host's `ctx.sandbox` wraps an argv in front.** Outside `danger-full-access`, `terminal-bash` wraps its argv through `ctx.get('sandbox')`, and this repository's own judgement is that the host sandbox **cannot confine** `wsl.exe` (the header of `lib/wsl/confinement.js`). The **measurement landed on arm b**: after the wrapping the PTY still runs (`tools.bash` reports `Linux` + an in-distro path + exit 0). The remedy is not "accept the ineffective wrapper" but **providing the `sandbox` service inside the realm** (`lib/wsl/sandbox.js`), which turns that wrapping into an **in-distro fence** rather than a Windows runner; without that provider, any mode but `danger-full-access` **throws** instead of silently degrading.
+2. **The persistent shell IS confined inside the distribution** (M3): a write outside the workspace is refused — `Read-only file system`, `write-exit=1`. The difference from the one-shot command path is **which seam it takes**: the persistent PTY gets its argv through the `sandbox` seam (`lib/wsl/sandbox.js` → `lib/wsl/confined-argv.js` → `lib/wsl/confinement.js`), and a one-shot command goes through the realm's own `ctx.shell` (`lib/wsl/shell.js`); both use one fence builder, **but the PTY path does not go through `ctx.shell`**.
+3. **`sessionProjections` is inference only**: the persistent backend's `inject` names it (`packages/terminal/terminal-bash/src/index.ts`), while the realm has **no** consumer in use. Its reachability inside the realm is **inferred** from the host's resolution fallback and was **not measured in the realm**.
+4. **`terminals` must be isolated in the group**: without the isolation the mount is **refused** (a service provider landing in the root realm is rejected by the loader) rather than silently degrading. The group's `isolate` therefore carries `terminals: true`.
+5. **The harness rows cannot be copied** (F12, above); in the other direction the host's three rows **are still** removed by module name.
+6. **`pwsh-persistent` is not mounted**: the distribution has no PowerShell, and mounting it would only invent a capability surface that does not exist.
+7. **The sandbox mode cannot be changed while a persistent session is open**: the backend ships that guard (`packages/terminal/terminal-bash/src/index.ts`, the event handler), and the live row pins its **shape** (a mode change refused while the session is open), not the byte-exact error text.
+8. **What the interactive dialect does not measure**: the prompt / PS2 / echo behaviour inside the distribution is **run for the first time** in this branch, and what is pinned is that it **does not leak** into the tool's output, not byte-exact terminal semantics.
+9. **The boundary of collection**: on an ordinary close it is the **bridge's own `finally`** that unlinks the FIFO — so the host-side `rm -f` in `lib/wsl/pty.js` is a **backstop, not the owner** on that path; under SIGKILL the bridge's `finally` never runs, and the host-side `rm -f` is the **only** cleanup that survives a SIGKILL. The names left behind **are collected by the sweep**: each allocation's sweep classifies by **generation** (this process's pid plus the live set, another pid plus its liveness, a legacy name plus the distribution's own age), not by age.
+
+**About "a restart collects it" — it is not a guarantee.** A restart is **not** a teardown: the FIFO a previous generation left is collected by the **next allocation's** sweep, and a **cold distribution's first allocation can burn the 10-second ceiling** that sweep carries, so the sweep **skips silently** (the fail-safe direction: leave one leak rather than delete the wrong name). The accurate sentence is therefore "the next allocation **normally** collects it", not "a restart always collects it".
+
+## Limits
+
+| limit | value | note |
+|---|---|---|
+| `timeoutMs` | 300000 | the same value as the harness's own persistent row; a timeout returns partial output and says it timed out |
+| `maxOutputChars` | 16000 | the backend schema's default; text past it is truncated and marked |
+| `backendType` | `shell` | the default; this realm does not override it |
+
+**The limits an operator sets for the host do not reach the realm**: the host's persistent row configuration is removed together with the host row (`prune` collects it into `toolConfig`, and the realm has no consumer for it), so the realm uses the **defaults** above, not the values the operator changed.
+
+## Not measured, and known limitations
+
+- **The PTY path has no offline pin**: the terminal primitive in `lib/wsl/subprocess.js` and the bridge driver in `lib/wsl/pty.js` import harness packages, so no offline suite can drive them; the only observers are the **live rows** and `scripts/verify-pty-handle.mjs` (which drives the real distribution's bridge and FIFOs, not the model's tool).
+- **Two splits that have to be known**: **(a) the GUI's web terminal is unfenced by design** — the terminal controller calls `subprocess.spawnTerminal` directly and its own documentation says that route runs "without Agent sandbox or approval restrictions", so "the model's `bash` is confined" and "the user's GUI terminal is not" **differ**; **(b) the terminal path has no PID namespace** — `isolateProcesses` defaults to `false` (the Config comment in `lib/wsl/sandbox.js`), because a PID namespace re-parents the interactive shell to PID 1 with a process group the PTY's foreground queries can no longer address (the helper's `--no-pidns` exists for the same reason); the one-shot command path **keeps** the namespace, and that is a declared boundary.
+- **The 12-hour live-claim bound and its declared residual**: an entry in the live set claims "alive" only while it is **younger than 12 hours** (`LIVE_FIFO_CLAIM_MS` in `lib/wsl/pty.js`). The residual case is written in the code: a session older than 12 hours whose cleanup genuinely never ran, **plus** a second allocation in the same window, could let the sweep unlink a name a live session still holds. The cost is the **name, not the session** (the bridge and its control writer hold descriptors, and a FIFO's inode outlives its directory entry) — which is why that bound is measured in **hours** rather than minutes.
+- **Measured on `debian` only**: this machine also has `debian-dev` and `arch`, which share the same WSL2 kernel and 9P stack, but they were not re-measured one by one.
+- **One live green run**: the most recent live gate was **58 PASS / 0 FAIL**, tail `NO AUTOMATED FAILURES; 3 manual step(s) pending`, `EXIT=0` (`artifacts/t3live2-post-restart.txt`). Among them, the session-release and FIFO-reclaim row is green, and the after-the-fact counts inside the distribution read `fifos=0 bridges=0`.
+
+### Manual-verification checklist (browser-only, not automatable)
+
+The live gate's tail carries **3 manual steps**. They are **not counted in the automated gate**, but a human has to look; **the transport face is already covered by the bridge checks**, and these three are the **UI face**:
+
+1. Click the **W** button beside the sidebar's "+" and create a WSL workspace; the session's preset should read `WSL · <base>`.
+2. The same **W** button should list the distributions **and their directories** (the dialog renders).
+3. Open a WSL session's **terminal panel**; the prompt should be the distribution's own shell.
+
+## Where the pins are
+
+- `node scripts/verify-preset.mjs`: the three rows' order, the `isolate` block's five keys, the persistent row's **literal** config, the **single owner** of `bash`, and the absence of `pwsh-persistent` in the realm.
+- `node scripts/verify-post-restart.mjs`: criterion 1 (cwd and exported variables across calls), criterion 2 (session release and FIFO reclaim), criterion 3 (the host world has not gained the capability), the fence row, and the guard row "a mode change is refused while a persistent session is open".
+- `node scripts/verify-pty-handle.mjs`: the offline pins for the bridge and the FIFOs (the real distribution, through `lib/wsl/pty.js`), including the sweep's generation rule and its failure reporting.
+- The documents are pinned too: `docs/PERSISTENT-SHELL.md` and its English edition are checked by the **declared pair table** in `scripts/verify-docs.mjs` — the two editions must name the same set of artifacts. **That table compares artifact names only, never meaning**: whether the two editions state the same gaps and the same numbers is kept by the writer (which is why this section lists the gap list, the numbers and the boundaries side by side).
