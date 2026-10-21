@@ -105,6 +105,7 @@ const STANDALONE = [
   'verify-search.mjs',
   'verify-protocol.mjs',
   'verify-world-errors.mjs',
+  'verify-host-contract.mjs',
 ]
 
 /** Suites that require the installed plugin behind a running Desktop host. */
@@ -216,6 +217,14 @@ const DECLARED_SKIPS = [
     suite: 'verify-client-dom.mjs',
     branch: ["createRequire(join(checkout, 'package.json'))"],
     precondition: 'there is no harness checkout to resolve jsdom from, or jsdom is not installed in one, so the browser half cannot be run in a real DOM',
+  },
+  {
+    // verify-host-contract.mjs — the branch tests `!existsSync(deps)`, true when the
+    // plugin root node_modules is absent AND when DSH_WSL_DEPS names a directory that
+    // is not there. Without the host packages, their exports cannot be imported.
+    suite: 'verify-host-contract.mjs',
+    branch: ['!existsSync(deps)'],
+    precondition: 'the dependency directory the suite resolves (DSH_WSL_DEPS when it names one, otherwise the plugin root node_modules) does not exist, so the host packages and their exports cannot be imported here',
   },
 ]
 
