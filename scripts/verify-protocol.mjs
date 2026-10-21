@@ -138,6 +138,9 @@ check('a typed unreachable error maps to distro-unreachable',
   const internal = classifyRouteFailure(new Error('boom'), { ref: 'abc123' })
   check('an unclassified error is internal with the supplied ref',
     internal.code === 'internal' && internal.params?.ref === 'abc123', internal)
+  const explicit = new WslRouteError('internal')
+  check('an explicitly constructed internal always carries a ref',
+    typeof explicit.params?.ref === 'string' && /^[0-9a-f]{6}$/.test(explicit.params.ref), explicit.params)
 }
 {
   let rejected = false
