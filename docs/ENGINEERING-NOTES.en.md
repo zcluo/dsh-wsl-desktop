@@ -39,6 +39,8 @@ The plugin ships as an npm package shaped like mature plugins such as dsh-better
 
 The `dsh-wsl-confine` helper script, `lib/wsl/dsh-wsl-confine.sh`, ships with the package (it sits under `lib`, which `files` includes); install steps and the exact-version-match requirement are in [Confinement](CONFINEMENT.en.md).
 
+The `wsl-*` presets this plugin registers are held by the plugin's own disposer lifecycle, which is why uninstalling through the plugin manager withdraws them along with it and leaves no workspace pointing at a plugin that no longer exists (this used to be only the README's uninstall line).
+
 ## Repository layout
 
 ```

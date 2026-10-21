@@ -39,6 +39,8 @@
 
 `dsh-wsl-confine` helper 的脚本 `lib/wsl/dsh-wsl-confine.sh` 随包分发（在 `files` 的 `lib` 里），安装方法与版本精确匹配的要求见 [Linux 侧约束](CONFINEMENT.md)。
 
+本插件注册的 `wsl-*` 预设由**插件自己的 disposer 生命周期**持有，所以用插件管理器卸载时它们会一起撤回，不会留下指向不存在插件的工作区（这条以前只写在 README 的卸载那一行）。
+
 ## 仓库布局
 
 ```
