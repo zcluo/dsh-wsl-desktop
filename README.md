@@ -2,135 +2,142 @@
 
 简体中文 | [English](README.en.md)
 
-把 WSL 发行版变成 DSH Desktop 里的**一等执行世界**：工作区可以落在发行版内，shell、文件工具、subprocess 与终端随之全部在发行版里运行——而同一实例里的 Windows 工作区仍走宿主自己的沙箱后端，两者并存。
+## 这是什么
 
-> **生产状态：受控单机生产可用**（见下方边界定义）。需要 **DSH Desktop 0.1.7+**（预设通过运行时注册而非目录加载，旧版宿主会在激活时明确拒绝）。核心能力已活体验收；安全审计 run-1（5 候选闭环）与 run-2（4 confirmed 已修复 + 1 rejected 转加固）均完成，报告见 `security-audit-skill/dsh-wsl-desktop/run-{1,2}/`。逐项证据强度见下方能力表。
->
-> **边界定义**：
-> - ✅ **适合**：插件作者本人或同信任级别操作者，在明确支持的发行版（见 [发行版支持矩阵](docs/DISTRO-SUPPORT.md)）与 0.1.7+ 桌面上长期使用。
-> - ⚠️ **条件**：confined 模式的信任边界依赖 NO_NEW_PRIVS（debian 系现代 setpriv 满足；setpriv 不认 `--no-new-privs` 时 confined 模式**根本不运行**——direct runner 在测到 `false` 时拒绝，helper 的降权用同一个标志、同样失败关闭，见 [安全与信任边界](SECURITY.md)）。
-> - ❌ **尚不适合**：分发给第三方用户（缺桌面版本门控与发行版矩阵）、无人值守高价值环境（subprocess 面不设防为已披露设计；对 harness 上游的两项 API 提案见 [docs/UPSTREAM-PROPOSALS.md](docs/UPSTREAM-PROPOSALS.md)）。
+一个 DSH Desktop 插件。它让你的 WSL 发行版变成可以直接干活的地方：把工作区建在发行版里，AI 的
+shell 命令、文件读写、搜索和终端就都跑在发行版内，而不是跑在 Windows 上。
 
-## 目录
+## 为什么你会想要它
 
-- **本页**：[目标能力](#目标能力) · [安装 / 更新 / 卸载](#安装--更新--卸载) · [快速开始](#快速开始) · [桌面更新纪律](#桌面更新纪律强制) · [安全与信任边界](#安全与信任边界) · [已知限制](#已知限制) · [校验](#校验) · [开发](#开发) · [发版](#发版)
-- **深入材料**：[安全与信任边界](SECURITY.md) · [架构与执行世界](docs/ARCHITECTURE.md) · [Linux 侧约束](docs/CONFINEMENT.md) · [fs 工具的围栏](docs/FS-FENCE.md) · [终端 PTY 桥](docs/PTY-BRIDGE.md) · [WSL 文件变更监听](docs/WATCH.md) · [校验与 SKIP 裁定](docs/VERIFICATION.md) · [工程笔记](docs/ENGINEERING-NOTES.md) · [发行版支持矩阵](docs/DISTRO-SUPPORT.md) · [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) · [架构与流程图](docs/diagrams.md)
+插件给每个 WSL 会话配一套"预设"，预设就是会话启动时拿到的那一整套工具配置。这套配置把 shell、
+文件读写、搜索、终端都指向发行版，所以：
 
-## 目标能力
+- **你的 Linux 工具真的能用。** 工作区放在发行版里，AI 用的是发行版自己的 `bash`、`grep`、`find`、
+  解释器和包。
+- **命令之间不再各过各的。** 模型侧的 `bash` 是一条常驻 shell，上一次调用留下的当前目录和环境变量，
+  下一次调用还看得见。
+- **两种工作区可以同时开着。** 同一个窗口里，Windows 工作区照旧跑在宿主自己的沙箱后端上，WSL 工作区
+  跑在发行版里，互不干扰。
+- **可以顺手用到 Windows 那边的东西。** 在发行版里能调用宿主机的命令；WSL 把这项功能叫 interop，
+  它在发行版里默认开着。
 
-**活体验收通过后的诚实状态**（`verify-post-restart.mjs` 最近一次实跑：**58 PASS / 0 FAIL**、尾部 `NO AUTOMATED FAILURES; 3 manual step(s) pending`、`EXIT=0`——包括搜索的两条活体行与常驻 shell 的那几条；**剩 3 条浏览器专属的人工项**，清单见 [常驻 shell](docs/PERSISTENT-SHELL.md#人工核验清单浏览器专属不可自动化)，加离线 20 套件；下面每条都注明证据强度）：
+## 装之前要有什么
 
-| # | 能力 | 状态 |
-|---|---|---|
-| ① | 工作区可选择 WSL 发行版里的 Linux 目录 | 对话框与宿主调用已实现并活体通过（listDir/checkPath/resolveHome/工作区注册与清理）；**浏览器内交互已由操作者人工确认**（门控流、目录浏览、终端面板均正常） |
-| ② | 该工作区内的 shell / 文件工具 / subprocess / 终端 在 WSL 里工作，且可从 WSL 调用宿主机命令 | **活体验收 PASS**：绑定（创建请求命名 preset）、shell 进发行版、fs 工具 Linux 寻址、越界写拒绝、subprocess POSIX 环境、bash 工具、工具层约束；终端传输由 PTY 套件覆盖。**模型侧的 `bash` 是发行版内的常驻 PTY shell，cwd 与环境变量跨调用保留**（活体验证：两次调用读数一致；缺口清单见 [常驻 shell](docs/PERSISTENT-SHELL.md)） |
-| ③ | 同一实例里 Windows 与 WSL 工作区并存 | **活体验收 PASS**：Windows 工作区停留在宿主 preset（PowerShell 可用、无 bash），WSL 会话并行运行 confined realm |
-| ④ | WSL 侧的 Linux 沙箱约束 | **shell 侧已修并活体验证**：运行时枚举所有 `rw` 挂载逐个改只读（实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变 READONLY）、失败即拒（保留退出码 97）、`enforcement` 如实报 `partial`。**fs 侧围栏已实现并活体验证**（越界写拒绝 PASS，见 [fs 工具的围栏](docs/FS-FENCE.md)）|
+- **WSL2**。不是 WSL1。
+- **一个受支持的发行版。** Debian、Ubuntu、Fedora/RHEL、Arch 已实测通过，Alpine 装上
+  `bash` 与 `util-linux-misc` 后也可以。清单与每种发行版的安装命令见
+  [发行版支持矩阵](docs/DISTRO-SUPPORT.md)。
+- **DSH Desktop 0.1.7 或更高。** 旧版宿主在激活时会明确拒绝。
+- **会话用户能免密 sudo，并且有 `bash` 和 `python3`。** 这一条最容易卡住。受限模式要在发行版内部
+  搭一个 mount namespace（让进程看到一份独立挂载表的 Linux 机制），把文件系统改成只读，而 WSL 内核
+  不允许在 user namespace 里做 bind mount，所以只能用 `sudo -n`。没有免密 sudo 时受限模式会
+  **明确失败**，不会退回去裸跑。
+- **建议再装一个 helper。** helper 是装在发行版里的一份小脚本 `dsh-wsl-confine`，用来闭合"用户保留的
+  sudo 授权"这条边界。安装命令见 [Linux 侧约束](docs/CONFINEMENT.md)。它是可选的，但推荐。
 
-**哪些能力有保留**（证据强度就是上表状态列的措辞）：终端不支持 `stdio.control`——写在「已知限制」里，不藏。常驻 shell 的缺口同样写在「已知限制」里，权威清单在 [常驻 shell](docs/PERSISTENT-SHELL.md)。
+## 怎么装
 
-## 安装 / 更新 / 卸载
+**插件市场 / 插件管理器（推荐）**：安装 `dsh-wsl-desktop@<version>`。桌面会自动把包装进 pnpm 工作区，
+并把 bundle patch（插件挂进桌面的那份配置）挂上，重启即用。
 
-**用户安装（生产通道）**：本插件以 npm 包形式发布，形态对齐 dsh-better-sidebar 等成熟插件（`files` 精确清单 + `cordis.patch.yml` bundle patch + `dsh.client.inject` 客户端接线 + `manifestVersion`）。
-
-- 插件市场 / 插件管理器：安装 `dsh-wsl-desktop@<version>`——桌面自动完成 pnpm 接线与 bundle patch 挂载，重启即用。
-- 命令行等价：`plugin_manager install_bundle dsh-wsl-desktop@<version>`。
-- **安装前提**：WSL2 + 目标发行版满足[支持矩阵](docs/DISTRO-SUPPORT.md)——会话用户 NOPASSWD sudo、bash、python3；推荐同时安装 dsh-wsl-confine helper 闭合围栏边界（安装命令见 [docs/CONFINEMENT.md](docs/CONFINEMENT.md)）。
-- **更新**：安装新版本号即可；桌面大版本更新后按「桌面更新纪律」先跑 `verify-post-restart.mjs`。
-- **卸载**：插件管理器卸载即同时撤回本插件注册的 wsl-* 预设（disposer 生命周期保证）。
-
-> **版本对应关系**：当前 `0.3.x` 系列要求 DSH Desktop **0.1.7+**。语义化版本的含义见「发版」——`minor` 就是"适配了某个新的桌面大版本"，所以**桌面大版本变了要先看这里有没有对应的 minor**。
-
-## 快速开始
-
-侧栏工作区标题栏里，自带的"+"（添加工作区）右边多一个 **W** 按钮。点开是本插件的工作区对话框，顺序是：选发行版 → 输入要进入该发行版的用户（**留空 = 发行版默认用户**）→ 浏览或输入 Linux 目录 → 创建并打开会话。
-
-进入浏览后，路径直接落在该用户的主目录（宿主在发行版内用 `getent passwd` 解析用户数据库）。输入的用户不存在时，错误就地显示在弹层里，不会进入浏览。切换发行版——**包括重新点击当前已选中的那个**——都会重新弹出用户输入框，并带上一次确认过的用户名作为起点。创建会话进行中时发行版按钮暂时不可点。
-
-边界要说清楚：这一步只决定"浏览谁的 home"，**不决定会话身份**——会话在发行版里始终以发行版默认用户执行（`username` 是插件配置，不随会话创建传递）。
-
-侧栏工作区列表里，**路径落在 WSL UNC 下的工作区，行首图标是 ☁️ 而不是文件夹**。"+" 保持部署自带的行为（Desktop 上是 Electron 目录选择器），本插件不改写它。
-
-界面与 DOM 层为什么这么做（"隐藏必须用 `display`、不能用 `remove()`"、"不要用定时器兜底"这类实测结论），见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
-
-## 桌面更新纪律（强制）
-
-每次 DSH Desktop 更新后，插件可能因 harness 内部 API 变化而失效（0.1.6→0.1.7 即断裂四处）。**纪律：更新桌面 → 跑 `node scripts/verify-post-restart.mjs` → 全绿才继续使用；任何一次红都先修再干。** 该套件覆盖预设注册、执行世界、会话绑定、Windows 隔离与对话框契约；新宿主的破坏会在这些断言上现形，而不是静默降级成宿主世界。
-
-## 安全与信任边界
-
-- **宿主侧**：Windows 工作区会话仍跑在 DSH 自带的沙箱后端里，本插件不替换它们。
-- **发行版内 shell 侧**：在 mount namespace 里把 `/` 改只读，只留工作区与一个私有 `/tmp` 可写；**约束建立失败即拒绝执行**，不裸跑。机制与实测前提见 [docs/CONFINEMENT.md](docs/CONFINEMENT.md)。
-- **发行版内 fs 侧**：`WslFileSystem` 自带围栏，两个变更入口都先过 `checkedTarget`，越界抛结构化 `FS_SANDBOX_DENIED`。见 [fs 工具的围栏](docs/FS-FENCE.md)。
-
-**已披露的不设防面**：宿主 subprocess 面不设防是设计取舍，不是遗漏。**围栏的已知边界**：会话用户保留的免密 sudo 授权可以重新调用它绕过文件围栏，两条闭合路径与它们的实际可达性见 [SECURITY.md](SECURITY.md)。
-
-## 已知限制
-
-**grep / glob 工具在 WSL 会话里可用，后端是发行版自己的 `grep` / `find`。** 宿主那两行依然被移除，理由是实测的两件事：`tool-fs-search` 虽然通过 `ctx.subprocess.spawn()` 启动（`search-core.ts:238`），但它的 `argv[0]` 是 `@vscode/ripgrep` 提供的**打包 Windows rg.exe**（`search-core.ts:174-178`）——在发行版里既不存在、也无法用 Linux 参数工作；而发行版自带 `/usr/bin/grep` 与 `/usr/bin/find`（实测：发行版里 `command -v rg` 回答为空）。所以 `wsl-world` 组把这两个名字挂回本插件自己的实现（`lib/wsl/search-tool.js`），模型在 WSL 会话里照常调用 `grep` / `glob`——**但语义是发行版工具的**：POSIX ERE（没有 `\d`、`(?i)`）· 不解析 `.gitignore`（只排除六个 VCS 目录）· 点目录会被搜到 · `include` 只匹配 basename 且没有花括号 · 模式按搜索根相对解释、`*` 与 `**/` 跨 `/` · 路径含 `:` 的记录可能被丢弃或被静默错配 · 二进制文件永不被匹配 · 达到上限的截断不落盘。**这串要点是摘要，缺口的权威清单在文档里**（文档八条中第 5、6 条在这里并成了一条；末条「截断不落盘」是限额，不是缺口）。八条缺口、限额、未测项与怎么自己验，见 [发行版内搜索](docs/SEARCH.md)。
-
-**终端走 PTY 桥，PTC 的 `stdio.control`（fd 通道）明确拒绝**——`wsl.exe` 无法转发任意描述符。桥的驱动方式与实测前提见 [docs/PTY-BRIDGE.md](docs/PTY-BRIDGE.md)。
-
-**常驻 shell 的缺口摘要**：模型侧的 `bash` 是发行版内的常驻 PTY shell，但它有两条要命的边界——**（1）宿主 `ctx.sandbox` 会包一层 `wsl.exe` 的 argv**，而本仓自己判定宿主沙箱对它**无法约束**（实测：包装之后仍然跑得起来，所以 realm 里自建了 `sandbox` 提供者，把这一层变成发行版内的约束）；**（2）终端这条路没有 PID namespace**，而 GUI 的网页终端按设计**不受 fence 约束**——受约束的是模型的 `bash`，不是用户在终端面板里敲的那条。**这串只是摘要，缺口的权威清单在文档里**：九条缺口、限额、未测项、3 条人工核验清单与怎么自己验，见 [常驻 shell](docs/PERSISTENT-SHELL.md)。
-
-**约束覆盖不到 `/dev`、`/proc`、`/sys` 与 interop**，如实报在 `enforcement: 'partial'` 里；而会话用户保留的免密 sudo 授权可绕过文件围栏，闭合路径见 [SECURITY.md](SECURITY.md)。
-
-**WSL 工作区里的文件变更跟踪是轮询的，不是事件驱动的。** 发行版的 9P 共享上 `fs.watch` 会抛 `EISDIR`（文件与目录目标都抛），宿主后端的 chokidar 监听因此在 WSL 目标上根本无法初始化；插件改为在宿主侧轮询——目录看条目集合（每 300ms 一次 `readdir`，实测本进程 0ms CPU/3s、延迟 2–3ms），文件与尚不存在的路径走 `fs.watchFile`（每 300ms 一次 `stat`，实测 0ms CPU/3s、延迟 52ms）。**目录目标只对条目集合变化失效**：新增、删除、改名可见，目录内某个文件的**内容**变化不可见——要盯着某个文件，就按文件路径监听它。机制、实测与未测项见 [WSL 文件变更监听](docs/WATCH.md)。
-
-## 校验
-
-```powershell
-node scripts/verify-all.mjs          # 全部离线套件（20 个）
-node scripts/verify-all.mjs --live   # 追加需要已安装插件 + 运行中宿主的套件
-```
-
-逐套件职责、单跑命令、以及**聚合器怎么读 SKIP**（退出码 2 是套件自己的 SKIP；只有 `DECLARED_SKIPS` 点名的跳过才算数并打印它的前提，未声明的跳过判红，失效的声明在任何套件运行之前先判红），见 [docs/VERIFICATION.md](docs/VERIFICATION.md)。
-
-发行版与用户不再硬编码：`DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DSH_WSL_HOME` 可覆盖，默认从 `wsl.exe` 现读。
-
-## 开发
-
-```bash
-git clone https://github.com/zcluo/dsh-wsl-desktop.git
-cd dsh-wsl-desktop
-node scripts/verify-all.mjs        # 离线全量
-.\scripts\sync.ps1                 # stage 进 profile 并重指向（开发者模式：developerTools 开启；首次安装需先接线）
-# 重启 DSH Desktop → verify-post-restart.mjs
-```
-
-仓库布局：
+**命令行等价**：
 
 ```
-lib/index.js            Host：路由、预设生成、会话预设绑定
-lib/client.js           浏览器：侧栏"+"旁的 W 按钮 + 添加 WSL 工作区对话框
-lib/wsl/paths.js        UNC ↔ Linux ↔ 盘符 互译（纯函数）
-lib/wsl/world.js        发行版发现、wsl.exe 执行核、目录事实
-lib/wsl/shell.js        ShellExecutor 实现（WSL bash + 约束接入）
-lib/wsl/fs.js           LocalFileSystem 子类（9P 后端 + 路径方言）
-lib/wsl/publish.js      覆盖发布的等待边界（重试 + 实测尾部；纯模块，可独立测试）
-lib/wsl/watch.js        文件变更监听的轮询策略（纯模块，可独立测试）
-lib/wsl/subprocess.js  SubprocessRuntime 实现（管道 + 终端；委托宿主 subprocess）
-lib/wsl/pty.js         终端句柄：两个进程驱动发行版内的 PTY 桥
-lib/wsl/terminal-bridge.py 发行版内运行的 PTY 桥（python3 标准库，零安装）
-lib/wsl/host-refs.js    宿主 subprocess provider 的跨模块引用（realm 隔离后必需）
-lib/wsl/confinement.js  mount namespace 约束（纯函数 + 探测，可独立测试）
-lib/wsl/fence.js        fs 围栏的包含性比较与可写根推导（纯函数，可独立测试）
-lib/wsl/preset.js       预设重写（纯文本，可独立测试）
-scripts/sync.ps1        把插件 stage 进 profile（随后由 plugin_manager 安装）
-scripts/env.mjs         校验用的发行版/用户/home 解析（不硬编码机器身份）
-scripts/verify-*.mjs    独立校验（不需要 harness）
-scripts/verify-all.mjs  聚合运行全部套件（--live 追加需要运行中宿主的套件）
+plugin_manager install_bundle dsh-wsl-desktop@<version>
 ```
 
-宿主代码改动需要**重启 DSH Desktop** 才会加载，重启后先跑 `verify-post-restart.mjs`（它会在旧模块仍生效时直接报「请重启」而不是给假绿）。**浏览器半边改动不需要重启**，但"文件已改"不等于"投放已变"——热更新的完整边界、以及 `sync.ps1` 的"保留最新两代"规则，见 [docs/ENGINEERING-NOTES.md](docs/ENGINEERING-NOTES.md)。
+**更新**：装一个新版本号就行。桌面大版本更新之后，先跑一次 `verify-post-restart.mjs`
+（见「会意外的地方」里桌面更新那一条）。
 
-执行世界由会话的 agent preset 决定、会话绑定的接缝在哪、界面入口的 DOM 层实现，见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+**卸载**：用插件管理器卸载即可。本插件注册的 `wsl-*` 预设会一起撤回，不会留下指向不存在插件的工作区。
 
-## 发版
+## 怎么用
 
-**维护者发版**：语义化版本——patch = 缺陷修复；minor = 兼容的桌面大版本适配（每次 harness 断裂适配后升 minor，如 0.1.x 的 0.1.7 适配）；major = 边界语义或支持矩阵变化。流程：改 `package.json` version → 全量套件 + `verify-post-restart.mjs` 全绿 → `npm publish --access public` → 打 git tag。`files` 清单已含 `lib/wsl/dsh-wsl-confine.sh`（helper 随包分发）。
+侧栏工作区标题栏里，自带的「+」（添加工作区）右边多出一个 **W** 按钮。点它，然后按顺序走：
 
-> ⚠️ **`exports["./client"]` 是硬性契约，改元数据时最容易误删。** 只要有一个包声明了 `dsh.client` 却没有 `exports["./client"]`，宿主就直接拒绝组合，**整张桌面启动失败**（不是本插件单独失效）——v0.2.0 与 0.2.1 因此装上去就起不来。`scripts/verify-modules.mjs` 现在钉住这条，发版前跑它即可拦住；事故经过见 [docs/ENGINEERING-NOTES.md](docs/ENGINEERING-NOTES.md)。
+1. **选发行版。** 已安装的 WSL 发行版会列出来。
+2. **输入用户。** 这是要进入该发行版的用户，用来决定"浏览谁的 home"。**留空 = 发行版默认用户。**
+   用户名不存在时，错误就地显示在弹层里，不会进入浏览。
+3. **选目录。** 浏览或直接输入 Linux 路径。进来时路径落在上一步那个用户的主目录，
+   宿主在发行版内用 `getent passwd` 解析用户数据库。
+4. **创建并打开会话。**
+
+几个会碰到的细节：
+
+- **切换发行版会重新问用户**，包括重新点当前已选中的那个；输入框会带上一次确认过的名字作为起点。
+- **创建会话进行中时，发行版按钮暂时点不动**，避免提交到一半换了目标。
+- **这一步只决定浏览谁的 home，不决定会话身份。** 会话在发行版里始终以发行版的默认用户执行；
+  插件配置里的 `username` 不随会话创建传递。
+- 侧栏工作区列表里，**路径落在 WSL UNC 下的工作区，行首图标是 ☁️ 而不是文件夹**。UNC 是 Windows
+  表示网络/子系统路径的写法，形如 `\\wsl.localhost\<发行版>\home\...`。
+- 自带的「+」保持部署原本的行为（桌面上是 Electron 的目录选择器），本插件不改写它。
+- 已经打开的 WSL 工作区里，文件列表和终端都是发行版内的。Windows 工作区里的 PowerShell 不受影响。
+
+## 会意外的地方
+
+这些都是真的边界，不是缺陷清单的免责声明。每条都给了读下去的地方。
+
+- **搜索工具的语义和宿主不一样。** WSL 会话里的 `grep` / `glob` 用的是发行版自己的
+  `grep` / `find`。所以正则方言是 Linux 上 grep 的标准方言 POSIX ERE，`\d` 与 `(?i)` 都不可用。
+  它也不解析 `.gitignore`，只排除六个 VCS 目录。点目录会被搜到；`include` 只匹配
+  basename 且不支持花括号；路径含 `:` 的记录可能被丢弃或错配；二进制文件永远不匹配；
+  到上限的结果不落盘。完整八条与限额见 [发行版内搜索](docs/SEARCH.md)。
+- **终端走 PTY 桥，不支持 `stdio.control`。** 终端要在发行版里真的开出一个伪终端（PTY），
+  而 `wsl.exe` 只有三条管道，所以插件在发行版里跑一个小桥，由宿主侧两个进程驱动它。终端的
+  `stdio.control` 那条 fd 通道明确拒绝，因为 `wsl.exe` 无法转发任意描述符。桥怎么驱动见
+  [终端（PTY 桥）](docs/PTY-BRIDGE.md)。
+- **文件围栏管的是模型，不是你。** GUI 的网页终端按设计**不受围栏约束**——你在终端面板里敲的命令
+  和在发行版里直接开一个 shell 一样；受约束的是模型侧那条 `bash`。另外**终端这条路没有
+  PID namespace**，而一次性命令路径保留它。两条边界的完整说明见
+  [常驻 shell](docs/PERSISTENT-SHELL.md)。
+- **`/dev`、`/proc`、`/sys` 和 interop 在围栏之外。** 它们不是文件存储，所以插件把自我报告的
+  `enforcement` 字段报成 `partial`（部分覆盖），而不是说成"已沙箱化"。
+- **subprocess 这一面不设防。** 托管进程的终止、输出溢出与回收，都仍归宿主自己的 subprocess
+  provider，不受文件围栏约束。这是设计取舍，不是遗漏。见 [安全与信任边界](SECURITY.md)。
+- **保留的免密 sudo 能绕过文件围栏。** 会话用户保留着插件建立围栏时自己要用的那份授权，所以被约束
+  的命令可以重新调用它。两条闭合路径（helper 与 NO_NEW_PRIVS）与它们的实际可达性见
+  [安全与信任边界](SECURITY.md)。
+- **文件变更监听是轮询的，不是事件驱动的。** 9P 是 WSL 把发行版文件暴露给 Windows 的那套共享，
+  在它上面 `fs.watch` 会抛 `EISDIR`。所以插件改为在宿主侧轮询：目录每 300ms 看一次条目集合，
+  文件每 300ms `stat` 一次。**目录目标只对条目变化生效**——新增、删除、改名可见，目录里某个文件的
+  内容变化不可见；要盯内容就按文件路径监听它。机制与实测见
+  [WSL 文件变更监听](docs/WATCH.md)。
+- **桌面更新后插件可能失效。** 插件依赖桌面内部的框架（harness）的 API，这些 API 变化会打断它
+  （0.1.6 → 0.1.7 一次断了四处）。所以更新桌面之后先跑一次
+  `node scripts/verify-post-restart.mjs`，全绿再继续用。
+- **适合谁用。** 目前适合插件作者本人或同信任级别的操作者长期使用。分发给第三方用户、或放进
+  无人值守的高价值环境，都还不适合——理由写在 [SECURITY.md](SECURITY.md)。
+
+## 想读更多
+
+- [安全与信任边界](SECURITY.md) — 信任边界、已披露的不设防面、审计结论
+- [执行世界与架构](docs/ARCHITECTURE.md) — 会话怎么绑定执行世界，界面为什么这样做
+- [Linux 侧约束](docs/CONFINEMENT.md) — mount namespace 围栏、helper、实测前提
+- [fs 工具的围栏](docs/FS-FENCE.md) — 文件读写的越界判定
+- [终端（PTY 桥）](docs/PTY-BRIDGE.md) — 终端是怎么跑进发行版的
+- [常驻 shell](docs/PERSISTENT-SHELL.md) — 模型侧 `bash` 的缺口清单、限额、人工核验清单
+- [发行版内搜索](docs/SEARCH.md) — 八条语义差异、限额、怎么自己验
+- [WSL 文件变更监听](docs/WATCH.md) — 轮询策略与它的边界
+- [校验](docs/VERIFICATION.md) — 每个套件管什么，以及跳过（SKIP）怎么裁定
+- [工程笔记](docs/ENGINEERING-NOTES.md) — 实测约束、仓库布局、发版流程、安装形态
+- [发行版支持矩阵](docs/DISTRO-SUPPORT.md) — 哪些发行版验证过，每种缺什么
+- [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) — 对 harness 上游的两项提案
+- [架构与流程图](docs/diagrams.md) — 可交互的架构、时序与生命周期图
+
+## 给维护者
+
+这一节是给要改这个仓库的人看的；只想用插件的话，上面已经够了。
+
+- `README.en.md` 与本文件是一对声明过的双语版：`scripts/verify-docs.mjs` 要求两边命名同一批仓库文件。
+- 自检：`node scripts/verify-all.mjs` 跑全部离线套件；加 `--live` 追加需要已安装插件与运行中宿主的
+  套件。逐套件职责与 SKIP 裁定见 [校验](docs/VERIFICATION.md)。
+- 仓库布局、安装形态与发版流程见 [工程笔记](docs/ENGINEERING-NOTES.md)。语义化版本在这个仓库里的
+  具体含义、以及 `npm publish` 的步骤都在那里。
+- ⚠️ **`exports["./client"]` 是硬性契约。** 一个包声明了 `dsh.client` 却没有
+  `exports["./client"]`，宿主会直接拒绝组合，**整张桌面启动失败**。`scripts/verify-modules.mjs`
+  钉住这条，发版前跑它就能拦住。事故经过见 [工程笔记](docs/ENGINEERING-NOTES.md)。
+- 发行版与用户不硬编码：`DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DSH_WSL_HOME` 可覆盖，
+  默认从 `wsl.exe` 现读。
 
 ## 许可证
 

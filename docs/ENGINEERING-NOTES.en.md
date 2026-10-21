@@ -1,6 +1,6 @@
 # Engineering notes and measured constraints — dsh-wsl-desktop
 
-This collects the engineering record the README does not carry: constraints that were all measured rather than inferred, a fatal delivery incident, and the sync script's retention rule. These are what a maintainer reads, not what a user reads.
+This collects the engineering record the README does not carry: constraints that were all measured rather than inferred, a fatal delivery incident, and the sync script's retention rule. Since the README was rewritten as a user-facing entry document, the maintainer material that used to live only there — the install shape, the repository layout, the desktop update discipline, the release procedure and the capability evidence table — moved here as well. These are what a maintainer reads, not what a user reads.
 
 ## Key constraints (all measured, none inferred)
 
@@ -32,3 +32,54 @@ Host-code changes require **restarting DSH Desktop** to load; after a restart, r
 ## `sync.ps1`'s generation-retention rule
 
 `sync.ps1` stages into a fresh timestamped directory each time (Node caches modules by URL; reinstalling into the same directory still serves old code; the stamp is second-resolution, so a second run inside the same second is bumped to a free name — the loader silently ignores a row id it has already mounted), and it **re-points the profile link at the generation it just staged**, rewriting the profile's `package.json` and `pnpm-lock.yaml` with it — otherwise the next `pnpm install` reconciles the link back to the manifest and "already staged" becomes a fiction. **The retention rule is "keep the two newest"**: the moment the link moves, "the linked generation" is the one nobody is running, while the running host resolves the one staged before it; keeping only the link would delete the generation in use on the next stage and break every WSL session until the next restart. When the link **cannot identify a generation** (the profile has no link at all, or its target is already gone) `sync.ps1` **keeps every generation and warns**, and a profile that has **never been staged into** (no `plugins/` directory at all) gets the same warning — with the link path spelled out, because that path is the only fact the reader needs. In that case it has merely put the files in place: nothing takes effect until the profile has this plugin installed (a first install is wired up by plugin_manager). The link is deleted through .NET rather than `Remove-Item`: Windows PowerShell 5.1 throws NullReferenceException on a junction, which aborted the re-point midway with the old generation still linked. `scripts/verify-sync.mjs` exercises all of this by running the real script against a throwaway profile (four scenarios: a link that resolves, a dangling link, no link, and never staged into — the last pinning that the warning names the link path).
+
+## Install shape (what the published package looks like)
+
+The plugin ships as an npm package shaped like mature plugins such as dsh-better-sidebar: `package.json`'s `files` is an **exact manifest** (`lib`, `cordis.patch.yml`, both READMEs, LICENSE), `cordis.patch.yml` is the bundle patch, `dsh.client.inject` names the host services the client half injects, and `manifestVersion` marks the metadata version. Installing `dsh-wsl-desktop@<version>` through the desktop's plugin market / plugin manager completes the pnpm wiring and the bundle-patch mount automatically; the CLI equivalent is `plugin_manager install_bundle dsh-wsl-desktop@<version>`.
+
+The `dsh-wsl-confine` helper script, `lib/wsl/dsh-wsl-confine.sh`, ships with the package (it sits under `lib`, which `files` includes); install steps and the exact-version-match requirement are in [Confinement](CONFINEMENT.en.md).
+
+## Repository layout
+
+```
+lib/index.js            Host: routes, preset generation, session preset binding
+lib/client.js           Browser: the W button next to the sidebar "+" + the add-WSL-workspace dialog
+lib/wsl/paths.js        UNC ↔ Linux ↔ drive-letter translation (pure functions)
+lib/wsl/world.js        Distro discovery, the wsl.exe execution core, directory facts
+lib/wsl/shell.js        ShellExecutor implementation (WSL bash + confinement hookup)
+lib/wsl/fs.js           LocalFileSystem subclass (9P backend + path dialects)
+lib/wsl/publish.js      The overwrite publication's wait bound (retry + measured tail; pure module, independently testable)
+lib/wsl/watch.js        Polling strategies for file watching (pure module, independently testable)
+lib/wsl/subprocess.js   SubprocessRuntime implementation (pipes + terminal; delegates to the host subprocess)
+lib/wsl/pty.js          Terminal handle: two processes driving the in-distro PTY bridge
+lib/wsl/terminal-bridge.py  The PTY bridge running inside the distro (python3 stdlib, zero install)
+lib/wsl/host-refs.js    Cross-module references to the host subprocess provider (required after realm isolation)
+lib/wsl/confinement.js  Mount-namespace confinement (pure functions + probing, independently testable)
+lib/wsl/fence.js        Containment comparison and writable-root derivation for the fs fence (pure functions, independently testable)
+lib/wsl/preset.js       Preset rewriting (pure text, independently testable)
+scripts/sync.ps1        Stages the plugin into the profile (then installed by plugin_manager)
+scripts/env.mjs         Distro/user/home resolution for verification (no hardcoded machine identity)
+scripts/verify-*.mjs    Standalone verification (no harness needed)
+scripts/verify-all.mjs  Aggregates and runs all suites (--live adds the suites needing a running host)
+```
+
+## Desktop update discipline (mandatory)
+
+After every DSH Desktop update the plugin may break, because harness internal APIs can change (0.1.6 → 0.1.7 broke four places in one go). The discipline: **update the desktop → run `node scripts/verify-post-restart.mjs` → only keep going when everything is green; any red gets fixed before anything else.** That suite covers preset registration, the execution world, session binding, Windows isolation and dialog contracts, so breakage from a new host shows up on these assertions instead of silently degrading into the host world. Per-suite responsibilities are in [Verification](VERIFICATION.en.md).
+
+## Release procedure
+
+Semantic versions mean something specific here: `patch` = defect fixes; `minor` = a compatible desktop-major adaptation (each harness-break adaptation bumps minor, e.g. the 0.1.7 adaptation inside 0.1.x); `major` = boundary semantics or support-matrix changes. **So when the desktop major changes, check first whether a matching minor exists.** Flow: bump the `package.json` version → full suites + `verify-post-restart.mjs` all green → `npm publish --access public` → git tag.
+
+## Capabilities and evidence strength
+
+The honest state after live acceptance (`verify-post-restart.mjs`, latest real run: **58 PASS / 0 FAIL**, tail `NO AUTOMATED FAILURES; 3 manual step(s) pending`, `EXIT=0`, including the two live search rows and the persistent-shell rows; **3 browser-only manual steps remain**, listed in [The persistent shell](PERSISTENT-SHELL.en.md#manual-verification-checklist-browser-only-not-automatable); plus 20 offline suites):
+
+| # | Capability | Status |
+|---|---|---|
+| ① | The workspace can pick a Linux directory inside a WSL distro | Dialog and host calls implemented and live-verified (listDir/checkPath/resolveHome/workspace registration and cleanup); **in-browser interaction manually confirmed by the operator** (gating flow, directory browsing, and terminal panel all normal) |
+| ② | shell / file tools / subprocess / terminal inside that workspace work in WSL, and host commands can be invoked from WSL | **Live acceptance PASS**: binding (the create request names the preset), shell inside the distro, fs tools addressing Linux paths, out-of-bounds write rejection, subprocess POSIX environment, bash tool, tool-layer constraints; terminal transport covered by the PTY suite. **The model's `bash` is a persistent PTY shell inside the distribution, keeping cwd and environment variables across calls** (live-verified: two calls read back the same state; the gap list is in [The persistent shell](PERSISTENT-SHELL.en.md)) |
+| ③ | Windows and WSL workspaces coexist in the same instance | **Live acceptance PASS**: Windows workspaces stay on the host preset (PowerShell available, no bash); WSL sessions run the confined realm in parallel |
+| ④ | Linux-side sandbox constraints on the WSL side | **Shell side fixed and live-verified**: at runtime, all `rw` mounts are enumerated and remounted read-only one by one (observed `/mnt/c`, `/dev/shm`, `/run/user/<uid>` going WRITABLE → READONLY); any failure rejects (exit code 97 preserved); `enforcement` honestly reports `partial`. **fs-side fence implemented and live-verified** (out-of-bounds write rejected, PASS — see [The fs tool fence](FS-FENCE.en.md)) |
+
+**Which capabilities are qualified**: the evidence strength is the wording of the status column above. The terminal has no `stdio.control` — it is stated in [Terminal (PTY bridge)](PTY-BRIDGE.en.md) and in the README's "what will surprise you", not left out. The persistent shell's gaps are stated in the README too, with the authoritative list in [The persistent shell](PERSISTENT-SHELL.en.md).

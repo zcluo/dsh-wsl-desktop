@@ -11,6 +11,8 @@ read-only:        tmpfs /tmp        →  remount,ro,bind /
 
 The order is load-bearing: **bind the writable paths first, then remount the root read-only**. The other way around, new binds inherit the read-only state (verified: workspace writes fail).
 
+**Every `rw` mount is enumerated at run time rather than taken from a fixed list.** After `/` is made read-only, the sweep asks `findmnt` for every mount target in the namespace, skips the device-node and kernel-state ones (`/dev`, `/proc`, `/sys` and their kind), and remounts each of the rest with `mount -o remount,ro,bind` — measured: `/mnt/c`, `/dev/shm` and `/run/user/<uid>` all go WRITABLE → READONLY. Read-only mode runs the same sweep, so it holds for **every** confined run, which is exactly what `enforcement: 'partial'` describes: the mount namespace does not govern `/dev`, `/proc`, `/sys` or interop, and `partial` says so instead of dressing it up as "sandboxed". **A failed sweep refuses to execute**: any step that fails goes through the same `fail()`, keeping exit code **97** (`SETUP_FAILURE_EXIT`), and the command never runs bare.
+
 Two preconditions established by measurement:
 
 - **Must be root.** The WSL kernel refuses bind mounts inside a user namespace: `unshare -Ur --mount` starts, but `mount --bind` reports "wrong fs type". So `sudo -n unshare …` is used; without passwordless sudo, confined mode **fails explicitly** (`SandboxUnavailableError`) instead of running bare.
