@@ -169,7 +169,7 @@ function workspaceStore(state) {
  * route stub a click-driven case needs; jsdom carries no fetch of its own.
  * @returns {{ button: object|null, dispose: () => void, mutations: () => number }} the live plugin.
  */
-function apply(dom, workspaceState, fetchImpl) {
+function apply(dom, workspaceState, fetchImpl, overrides = {}) {
   let registration = null
   dom.window.__ModuleLoader__ = { load: (entry) => { registration = entry } }
   if (fetchImpl !== undefined) dom.window.fetch = fetchImpl
@@ -193,6 +193,7 @@ function apply(dom, workspaceState, fetchImpl) {
     // be healthy has to provide them, exactly like the injected services.
     remote: { session: { create: async () => ({ ok: true, value: { sessionId: 's' } }) } },
     sessions: { create: async () => ({ sessionId: 's' }) },
+    ...overrides,
   })
   let mutations = 0
   const counter = new dom.window.MutationObserver((records) => { mutations += records.length })
@@ -520,9 +521,11 @@ function healthyBootstrap() {
  */
 function routeStub(handlers) {
   const calls = []
+  const bodies = []
   const stub = async (url, init) => {
     const body = JSON.parse(init.body)
     calls.push(body.method)
+    bodies.push(body)
     const handler = handlers[body.method]
     if (handler === undefined) {
       return { status: 404, json: async () => ({ ok: false, code: 'unknown-method' }) }
@@ -530,6 +533,7 @@ function routeStub(handlers) {
     return { status: 200, json: async () => handler(body) }
   }
   stub.calls = calls
+  stub.bodies = bodies
   return stub
 }
 
@@ -586,6 +590,7 @@ function routeStub(handlers) {
     error?.textContent.includes('route could not be reached') === true
     && error?.textContent.includes('the route is down') === false,
     error?.textContent?.slice(0, 160))
+  check('the error is announced as an alert', error?.getAttribute('role') === 'alert')
   live.dispose()
 }
 {
@@ -617,6 +622,44 @@ function routeStub(handlers) {
     error?.textContent?.slice(0, 160))
   check('the raw host error never reaches the page',
     error?.textContent.includes('SECRET') === false, error?.textContent?.slice(0, 160))
+  check('the failure links its catalog doc',
+    error?.querySelector('a[href*="DIAGNOSTICS.md#distro-unreachable"]') !== null,
+    error?.querySelector('a')?.href)
+  live.dispose()
+}
+{
+  // An old host half answers `unknown-method`; that is a restart, not an
+  // internal failure, and it must stay visible above the still-usable gate.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub({
+    bootstrap: () => ({ ok: false, code: 'unknown-method' }),
+    listDistros: () => ({ ok: true, value: ['debian'] }),
+    defaultDistro: () => ({ ok: true, value: { distro: 'debian' } }),
+  })
+  const live = apply(parts.dom, { items: [] }, stub)
+  await settle()
+  live.button.click()
+  // bootstrapOnce retries one failure after 500ms before it settles.
+  await new Promise((resolve) => { setTimeout(resolve, 800) })
+  const error = parts.dom.window.document.querySelector('[data-wsl-error="host-plugin-stale"]')
+  check('an old host half is reported as host-plugin-stale, not internal',
+    error !== null, parts.dom.window.document.body.textContent?.slice(0, 160))
+  live.dispose()
+}
+{
+  // The browser's own required symbol is missing even though the host is
+  // healthy: the merge must degrade, and still ask for no distribution.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub({ bootstrap: () => healthyBootstrap() })
+  const live = apply(parts.dom, { items: [] }, stub, { remote: undefined })
+  await settle()
+  live.button.click()
+  await settle()
+  check('a missing client-scope symbol degrades the picker',
+    parts.dom.window.document.querySelector('[data-wsl-degraded]') !== null
+    && !stub.calls.includes('listDistros'), stub.calls)
   live.dispose()
 }
 
@@ -673,6 +716,10 @@ async function reachBrowse(dom) {
     parts.dom.window.document.body.textContent?.slice(0, 160))
   check('the strip reports pass and advisory counts',
     strip?.getAttribute('data-wsl-health') === '1,1,0', strip?.getAttribute('data-wsl-health'))
+  const healthCall = stub.bodies.find((body) => body.method === 'health')
+  check('the health request carries the confirmed distro and user',
+    healthCall?.params.distro === 'debian' && healthCall?.params.username === 'me',
+    healthCall?.params)
   const create = parts.dom.window.document.querySelector('[data-wsl-action="create"]')
   check('an advisory check does not disable creation', create !== null && create.disabled === false,
     create?.disabled)
@@ -682,6 +729,10 @@ async function reachBrowse(dom) {
   check('the strip expands to the measured rows',
     expanded?.textContent.includes('version unreadable or below 3.8') === true,
     expanded?.textContent?.slice(0, 200))
+  const expandedToggle = parts.dom.window.document.querySelector('[data-wsl-health-toggle]')
+  check('the health toggle reports its expanded state',
+    expandedToggle?.getAttribute('aria-expanded') === 'true',
+    expandedToggle?.getAttribute('aria-expanded'))
   live.dispose()
 }
 {
@@ -714,17 +765,58 @@ console.log('\nthe fallback entry and focus return')
   parts.dom.window.setTimeout = (callback, ms, ...args) => realSetTimeout(callback, ms === 5000 ? 20 : ms, ...args)
   const live = apply(parts.dom)
   await new Promise((resolve) => { setTimeout(resolve, 100) })
-  const entry = parts.dom.window.document.querySelector('[data-wsl-fallback-entry]')
-  check('a missing anchor produces the visible fallback entry', entry !== null,
+  const container = parts.dom.window.document.querySelector('[data-wsl-fallback-entry-container]')
+  const open = parts.dom.window.document.querySelector('[data-wsl-fallback-entry]')
+  check('a missing anchor produces the visible fallback entry', container !== null && open !== null,
     parts.dom.window.document.body.textContent?.slice(0, 120))
-  entry?.querySelectorAll('button')[0]?.click()
+  check('the fallback entry is a button that advertises the dialog',
+    open?.tagName === 'BUTTON' && open?.getAttribute('aria-haspopup') === 'dialog')
+  open?.click()
   await settle()
   check('the fallback entry opens the picker',
     parts.dom.window.document.querySelector('[role="dialog"]') !== null)
-  entry?.querySelectorAll('button')[1]?.click()
+  parts.dom.window.document.dispatchEvent(new parts.dom.window.KeyboardEvent('keydown', { key: 'Escape' }))
+  await settle()
+  check('closing a fallback-opened dialog returns focus to the fallback button',
+    parts.dom.window.document.activeElement === open,
+    parts.dom.window.document.activeElement?.tagName)
+  open?.click()
+  await settle()
+  parts.dom.window.document.querySelector('[data-wsl-fallback-dismiss]')?.click()
   check('the fallback entry can be dismissed',
-    parts.dom.window.document.querySelector('[data-wsl-fallback-entry]') === null)
+    parts.dom.window.document.querySelector('[data-wsl-fallback-entry-container]') === null)
   live.dispose()
+}
+{
+  // The real anchor appearing later wins over the failure-path entry.
+  const parts = fixture()
+  parts.trigger.remove()
+  layout(parts, 344, 60)
+  const realSetTimeout = parts.dom.window.setTimeout
+  parts.dom.window.setTimeout = (callback, ms, ...args) => realSetTimeout(callback, ms === 5000 ? 20 : ms, ...args)
+  const live = apply(parts.dom)
+  await new Promise((resolve) => { setTimeout(resolve, 100) })
+  check('the fallback is up before the anchor returns',
+    parts.dom.window.document.querySelector('[data-wsl-fallback-entry-container]') !== null)
+  parts.row.append(parts.trigger)
+  await settle()
+  check('the fallback leaves when the real anchor appears',
+    parts.dom.window.document.querySelector('[data-wsl-fallback-entry-container]') === null)
+  live.dispose()
+}
+{
+  // Disposing before the grace expires must cancel the timer, not just hide the
+  // node: a fired timer would append a fallback after the plugin is gone.
+  const parts = fixture()
+  parts.trigger.remove()
+  layout(parts, 344, 60)
+  const realSetTimeout = parts.dom.window.setTimeout
+  parts.dom.window.setTimeout = (callback, ms, ...args) => realSetTimeout(callback, ms === 5000 ? 20 : ms, ...args)
+  const live = apply(parts.dom)
+  live.dispose()
+  await new Promise((resolve) => { setTimeout(resolve, 100) })
+  check('dispose cancels the fallback timer',
+    parts.dom.window.document.querySelector('[data-wsl-fallback-entry-container]') === null)
 }
 {
   const parts = fixture()

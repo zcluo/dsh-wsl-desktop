@@ -730,10 +730,18 @@ console.log('\nhost contract (bootstrap)')
       bootstrap.capabilities?.status === 'ok'
       && bootstrap.capabilities?.features?.['preset-generation'] === 'ok',
       bootstrap.capabilities)
-    const pinned = ['wsl-not-available', 'distro-unreachable', 'user-unknown', 'path-not-found', 'preset-not-ready', 'too-busy', 'internal']
+    const pinned = ['wsl-not-available', 'distro-unreachable', 'user-unknown', 'path-not-found', 'path-not-directory', 'path-denied', 'preset-not-ready', 'too-busy', 'internal']
     check('the catalog carries the pinned browser codes',
       pinned.every((code) => bootstrap.catalog?.codes?.[code] !== undefined),
       pinned.filter((code) => bootstrap.catalog?.codes?.[code] === undefined))
+    for (const feature of ['terminal', 'search']) {
+      const status = bootstrap.capabilities?.features?.[feature]
+      if (status !== 'ok') {
+        // Browser-scope features do not block the picker; say so without failing
+        // the gate, exactly as the capability matrix specifies.
+        console.warn(`WARN  browser-scope feature ${feature} is ${String(status)} — the picker still works; check the browser-side symbol if the tool is missing.`)
+      }
+    }
     check('the catalog carries the doctor vocabulary',
       Array.isArray(bootstrap.catalog?.checks) && bootstrap.catalog.checks.length === 7
       && bootstrap.catalog?.checkRemedies !== null && typeof bootstrap.catalog?.checkRemedies === 'object',

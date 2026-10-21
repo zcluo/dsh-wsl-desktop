@@ -143,6 +143,34 @@ check('every feature carries its remedy code',
   Object.values(FEATURES).every((feature) => feature.remedyCode === 'host-capability-missing'))
 check('every host import names a module and an export',
   HOST_IMPORTS.every((entry) => typeof entry.module === 'string' && typeof entry.export === 'string'))
+{
+  // The manifest is useful only if it is the WHOLE set: a new host package
+  // imported by lib/ must red until it is declared, or the drift this layer
+  // exists to surface stays invisible.
+  const found = new Set()
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(full)
+        continue
+      }
+      if (!entry.name.endsWith('.js')) continue
+      const text = await readFile(full, 'utf8')
+      // Anchored to a line beginning so JSDoc `@param {import(...)}` type
+      // references do not count as runtime host imports.
+      for (const match of text.matchAll(/^\s*import\s+(?:[\s\S]*?)\s+from\s+['"](@deepseek-ai\/[^'"]+)['"]/gmu)) found.add(match[1])
+      for (const match of text.matchAll(/^\s*import\s+['"](@deepseek-ai\/[^'"]+)['"]/gmu)) found.add(match[1])
+      for (const match of text.matchAll(/^\s*(?:await\s+)?import\(\s*['"](@deepseek-ai\/[^'"]+)['"]\s*\)/gmu)) found.add(match[1])
+    }
+  }
+  await walk(join(pluginRoot, 'lib'))
+  const declared = new Set(HOST_IMPORTS.map((entry) => entry.module))
+  const undeclared = [...found].filter((module) => !declared.has(module)).sort()
+  check('every host package imported by lib is declared in HOST_IMPORTS',
+    undeclared.length === 0, undeclared)
+  check('the reverse scan actually found the host imports', found.size >= 5, [...found].sort())
+}
 check('every client symbol says whether it is required',
   CLIENT_SYMBOLS.every((symbol) => typeof symbol.required === 'boolean'),
   CLIENT_SYMBOLS.filter((symbol) => typeof symbol.required !== 'boolean').map((symbol) => symbol.id))

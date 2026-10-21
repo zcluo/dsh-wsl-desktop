@@ -15,6 +15,7 @@ Every failure the browser half sees carries a stable `code` and a whitelisted se
 | `path-invalid` | The input is not an absolute path inside the distribution | `path` | Enter a Linux path that starts with `/` |
 | `path-not-found` | The directory does not exist | `path` | Check the path, or pick it again from its parent |
 | `path-not-directory` | The path exists but is not a directory | `path` | Choose a directory as the workspace |
+| `path-denied` | The path exists but the current user cannot read it | `path` | Choose a readable directory, or fix its permissions |
 | `preset-not-ready` | The WSL preset was not generated or cannot be mounted | `preset` | Restart the desktop; run the self-check if it persists |
 | `host-capability-missing` | This desktop version lacks a host symbol the plugin needs | `feature` | Upgrade the desktop, or follow "Degradation" below |
 | `host-plugin-stale` | The browser half is newer than the host half | `method` | Restart the desktop so the host half loads |
@@ -39,7 +40,7 @@ After the operator confirms the distribution user, the browse phase shows an exp
 | `helper` | Installed and v1.2 | advisory (sudo is enough without it) |
 | `nnp` | setpriv supports `--no-new-privs` | advisory (restricted mode) |
 
-The answer also carries `ok` (no hard failure) and `restricted` (util-linux, runner and nnp all pass). When `restricted:false` the strip says "Restricted mode is unavailable; danger-full-access can still create." Answers are cached per distribution+user for 60 seconds; the batch has a 15-second budget, runner/NNP each race at 20 seconds, and the overall ceiling is 35 seconds.
+The answer also carries `ok` (no hard failure) and `restricted` (util-linux, runner and nnp all pass). When `restricted:false` the strip says "Restricted mode is unavailable; danger-full-access can still create." Answers are cached per distribution+user for 60 seconds; the batch has a 15-second budget, runner/NNP each race at 20 seconds, and the overall ceiling is 35 seconds. The fix command follows the `/etc/os-release` family (Debian/Ubuntu, Fedora/RHEL, Arch, Alpine, SUSE); an unrecognised family keeps the generic command instead of guessing.
 
 ## Degradation
 

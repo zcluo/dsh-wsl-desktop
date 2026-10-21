@@ -29,6 +29,7 @@
  */
 
 import { existsSync, rmSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import {
   DEV_TOKEN_HEADER as HOST_TOKEN_HEADER, MAX_BODY_BYTES, bodyAdmission, dispatchAdmission, methodAdmission, preflight, tokenMatches,
@@ -172,6 +173,16 @@ check('the token comparison is length- and value-checked',
   && tokenMatches('', 'abc', (l, r) => l.equals(r)) === false
   && tokenMatches(undefined, 'abc', (l, r) => l.equals(r)) === false)
 check('the host half uses the same header name', DEV_TOKEN_HEADER === HOST_TOKEN_HEADER)
+{
+  // The pure admission rows above take `browserReachable` as a premise. This
+  // pin reads the actual allowlist, so a method left out of it is red even when
+  // the admission function is correct.
+  const hostSource = await readFile(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const match = /BROWSER_METHODS\s*=\s*new Set\(\[([\s\S]*?)\]\)/.exec(hostSource)
+  check('the browser allowlist names bootstrap and health',
+    match !== null && match[1].includes("'bootstrap'") && match[1].includes("'health'"),
+    match?.[1]?.replace(/\s+/g, ' ').slice(0, 200))
+}
 
 // The probe path is UNIQUE TO THIS PROCESS. It was the fixed machine-global
 // `/tmp/dsh-wsl-fence-probe.txt`, so a CONCURRENT run's pre-removal could land between the POST
@@ -213,6 +224,19 @@ check('the route reports the default world an unnamed probe resolves to (the che
 // exist. The row above is RED in that run, so the fallback can never produce a green result — it
 // only keeps a failed probe-report a labelled FAIL instead of a stack trace.
 const defaultShareRoot = defaultDistroName === null ? shareRoot : `\\\\wsl.localhost\\${defaultDistroName}`
+
+console.log('\nhealth (live host)')
+const healthAnswer = await post({
+  method: 'health',
+  params: defaultDistroName === null ? {} : { distro: defaultDistroName },
+}, { token })
+check('health answers ok with a checklist',
+  healthAnswer.status === 200 && healthAnswer.json?.ok === true
+  && Array.isArray(healthAnswer.json.value?.checks),
+  `${healthAnswer.status} ${healthAnswer.text.slice(0, 160)}`)
+check('the health answer carries no process path or stderr',
+  !healthAnswer.text.includes('/usr/bin/') && !healthAnswer.text.includes('stderr'),
+  healthAnswer.text.slice(0, 120))
 const probeFile = `/tmp/dsh-wsl-fence-probe-${process.pid}.txt`
 rmSync(`${shareRoot}${probeFile}`, { force: true })
 const probeDefaultFile = `/tmp/dsh-wsl-fence-default-${process.pid}.txt`

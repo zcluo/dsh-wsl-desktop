@@ -9,8 +9,9 @@
  */
 import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
-import { checkLinuxPath, listLinuxDir, resolveDistroHome } from '../lib/wsl/world.js'
+import { checkLinuxPath, listDistros, listLinuxDir, resolveDistroHome } from '../lib/wsl/world.js'
 import { WslDomainError } from '../lib/wsl/errors.js'
+import { browserFailure, routeErrorFor } from '../lib/route-errors.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 300) })
 const { check } = checker
@@ -45,6 +46,19 @@ async function rejectionOf(call) {
   }
 }
 
+console.log('\ndiscovery failures')
+{
+  // The real producer: a non-existent wsl.exe. The route maps ENOENT during
+  // discovery to `wsl-not-available`; a wrapper that discards the spawn code
+  // makes the most common first-run state indistinguishable from a plugin bug.
+  const failure = await rejectionOf(() => listDistros({ wslPath: 'dsh-wsl-no-such-executable.exe' }))
+  check('a missing wsl.exe rejects', failure !== null)
+  check('its spawn code survives the discovery wrapper',
+    failure?.code === 'ENOENT' || failure?.cause?.code === 'ENOENT', failure?.code ?? failure?.cause?.code)
+  const wire = browserFailure(failure, { discovery: true })
+  check('the browser receives wsl-not-available, not internal', wire.code === 'wsl-not-available', wire)
+}
+
 console.log('\nlistLinuxDir')
 {
   const missing = await rejectionOf(() => listLinuxDir('d', '/gone', {
@@ -53,6 +67,22 @@ console.log('\nlistLinuxDir')
   check('a missing directory is a typed path-not-found',
     missing instanceof WslDomainError && missing.code === 'path-not-found',
     { type: missing?.name, code: missing?.code })
+}
+{
+  const notDirectory = await rejectionOf(() => listLinuxDir('d', '/etc/hostname', {
+    run: async () => outcome('__DSH_LIST_NOT_DIR__\n', 4, '', true),
+  }))
+  check('a file path is path-not-directory', notDirectory?.code === 'path-not-directory', notDirectory?.code)
+  const denied = await rejectionOf(() => listLinuxDir('d', '/root', {
+    run: async () => outcome('__DSH_LIST_DENIED__\n', 5, 'cd: Permission denied', true),
+  }))
+  check('a permission failure is path-denied, not path-not-found',
+    denied?.code === 'path-denied', denied?.code)
+  check('the host-side message keeps the denied stderr',
+    denied?.message.includes('Permission denied') === true, denied?.message)
+  const wire = browserFailure(routeErrorFor(denied, { path: '/root' }))
+  check('the browser receives path-denied with the caller path',
+    wire.code === 'path-denied' && wire.params.path === '/root', wire)
 }
 {
   const down = await rejectionOf(() => listLinuxDir('d', '/home', {

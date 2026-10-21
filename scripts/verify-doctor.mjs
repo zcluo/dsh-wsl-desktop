@@ -43,6 +43,7 @@ function harness(overrides = {}) {
     batchError = null,
   } = overrides
   let calls = 0
+  let helperCalls = 0
   const seen = []
   return {
     async run(options) {
@@ -53,8 +54,12 @@ function harness(overrides = {}) {
     },
     runnerProbe: async () => runner,
     nnpProbe: async () => nnp,
-    helperProbe: async () => helper,
+    helperProbe: async () => {
+      helperCalls += 1
+      return helper
+    },
     calls: () => calls,
+    helperCalls: () => helperCalls,
     seen: () => seen,
   }
 }
@@ -153,6 +158,57 @@ console.log('\ncache')
   check('after the TTL the doctor measures again',
     h.calls() === 2 && third.cached === false, { calls: h.calls(), cached: third.cached })
 }
+{
+  clearHealthCache()
+  const h = harness()
+  await healthFor({ distro: 'd', wslPath: 'C:\\a\\wsl.exe', ...h, now: () => 1 })
+  await healthFor({ distro: 'd', wslPath: 'C:\\a\\wsl.exe', ...h, now: () => 2 })
+  check('the same configured world is cached', h.calls() === 1, h.calls())
+  await healthFor({ distro: 'd', wslPath: 'C:\\b\\wsl.exe', ...h, now: () => 3 })
+  check('a different configured wsl.exe is a different cache entry', h.calls() === 2, h.calls())
+}
+{
+  clearHealthCache()
+  const h = harness()
+  for (let index = 0; index < 40; index += 1) {
+    await healthFor({ distro: 'd', username: `u${index}`, ...h, now: () => 10_000 })
+  }
+  const before = h.calls()
+  await healthFor({ distro: 'd', username: 'u0', ...h, now: () => 10_000 })
+  check('the health cache is bounded', h.calls() > before, { before, after: h.calls() })
+}
+
+{
+  clearHealthCache()
+  const h = harness()
+  const [first, second] = await Promise.all([
+    healthFor({ distro: 'd', ...h, now: () => 20_000 }),
+    healthFor({ distro: 'd', ...h, now: () => 20_000 }),
+  ])
+  check('two concurrent calls share one doctor run', h.calls() === 1, h.calls())
+  check('and they receive the same measured answer',
+    first.checks.length === second.checks.length && second.cached !== true,
+    { first: first.checks.length, second: second.checks.length })
+}
+{
+  clearHealthCache()
+  let attempts = 0
+  const result = await healthFor({
+    distro: 'd',
+    run: async () => {
+      attempts += 1
+      if (attempts === 1) return { exitCode: null, timedOut: true, stdout: '', stderr: '' }
+      return { exitCode: 0, stdout: BATCH_OK, stderr: '' }
+    },
+    runnerProbe: async () => 'helper',
+    nnpProbe: async () => true,
+    helperProbe: async () => 'dsh-wsl-confine v1.2',
+    now: () => 30_000,
+  })
+  check('a timed-out batch is retried once',
+    attempts === 2 && result.checks.find((check) => check.id === 'bash')?.status === 'pass',
+    { attempts, bash: result.checks.find((check) => check.id === 'bash') })
+}
 
 console.log('\nconfigured wsl.exe path')
 {
@@ -172,6 +228,43 @@ console.log('\nconfigured wsl.exe path')
   })
   check('every probe the doctor issues carries the configured wsl.exe path',
     h.seen().every((value) => value === 'C:\\custom\\wsl.exe'), h.seen())
+}
+
+console.log('\nhelper probe gating')
+{
+  clearHealthCache()
+  const h = harness({ runner: 'sudo-unshare', helper: 'dsh-wsl-confine v1.2' })
+  const result = await healthFor({ distro: 'd', ...h, now: () => 4_000 })
+  const helper = result.checks.find((check) => check.id === 'helper')
+  check('a non-helper runner does not execute the helper probe', h.helperCalls() === 0, h.helperCalls())
+  check('the helper row is the unmeasured advisory, not a version claim',
+    helper?.status === 'warn' && helper.detail.includes('not selected'), helper)
+}
+
+console.log('\nremedy families')
+{
+  clearHealthCache()
+  const fedoraBatch = 'bash\t/bin/bash\npython3\t/usr/bin/python3\nunshare\t/usr/bin/unshare\nsetpriv\t/usr/bin/setpriv\nfindmnt\t/usr/bin/findmnt\nmount\t/usr/bin/mount\ngetent\t/usr/bin/getent\npython3-version\tPython 3.11.2\nos-id\tfedora\nos-like\trhel fedora\n'
+  const fedora = await healthFor({ distro: 'd', ...harness({ batch: fedoraBatch }), now: () => 5_000 })
+  const pythonFedora = fedora.checks.find((check) => check.id === 'python3')
+  check('the answer names the measured family', fedora.family === 'fedora', fedora.family)
+  check('a Fedora remedy selects dnf, not apt-get',
+    pythonFedora?.remedy?.value.includes('dnf') === true, pythonFedora?.remedy?.value)
+}
+{
+  clearHealthCache()
+  const debianBatch = 'bash\t/bin/bash\npython3\t/usr/bin/python3\nunshare\t/usr/bin/unshare\nsetpriv\t/usr/bin/setpriv\nfindmnt\t/usr/bin/findmnt\nmount\t/usr/bin/mount\ngetent\t/usr/bin/getent\npython3-version\tPython 3.11.2\nos-id\tdebian\nos-like\tdebian\n'
+  const debian = await healthFor({ distro: 'd', ...harness({ batch: debianBatch }), now: () => 6_000 })
+  const pythonDebian = debian.checks.find((check) => check.id === 'python3')
+  check('a Debian remedy selects apt-get',
+    debian.family === 'debian' && pythonDebian?.remedy?.value.includes('apt-get') === true,
+    pythonDebian?.remedy?.value)
+}
+{
+  clearHealthCache()
+  const unknown = await healthFor({ distro: 'd', ...harness(), now: () => 7_000 })
+  check('an os-release-less distro keeps the generic command, not a guess',
+    unknown.family === null && unknown.checks[0]?.remedy !== undefined, unknown.family)
 }
 
 console.log('\nlive row')

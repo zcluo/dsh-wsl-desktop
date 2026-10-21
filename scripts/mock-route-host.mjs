@@ -51,9 +51,17 @@ const {
 } = await import(pathToFileURL(join(root, 'lib/http-admission.js')).href)
 
 /** The browser-reachable namespace, mirrored from lib/index.js. */
-const BROWSER_METHODS = new Set(['listDistros', 'defaultDistro', 'listDir', 'checkPath', 'resolve', 'resolveHome', 'wslPresetFor'])
-/** Only the read-only method the fence probes call; the rest never run here. */
-const METHODS = { listDistros: async () => ['debian'] }
+const BROWSER_METHODS = new Set(['bootstrap', 'health', 'listDistros', 'defaultDistro', 'listDir', 'checkPath', 'resolve', 'resolveHome', 'wslPresetFor'])
+/** Only the read-only methods the fence probes call; the rest never run here. */
+const METHODS = {
+  listDistros: async () => ['debian'],
+  bootstrap: async () => ({
+    pluginVersion: '0.6.0',
+    catalog: { codes: {}, checks: [], checkLabels: {} },
+    capabilities: { status: 'ok', features: {}, missing: [] },
+  }),
+  health: async () => ({ distro: 'debian', checks: [] }),
+}
 
 /**
  * The harness fence, as connection.requestRejection returns it: 403 for an

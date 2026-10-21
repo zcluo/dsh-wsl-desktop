@@ -21,13 +21,14 @@ import {
 } from '../lib/protocol.js'
 import { WslRouteError, browserFailure, classifyRouteFailure, routeErrorFor } from '../lib/route-errors.js'
 import { WslDomainError } from '../lib/wsl/errors.js'
+import { assertDistro, assertLinuxPath, assertUser } from '../lib/validate.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 300) })
 const { check } = checker
 
 const CODES = [
   'wsl-not-available', 'distro-unknown', 'distro-unreachable', 'user-unknown',
-  'path-invalid', 'path-not-found', 'path-not-directory', 'preset-not-ready',
+  'path-invalid', 'path-not-found', 'path-not-directory', 'path-denied', 'preset-not-ready',
   'host-capability-missing', 'host-plugin-stale', 'too-busy', 'internal',
   'transport', 'catalog-unavailable',
 ]
@@ -129,6 +130,8 @@ check('a typed path error maps to path-not-found',
   classifyRouteFailure(new WslDomainError('path-not-found', 'gone')).code === 'path-not-found')
 check('a typed directory error maps to path-not-directory',
   classifyRouteFailure(new WslDomainError('path-not-directory', 'file')).code === 'path-not-directory')
+check('a typed permission error maps to path-denied',
+  classifyRouteFailure(new WslDomainError('path-denied', 'denied')).code === 'path-denied')
 check('a typed unreachable error maps to distro-unreachable',
   classifyRouteFailure(new WslDomainError('distro-unreachable', 'down')).code === 'distro-unreachable')
 {
@@ -162,6 +165,34 @@ console.log('\ndomain-to-wire mapping')
     down.code === 'distro-unreachable' && down.params.distro === 'debian', down)
   const passthrough = new Error('boom')
   check('a non-domain error is passed through unchanged', routeErrorFor(passthrough) === passthrough)
+}
+
+console.log('\nroute input validation')
+{
+  const failureOf = (call) => {
+    try {
+      call()
+      return null
+    } catch (error) {
+      return error
+    }
+  }
+  check('a traversal distro is distro-unknown',
+    failureOf(() => assertDistro('../debian'))?.code === 'distro-unknown')
+  check('a relative path is path-invalid',
+    failureOf(() => assertLinuxPath('home/me'))?.code === 'path-invalid')
+  check('a control-character path is path-invalid',
+    failureOf(() => assertLinuxPath('/tmp/\u0001bad'))?.code === 'path-invalid')
+  check('a backslash path is path-invalid',
+    failureOf(() => assertLinuxPath('/home\\me'))?.code === 'path-invalid')
+  check('a space in the user is user-unknown',
+    failureOf(() => assertUser('bad user'))?.code === 'user-unknown')
+  check('a valid triple passes',
+    assertDistro('debian') === 'debian'
+    && assertLinuxPath('/home/me') === '/home/me'
+    && assertUser('me') === 'me' && assertUser(undefined) === undefined)
+  const wire = browserFailure(failureOf(() => assertLinuxPath('/tmp/\u0001bad')))
+  check('the invalid path never reaches the browser as internal', wire.code === 'path-invalid', wire)
 }
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)

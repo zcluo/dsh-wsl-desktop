@@ -15,6 +15,7 @@
 | `path-invalid` | 输入不是发行版内的绝对路径 | `path` | 输入以 `/` 开头的 Linux 路径 |
 | `path-not-found` | 目录不存在 | `path` | 检查路径，或从上级目录重新选择 |
 | `path-not-directory` | 路径存在但不是目录 | `path` | 选择一个目录作为工作区 |
+| `path-denied` | 路径存在，但当前用户没有读取权限 | `path` | 换一个有权限的目录，或调整该目录的权限 |
 | `preset-not-ready` | WSL 预设尚未生成或无法挂载 | `preset` | 重启桌面；仍失败时运行一次自检 |
 | `host-capability-missing` | 当前桌面版本缺少插件依赖的宿主符号 | `feature` | 升级桌面；或按「降级」一节处理 |
 | `host-plugin-stale` | 浏览器半边比宿主半边新 | `method` | 重启桌面，让宿主半边加载 |
@@ -39,7 +40,7 @@
 | `helper` | 已安装且版本为 v1.2 | 建议（缺失但 sudo 可用时仍可运行） |
 | `nnp` | setpriv 支持 `--no-new-privs` | 建议（受限模式依赖） |
 
-返回里另有 `ok`（没有硬失败）与 `restricted`（util-linux、runner、nnp 三项都通过）。`restricted:false` 时界面会明说「受限模式不可用；danger-full-access 仍可创建」。结果按发行版+用户缓存 60 秒；批处理预算 15 秒，runner/NNP 各自 20 秒 race，整体 35 秒上限。
+返回里另有 `ok`（没有硬失败）与 `restricted`（util-linux、runner、nnp 三项都通过）。`restricted:false` 时界面会明说「受限模式不可用；danger-full-access 仍可创建」。结果按发行版+用户缓存 60 秒；批处理预算 15 秒，runner/NNP 各自 20 秒 race，整体 35 秒上限。修复命令按 `/etc/os-release` 的家族选择（Debian/Ubuntu、Fedora/RHEL、Arch、Alpine、SUSE）；识别不出时显示通用命令，不猜。
 
 ## 降级
 
