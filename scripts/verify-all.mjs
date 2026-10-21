@@ -103,6 +103,8 @@ const STANDALONE = [
   'verify-all-skip.mjs',
   'verify-watch.mjs',
   'verify-search.mjs',
+  'verify-protocol.mjs',
+  'verify-world-errors.mjs',
 ]
 
 /** Suites that require the installed plugin behind a running Desktop host. */

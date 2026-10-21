@@ -328,6 +328,9 @@ function copySuiteTree(prefix) {
     ['scripts', 'detail.mjs'],
     ['scripts', 'source-text.mjs'],
     ['lib/wsl', 'world.js'],
+    // world.js raises typed failures; a copy without the module fails at MODULE LOAD,
+    // before the first SKIP line — the same omission class as confined-argv below.
+    ['lib/wsl', 'errors.js'],
     ['lib/wsl', 'confinement.js'],
     ['lib/wsl', 'paths.js'],
     // The suite's terminal-argv rows import this module, so a copy without it fails to
