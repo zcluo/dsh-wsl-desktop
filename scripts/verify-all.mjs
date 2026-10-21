@@ -106,6 +106,7 @@ const STANDALONE = [
   'verify-protocol.mjs',
   'verify-world-errors.mjs',
   'verify-host-contract.mjs',
+  'verify-doctor.mjs',
 ]
 
 /** Suites that require the installed plugin behind a running Desktop host. */
@@ -225,6 +226,13 @@ const DECLARED_SKIPS = [
     suite: 'verify-host-contract.mjs',
     branch: ['!existsSync(deps)'],
     precondition: 'the dependency directory the suite resolves (DSH_WSL_DEPS when it names one, otherwise the plugin root node_modules) does not exist, so the host packages and their exports cannot be imported here',
+  },
+  {
+    // verify-doctor.mjs — the live row skips when DSH_WSL_DISTRO is unset and
+    // defaultDistro() answers nothing, so the offline assembly is all that can run.
+    suite: 'verify-doctor.mjs',
+    branch: ['live === undefined'],
+    precondition: 'no default distribution is resolvable for the live health row (DSH_WSL_DISTRO is unset and the machine reports no default distribution), so only the offline assembly runs',
   },
 ]
 

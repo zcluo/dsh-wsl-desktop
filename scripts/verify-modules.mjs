@@ -41,7 +41,7 @@ const HOST_HALF_CHECKS = [
 
 
 /** Modules that import nothing from the harness, so the source tree can load them. */
-const PURE = ['lib/protocol.js', 'lib/route-errors.js', 'lib/wsl/errors.js', 'lib/host/contract.js', 'lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/wsl/search.js', 'lib/http-admission.js']
+const PURE = ['lib/protocol.js', 'lib/route-errors.js', 'lib/wsl/errors.js', 'lib/host/contract.js', 'lib/wsl/doctor.js', 'lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/wsl/search.js', 'lib/http-admission.js']
 
 /** Every module the host half loads, including the ones that need the host's resolution. */
 const ALL = [
@@ -50,6 +50,7 @@ const ALL = [
   'lib/route-errors.js',
   'lib/host/contract.js',
   'lib/wsl/errors.js',
+  'lib/wsl/doctor.js',
   'lib/wsl/paths.js',
   'lib/wsl/preset.js',
   'lib/wsl/fence.js',

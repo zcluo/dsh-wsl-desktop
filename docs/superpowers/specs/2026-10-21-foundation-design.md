@@ -352,12 +352,11 @@ for c in bash python3 unshare setpriv findmnt mount getent; do
   printf '%s\t%s\n' "$c" "$(command -v "$c" 2>/dev/null || true)"
 done
 printf 'python3-version\t%s\n' "$(python3 -V 2>&1 || true)"
-printf 'nnp\t%s\n' "$(setpriv --help 2>&1 | grep -c -- '--no-new-privs' || true)"
 ```
 
 - 输出按 `key<TAB>value` 解析；未知 key 忽略；缺 key 记 `unknown`；格式损坏 → `internal` + `ref`。
 - `command -v` 的路径只用于判断非空，不返回。
-- `nnp` 为 `1` 表示 setpriv 帮助里出现该标志；`0` 表示不支持；setpriv 缺失 → `unknown`。
+- NNP 不在这条批处理里重复测量：它由 `detectNoNewPrivs`（执行路径自己的缓存探针）回答，一个事实只有一个 owner。
 - 冷启动超时重试一次；批处理本身的预算 15s。
 
 ### 8.3 复用缓存探针
