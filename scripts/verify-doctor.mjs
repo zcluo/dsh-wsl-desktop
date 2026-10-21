@@ -43,9 +43,11 @@ function harness(overrides = {}) {
     batchError = null,
   } = overrides
   let calls = 0
+  const seen = []
   return {
-    async run() {
+    async run(options) {
       calls += 1
+      seen.push(options.wslPath)
       if (batchError !== null) throw batchError
       return { exitCode: 0, stdout: batch, stderr: '' }
     },
@@ -53,6 +55,7 @@ function harness(overrides = {}) {
     nnpProbe: async () => nnp,
     helperProbe: async () => helper,
     calls: () => calls,
+    seen: () => seen,
   }
 }
 
@@ -149,6 +152,26 @@ console.log('\ncache')
   const third = await healthFor({ distro: 'd', ...h, now })
   check('after the TTL the doctor measures again',
     h.calls() === 2 && third.cached === false, { calls: h.calls(), cached: third.cached })
+}
+
+console.log('\nconfigured wsl.exe path')
+{
+  clearHealthCache()
+  const h = harness()
+  await healthFor({
+    distro: 'd',
+    wslPath: 'C:\\custom\\wsl.exe',
+    ...h,
+    runnerProbe: async (options) => {
+      await options.run({ distro: 'd', command: 'probe', linuxCwd: '/' })
+      return 'helper'
+    },
+    nnpProbe: async () => true,
+    helperProbe: async () => 'dsh-wsl-confine v1.2',
+    now: () => 3_000,
+  })
+  check('every probe the doctor issues carries the configured wsl.exe path',
+    h.seen().every((value) => value === 'C:\\custom\\wsl.exe'), h.seen())
 }
 
 console.log('\nlive row')
