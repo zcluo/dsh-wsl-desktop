@@ -165,11 +165,14 @@ function workspaceStore(state) {
  * @param {{ items: object[] } | undefined} [workspaceState] - the mutable snapshot
  * the `workspaces.list` stub serves; omitted by every case written before
  * workspace rows existed, so those keep exercising the context they always did.
+ * @param {((url: string, init: object) => Promise<object>) | undefined} [fetchImpl] - the
+ * route stub a click-driven case needs; jsdom carries no fetch of its own.
  * @returns {{ button: object|null, dispose: () => void, mutations: () => number }} the live plugin.
  */
-function apply(dom, workspaceState) {
+function apply(dom, workspaceState, fetchImpl) {
   let registration = null
   dom.window.__ModuleLoader__ = { load: (entry) => { registration = entry } }
+  if (fetchImpl !== undefined) dom.window.fetch = fetchImpl
   dom.window.eval(source)
   const module = registration.factory()
   const disposers = []
@@ -185,7 +188,11 @@ function apply(dom, workspaceState) {
       // exercising the context they always did.
       ...(workspaceState === undefined ? {} : { list: workspaceStore(workspaceState) }),
     },
-    uiWorkspace: { startSession: () => {} },
+    uiWorkspace: { startSession: () => {}, openSession: () => {} },
+    // The capability probe reads these paths; a case that expects the picker to
+    // be healthy has to provide them, exactly like the injected services.
+    remote: { session: { create: async () => ({ ok: true, value: { sessionId: 's' } }) } },
+    sessions: { create: async () => ({ sessionId: 's' }) },
   })
   let mutations = 0
   const counter = new dom.window.MutationObserver((records) => { mutations += records.length })
@@ -432,6 +439,307 @@ console.log('\nWSL workspace rows')
   check('dispose restores every swapped row',
     doc.querySelector('svg[data-wsl-cloud]') === null && shipped('legacy')?.style.display === '',
     `clouds=${doc.querySelectorAll('svg[data-wsl-cloud]').length}`)
+}
+
+console.log('\ncatalog rendering and the degraded gate')
+
+/** The catalog a version-0.6 host serves. */
+function catalogFixture() {
+  return {
+    codes: {
+      'distro-unreachable': {
+        zh: '发行版不可达。',
+        en: 'The distribution is unreachable.',
+        remedy: { kind: 'text', zh: '启动它。', en: 'Start it.' },
+        doc: 'DIAGNOSTICS.md#distro-unreachable',
+      },
+      'host-capability-missing': {
+        zh: '缺少宿主能力。',
+        en: 'A host capability is missing.',
+        remedy: { kind: 'link', href: 'https://example.test/docs' },
+        doc: 'DIAGNOSTICS.md#host-capability-missing',
+      },
+      internal: {
+        zh: '内部错误。',
+        en: 'Internal error.',
+        remedy: { kind: 'text', zh: '报告它。', en: 'Report it.' },
+        doc: 'DIAGNOSTICS.md#internal',
+      },
+    },
+    features: ['picker', 'preset-generation', 'session-create', 'terminal', 'search', 'selftest'],
+    featureLabels: {
+      picker: { zh: '工作区选择', en: 'Workspace picker' },
+      'preset-generation': { zh: '会话预设', en: 'Session presets' },
+      'session-create': { zh: '会话创建', en: 'Session creation' },
+    },
+    checks: [],
+    checkLabels: {},
+    checkRemedies: {},
+    clientSymbols: [
+      { id: 'workspaces.list', feature: 'picker', path: ['workspaces', 'list', 'getSnapshot'], required: true },
+      { id: 'workspaces.create', feature: 'picker', path: ['workspaces', 'create'], required: true },
+      { id: 'uiWorkspace.openSession', feature: 'picker', path: ['uiWorkspace', 'openSession'], required: true },
+      { id: 'remote.session.create', feature: 'session-create', path: ['remote', 'session', 'create'], required: true },
+      { id: 'sessions.create', feature: 'session-create', path: ['sessions', 'create'], required: false },
+    ],
+  }
+}
+
+/** A healthy capability answer. */
+function healthyCapabilities() {
+  return {
+    status: 'ok',
+    features: {
+      picker: 'unknown',
+      'preset-generation': 'ok',
+      'session-create': 'unknown',
+      terminal: 'ok',
+      search: 'ok',
+      selftest: 'ok',
+    },
+    missing: [],
+  }
+}
+
+/** A healthy bootstrap envelope. */
+function healthyBootstrap() {
+  return {
+    ok: true,
+    value: {
+      pluginVersion: '0.6.0',
+      catalog: catalogFixture(),
+      capabilities: healthyCapabilities(),
+    },
+  }
+}
+
+/**
+ * A route stub that records every method it was asked for.
+ * @param {Record<string, (body: object) => object>} handlers - one envelope per method.
+ * @returns {Function} the fetch stub, with a `calls` array.
+ */
+function routeStub(handlers) {
+  const calls = []
+  const stub = async (url, init) => {
+    const body = JSON.parse(init.body)
+    calls.push(body.method)
+    const handler = handlers[body.method]
+    if (handler === undefined) {
+      return { status: 404, json: async () => ({ ok: false, code: 'unknown-method' }) }
+    }
+    return { status: 200, json: async () => handler(body) }
+  }
+  stub.calls = calls
+  return stub
+}
+
+{
+  // The host says preset-generation is degraded; the browser's own services are
+  // complete. The merged answer must stop at the gate and never ask for distros.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const state = { items: [] }
+  const stub = routeStub({
+    bootstrap: () => ({
+      ok: true,
+      value: {
+        pluginVersion: '0.6.0',
+        catalog: catalogFixture(),
+        capabilities: {
+          status: 'degraded',
+          features: { ...healthyCapabilities().features, 'preset-generation': 'degraded' },
+          missing: [{ id: 'agentPresets.readDocument', feature: 'preset-generation' }],
+        },
+      },
+    }),
+  })
+  const live = apply(parts.dom, state, stub)
+  await settle()
+  live.button.click()
+  await settle()
+  const panel = parts.dom.window.document.querySelector('[data-wsl-degraded]')
+  check('a degraded picker renders the degraded card', panel !== null,
+    parts.dom.window.document.body.textContent?.slice(0, 120))
+  check('the degraded card names the missing feature',
+    panel?.textContent.includes('Session presets') === true,
+    panel?.textContent?.slice(0, 160))
+  check('a degraded picker asks for no distribution',
+    !stub.calls.includes('listDistros'), stub.calls)
+  live.dispose()
+}
+{
+  // No route at all: bootstrap fails twice, discovery fails too, and the dialog
+  // must still open with a code-carrying error instead of a stack.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const failing = async () => { throw new Error('the route is down') }
+  const live = apply(parts.dom, { items: [] }, failing)
+  await settle()
+  live.button.click()
+  await new Promise((resolve) => { setTimeout(resolve, 800) })
+  const error = parts.dom.window.document.querySelector('[data-wsl-error]')
+  check('a failed bootstrap still opens the dialog with a coded error', error !== null,
+    parts.dom.window.document.body.textContent?.slice(0, 160))
+  check('the failure is the transport code', error?.getAttribute('data-wsl-error') === 'transport',
+    error?.getAttribute('data-wsl-error'))
+  check('the browser shows the fallback copy, not the host stack',
+    error?.textContent.includes('route could not be reached') === true
+    && error?.textContent.includes('the route is down') === false,
+    error?.textContent?.slice(0, 160))
+  live.dispose()
+}
+{
+  // A later discovery failure carries a catalog code; the raw `error` field the
+  // developer route may include must never reach the page.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub({
+    bootstrap: () => ({
+      ok: true,
+      value: { pluginVersion: '0.6.0', catalog: catalogFixture(), capabilities: healthyCapabilities() },
+    }),
+    listDistros: () => ({
+      ok: false,
+      code: 'distro-unreachable',
+      params: { distro: 'debian' },
+      error: 'wsl.exe stderr SECRET',
+    }),
+  })
+  const live = apply(parts.dom, { items: [] }, stub)
+  await settle()
+  live.button.click()
+  await settle()
+  const error = parts.dom.window.document.querySelector('[data-wsl-error="distro-unreachable"]')
+  check('a catalog code is rendered with its own copy', error !== null,
+    parts.dom.window.document.body.textContent?.slice(0, 160))
+  check('the rendered failure is the catalog copy',
+    error?.textContent.includes('The distribution is unreachable.') === true,
+    error?.textContent?.slice(0, 160))
+  check('the raw host error never reaches the page',
+    error?.textContent.includes('SECRET') === false, error?.textContent?.slice(0, 160))
+  live.dispose()
+}
+
+console.log('\nthe advisory health strip')
+
+/**
+ * The handlers a browse-to-health case needs.
+ * @param {() => object} health - the health envelope.
+ * @returns {Record<string, Function>} the route handlers.
+ */
+function browseHandlers(health) {
+  return {
+    bootstrap: () => healthyBootstrap(),
+    listDistros: () => ({ ok: true, value: ['debian'] }),
+    defaultDistro: () => ({ ok: true, value: { distro: 'debian' } }),
+    resolveHome: () => ({ ok: true, value: { user: 'me', home: '/home/me' } }),
+    listDir: () => ({ ok: true, value: { path: '/home/me', parent: '/home', entries: [] } }),
+    health,
+  }
+}
+
+/** Walk the dialog to the browse phase. */
+async function reachBrowse(dom) {
+  await settle()
+  dom.window.document.querySelector('[data-wsl-desktop="workspace-trigger"]').click()
+  await settle()
+  const enter = dom.window.document.querySelector('[data-wsl-action="confirm-user"]')
+  enter?.click()
+  await settle()
+}
+
+{
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub(browseHandlers(() => ({
+    ok: true,
+    value: {
+      distro: 'debian',
+      user: 'me',
+      runner: 'helper',
+      ok: true,
+      restricted: true,
+      cached: false,
+      checks: [
+        { id: 'bash', status: 'pass' },
+        { id: 'python3', status: 'warn', detail: 'version unreadable or below 3.8' },
+      ],
+    },
+  })))
+  const live = apply(parts.dom, { items: [] }, stub)
+  await reachBrowse(parts.dom)
+  const strip = parts.dom.window.document.querySelector('[data-wsl-health]')
+  check('the browse phase renders the health strip', strip !== null,
+    parts.dom.window.document.body.textContent?.slice(0, 160))
+  check('the strip reports pass and advisory counts',
+    strip?.getAttribute('data-wsl-health') === '1,1,0', strip?.getAttribute('data-wsl-health'))
+  const create = parts.dom.window.document.querySelector('[data-wsl-action="create"]')
+  check('an advisory check does not disable creation', create !== null && create.disabled === false,
+    create?.disabled)
+  parts.dom.window.document.querySelector('[data-wsl-health-toggle]')?.click()
+  await settle()
+  const expanded = parts.dom.window.document.querySelector('[data-wsl-health]')
+  check('the strip expands to the measured rows',
+    expanded?.textContent.includes('version unreadable or below 3.8') === true,
+    expanded?.textContent?.slice(0, 200))
+  live.dispose()
+}
+{
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub(browseHandlers(() => ({
+    ok: false,
+    code: 'distro-unreachable',
+    params: { distro: 'debian' },
+  })))
+  const live = apply(parts.dom, { items: [] }, stub)
+  await reachBrowse(parts.dom)
+  const strip = parts.dom.window.document.querySelector('[data-wsl-health]')
+  check('a failed health call renders its coded error', strip?.getAttribute('data-wsl-health') === 'error',
+    strip?.getAttribute('data-wsl-health'))
+  const create = parts.dom.window.document.querySelector('[data-wsl-action="create"]')
+  check('a failed health call still leaves creation enabled', create !== null && create.disabled === false)
+  live.dispose()
+}
+
+console.log('\nthe fallback entry and focus return')
+{
+  // No anchor at all: the companion stands down, and the timed fallback is the
+  // only visible entry left. The 5s grace is shortened by replacing the window's
+  // timer, not by adding a production test hook.
+  const parts = fixture()
+  parts.trigger.remove()
+  layout(parts, 344, 60)
+  const realSetTimeout = parts.dom.window.setTimeout
+  parts.dom.window.setTimeout = (callback, ms, ...args) => realSetTimeout(callback, ms === 5000 ? 20 : ms, ...args)
+  const live = apply(parts.dom)
+  await new Promise((resolve) => { setTimeout(resolve, 100) })
+  const entry = parts.dom.window.document.querySelector('[data-wsl-fallback-entry]')
+  check('a missing anchor produces the visible fallback entry', entry !== null,
+    parts.dom.window.document.body.textContent?.slice(0, 120))
+  entry?.querySelectorAll('button')[0]?.click()
+  await settle()
+  check('the fallback entry opens the picker',
+    parts.dom.window.document.querySelector('[role="dialog"]') !== null)
+  entry?.querySelectorAll('button')[1]?.click()
+  check('the fallback entry can be dismissed',
+    parts.dom.window.document.querySelector('[data-wsl-fallback-entry]') === null)
+  live.dispose()
+}
+{
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub(browseHandlers(() => ({ ok: true, value: { distro: 'debian', checks: [], ok: true, restricted: true } })))
+  const live = apply(parts.dom, { items: [] }, stub)
+  await settle()
+  live.button.click()
+  await settle()
+  parts.dom.window.document.dispatchEvent(new parts.dom.window.KeyboardEvent('keydown', { key: 'Escape' }))
+  await settle()
+  check('closing the dialog returns focus to the W button',
+    parts.dom.window.document.activeElement === live.button,
+    parts.dom.window.document.activeElement?.tagName)
+  live.dispose()
 }
 
 console.log(`\n${checker.failures === 0 ? `${checker.checks} check(s) passed` : `${checker.failures} check(s) failed`}`)

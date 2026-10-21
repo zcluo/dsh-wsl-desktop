@@ -251,6 +251,18 @@ check('commits the path the operator typed, not the last navigated one',
   && picker.includes("call('checkPath', { distro: state.distro, path: target })"))
 check('refuses to close while a commit is in flight', picker.includes('if (state.closed || state.working) return'))
 check('re-checks cancellation after the create returns', picker.includes('if (state.closed) return'))
+check('the picker bootstraps the catalog before discovering',
+  source.includes("call('bootstrap'") && source.includes('bootstrapOnce('))
+check('a host failure renders from its code, never the raw message',
+  source.includes('failureOf(') && source.includes('failure.code') && !source.includes('state.error = message('))
+check('a degraded picker is a rendered state, not a silent skip',
+  picker.includes("state.phase = 'degraded'") && source.includes('data-wsl-degraded'))
+check('a failure without a catalog falls back to built-in copy',
+  source.includes('FALLBACK_MESSAGES') && source.includes('renderFailureNode('))
+check('the browse phase renders the advisory health strip', source.includes('data-wsl-health'))
+check('a missing sidebar anchor has a visible fallback entry', source.includes('data-wsl-fallback-entry'))
+check('the W button advertises and tracks the dialog',
+  source.includes("aria-haspopup") && source.includes("aria-expanded"))
 
 // A skip is a check that did not run; reporting it as a pass would make the
 // suite's green meaningless exactly when the checkout is wrong. It gets its own

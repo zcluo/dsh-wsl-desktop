@@ -143,6 +143,9 @@ check('every feature carries its remedy code',
   Object.values(FEATURES).every((feature) => feature.remedyCode === 'host-capability-missing'))
 check('every host import names a module and an export',
   HOST_IMPORTS.every((entry) => typeof entry.module === 'string' && typeof entry.export === 'string'))
+check('every client symbol says whether it is required',
+  CLIENT_SYMBOLS.every((symbol) => typeof symbol.required === 'boolean'),
+  CLIENT_SYMBOLS.filter((symbol) => typeof symbol.required !== 'boolean').map((symbol) => symbol.id))
 
 console.log('\nusage: declared at both ends')
 for (const symbol of HOST_SYMBOLS) {
