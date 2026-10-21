@@ -124,6 +124,9 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) — 对 harness 上游的两项提案
 - [架构与流程图](docs/diagrams.md) — 可交互的架构、时序与生命周期图
 
+其中三份——发行版支持矩阵、上游 API 提案、架构与流程图索引——**只有中文版**，因为目前没有对应的
+英文文本。把它们翻成英文是一件独立的工作，不是改个文件名。
+
 ## 给维护者
 
 这一节是给要改这个仓库的人看的；只想用插件的话，上面已经够了。

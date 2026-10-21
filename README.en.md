@@ -148,6 +148,10 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
 - [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) — the two proposals to the harness upstream
 - [Architecture and flow diagrams](docs/diagrams.md) — interactive architecture, sequence and lifecycle diagrams
 
+Three of the linked documents — the distro support matrix, the upstream proposals and the diagram
+index — are **Chinese-only**, because no English text for them exists. Translating them is a separate
+piece of work, not a rename.
+
 ## For maintainers
 
 This section is for people changing this repository; if you only want to use the plugin, the above is
