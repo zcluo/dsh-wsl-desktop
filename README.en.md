@@ -116,9 +116,9 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
   processes, output overflow, reclaiming them — is not bound by the file fence; that is a design
   decision, not an omission. See [Security and trust boundaries](SECURITY.md).
 - **The retained passwordless sudo grant can bypass the file fence.** The session user keeps the grant
-  the plugin itself needs to build the fence, so a confined command can re-invoke it. The two closing
-  paths (the helper and NO_NEW_PRIVS) and their real reachability are in
-  [Security and trust boundaries](SECURITY.md).
+  the plugin itself needs to build the fence, so a confined command can re-invoke it. There are two
+  closing paths — the helper, and NO_NEW_PRIVS, a kernel flag that stops a process from ever gaining
+  privileges — and their real reachability is in [Security and trust boundaries](SECURITY.md).
 - **File-change watching polls; it is not event-driven.** 9P is the share WSL uses to expose the
   distro's files to Windows, and `fs.watch` throws `EISDIR` on it. So the plugin polls on the host
   side: a directory checks its entry set every 300ms, a file gets a `stat` every 300ms. **A directory

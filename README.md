@@ -95,8 +95,8 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - **subprocess 这一面不设防。** 托管进程的终止、输出溢出与回收，都仍归宿主自己的 subprocess
   provider，不受文件围栏约束。这是设计取舍，不是遗漏。见 [安全与信任边界](SECURITY.md)。
 - **保留的免密 sudo 能绕过文件围栏。** 会话用户保留着插件建立围栏时自己要用的那份授权，所以被约束
-  的命令可以重新调用它。两条闭合路径（helper 与 NO_NEW_PRIVS）与它们的实际可达性见
-  [安全与信任边界](SECURITY.md)。
+  的命令可以重新调用它。两条闭合路径是 helper 与 NO_NEW_PRIVS。后者是内核标志，让进程再也拿不到
+  提权。两条路径的实际可达性见 [安全与信任边界](SECURITY.md)。
 - **文件变更监听是轮询的，不是事件驱动的。** 9P 是 WSL 把发行版文件暴露给 Windows 的那套共享，
   在它上面 `fs.watch` 会抛 `EISDIR`。所以插件改为在宿主侧轮询：目录每 300ms 看一次条目集合，
   文件每 300ms `stat` 一次。**目录目标只对条目变化生效**——新增、删除、改名可见，目录里某个文件的
