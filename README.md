@@ -88,8 +88,8 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
   [终端（PTY 桥）](docs/PTY-BRIDGE.md)。
 - **文件围栏管的是模型，不是你。** GUI 的网页终端按设计**不受围栏约束**——你在终端面板里敲的命令
   和在发行版里直接开一个 shell 一样；受约束的是模型侧那条 `bash`。另外**终端这条路没有
-  PID namespace**，而一次性命令路径保留它。两条边界的完整说明见
-  [常驻 shell](docs/PERSISTENT-SHELL.md)。
+  PID namespace**：PID namespace 是让一组进程只看得见自己那棵进程树的 Linux 机制，而终端这条路
+  没有它，一次性命令路径则有。两条边界的完整说明见 [常驻 shell](docs/PERSISTENT-SHELL.md)。
 - **`/dev`、`/proc`、`/sys` 和 interop 在围栏之外。** 它们不是文件存储，所以插件把自我报告的
   `enforcement` 字段报成 `partial`（部分覆盖），而不是说成"已沙箱化"。
 - **subprocess 这一面不设防。** 托管进程的终止、输出溢出与回收，都仍归宿主自己的 subprocess

@@ -105,8 +105,9 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
   descriptors. How the bridge is driven is in [Terminal (PTY bridge)](docs/PTY-BRIDGE.md).
 - **The file fence governs the model, not you.** The GUI's web terminal is **unfenced by design** —
   what you type in the terminal panel is the same as opening a shell in the distro yourself; what is
-  confined is the model's `bash`. Also, **the terminal path has no PID namespace**, while the one-shot
-  command path keeps it. Both boundaries are written out in
+  confined is the model's `bash`. Also, **the terminal path has no PID namespace** — the Linux
+  mechanism that lets a group of processes see only themselves and not the rest of the system —
+  while the one-shot command path keeps it. Both boundaries are written out in
   [The persistent shell](docs/PERSISTENT-SHELL.md).
 - **`/dev`, `/proc`, `/sys` and interop are outside the fence.** They are not file storage, so the
   plugin reports its own `enforcement` field as `partial` (partial coverage) instead of calling it
