@@ -41,6 +41,8 @@ The `dsh-wsl-confine` helper script, `lib/wsl/dsh-wsl-confine.sh`, ships with th
 
 The `wsl-*` presets this plugin registers are held by the plugin's own disposer lifecycle, which is why uninstalling through the plugin manager withdraws them along with it and leaves no workspace pointing at a plugin that no longer exists (this used to be only the README's uninstall line).
 
+The presets are **registered at runtime rather than loaded from a directory**, which is the 0.1.7 floor's real reason: a host older than that has no runtime registration and explicitly rejects the plugin at activation. That is the same fact `SECURITY.md` records as a deployment precondition.
+
 ## Repository layout
 
 ```
