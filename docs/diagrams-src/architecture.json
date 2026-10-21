@@ -41,7 +41,7 @@
     ],
     "repository": {
       "url": "https://github.com/zcluo/dsh-wsl-desktop",
-      "revision": "6a56dba11f68bffedaad764e922f06d660bdc6e2"
+      "revision": "0e5d0730f015f6ac729f62a55eb9e7b7dc8b835c"
     }
   },
   "components": [
@@ -414,6 +414,14 @@
       "items": [
         "preset 在会话创建请求里命名，创建时组合",
         "isolate realm 隔离 shell/fs/subprocess/terminals/sandbox；故终端不碰宿主 ACL 运行器；宿主 provider 经 host-refs 捕获，只用于起 wsl.exe"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "两条接缝",
+      "items": [
+        "会话创建请求命名 WSL 预设，是唯一无竞态的绑定缝",
+        "fs 走 9P UNC 且过围栏；命令执行走 wsl.exe"
       ]
     }
   ]

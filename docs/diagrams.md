@@ -49,59 +49,41 @@ captures / sidecars`——**没有 `diagnostics`**，`visualReview` 是 `"pendin
 
 ## architecture 图的视觉状态
 
-最近一次**真实**的自动化浏览器评审（`architecture.html`，四个视口，明暗合计**六个状态**）结论是
-**`ok: false`，6 项 error**，全部是同一类：`viewer/chrome-stage-clearance`。报文逐字为
+**当前状态：`ok: true`，0 项 error**（真机自动化浏览器评审，`archify browser-check`，四个视口 × 明暗共六个状态，Edge 作为 Chromium）。这是本仓库第一次让这张图的视觉结论落绿，下面是它的来龙去脉。
+
+**它之前是红的，红了 6 项。** 同一张图在先前的评审里得到 **`ok: false` / 6 项 error**，全部是同一类：`viewer/chrome-stage-clearance`，报文逐字为
 
 ```
 Navigation Dock enters the protected SVG stage at 1440x900 (light).
 ```
 
-按视口各一条：1440×900（light）、1600×1000（light）、1920×1080（light）、2048×1320（light）、
-1440×900（dark）、2048×1320（dark）。前四个视口的 `dockStageGap` 实测 **-40.78125px**
-（`dockStageIntersectionArea` 11693.15283203125），2048×1320 的明暗两条为 **-30.78125px**
-（9034.77783203125）；要求是 `dockStageGap >= 0` 且交集面积为 0。
+按视口各一条：1440×900、1600×1000、1920×1080、2048×1320（light）以及 1440×900、2048×1320（dark）。前四个视口的 `dockStageGap` 实测 **-40.78125px**（`dockStageIntersectionArea` 11693.15283203125），2048×1320 的明暗两条为 **-30.78125px**（9034.77783203125）；要求是 `dockStageGap >= 0` 且交集面积为 0。
 
-**7 → 6 的来龙去脉**：同一轮评审在此之前先得到 **7 项 error**——上面 6 条 `chrome-stage-clearance`
-加上 **1 条 `viewer/projected-text-readability`**（1440×900 下最小的节点文字投影只有
-**5.864864864864865px**，低于 6px 下限；该文字是 realm 节点的 `context` 行
-`preset.js · shell/fs/subprocess 隔离`）。把 realm 标签收敛成五个 isolate key 的写法
-（`shell/fs/subproc/term/sandbox 隔离`）、并把字号从 **7px 提到 7.4px** 之后，四个视口的投影分别是
-1440×900 **6.2px**、1600×1000 **7.2266666666666675px**、1920×1080 **7.4px**、2048×1320 **7.4px**，
-**那一条不再出现**，于是 6 项、全部是导航坞与舞台的间距。这一项是**已修**，其余 6 项**未修**。
+**更早还有第 7 项，那项是另一个原因。** 同一轮评审在此之前先得到 **7 项**——上面 6 条加上 **1 条 `viewer/projected-text-readability`**：1440×900 下最小的节点文字投影只有 **5.864864864864865px**，低于 6px 下限（该文字是 realm 节点的 `context` 行）。把 realm 标签收敛成五个 isolate key 的写法、并把字号从 **7px 提到 7.4px** 之后，四个视口的投影变成 1440×900 **6.2px**、1600×1000 **7.2266666666666675px**、1920×1080 **7.4px**、2048×1320 **7.4px**，那一条消失。**这一项早已修掉。**
 
-所以本页的诚实状态是 **"outstanding, tool required"**，不是"passing"。
+**剩下 6 项怎么修的：换生成器，不是加 CSS。** 它们不是文案问题，是导航坞与舞台的几何预留，只能由 Archify 重新渲染。当前页面现在由 **archify 3.0.1** 产出（`@tt-a1i/archify-dsh@1.0.0` 里的 `skills/archify`，入口 `bin/archify.mjs`，不在 PATH 上），实测：
 
-五张图里只有 architecture 有真实评审记录，另外四张的视觉状态**未评审**——它们的
-`*.visual-check.json` 也只是打包记录。别把 architecture 的结论外推到那四张。
+- 同一份 spec 在 **3.0.1** 下 `finalize --quality showcase --repo-root .` **exit 0**；
+- 随后的 `archify browser-check` 是 **`ok: true` / `status: "pass"` / 0 diagnostics**，六个状态的 `dockStageGap` 都是 **+10px**、`dockStageIntersectionArea` **0**；
+- 代价是**换掉整页渲染**：页面从 **643423 字节（2.14.0 产出）** 变成 **768655 字节（3.0.1 产出）**，`docs/architecture.visual-check.json` 的 `artifact.bytes`/`artifact.sha256` 跟着换。`<meta name="generator">` 现在是 `archify 3.0.1`。
+- **2.14.0 装不回来**：npm 上叫 `archify` 的包是 0.0.4、与本项目无关（仓库 `justin-calleja/archify`）；`@tt-a1i/archify` 在 npm 上不存在（404）。所以这不是"要不要升级"的选择题，是"新版本能修、旧版本拿不到"。
 
-**这两份回执量的是哪一版页面（逐字节核定）。** 它们不在 `docs/` 里，而在本机的
+**3.0.1 不渲染 `meta.views`，所以那些旁注被挪进了 `cards`。** `guidedViews.note` 在 3.0.1 的 schema 里仍然合法（`maxLength: 140`），但 3.0.1 **不把它渲染进页面**——实测三个视图标签在新页面里出现 0 次。为了不丢语义，「会话创建请求命名 WSL 预设，是唯一无竞态的绑定缝」与「fs 走 9P UNC 且过围栏；命令执行走 wsl.exe」两句被写进新的 `cards` 条目（「两条接缝」），isolate 五键与宿主 ACL 那句本来就在「执行世界」卡里。`views[]` 本身保留在 spec 中，将来渲染器恢复该功能时可直接再用。
+
+五张图里只有 architecture 有真实评审记录，另外四张的视觉状态**未评审**——它们的 `*.visual-check.json` 也只是打包记录。别把 architecture 的结论外推到那四张。
+
+
+**上面那 7→6 的两次读数量的都是 2.14.0 那版页面（逐字节核定，属历史记录）。** 它们不在 `docs/` 里，而在本机的
 `.superpowers/sdd/WSL-PERSIST/artifacts/t7-visual-before.json` / `t7-visual-after.json`（该目录被
-`.superpowers/sdd/.gitignore` 的 `*` 整体排除，**不随仓库发布**；它们是本轮引用的观察记录，不是交付
+`.superpowers/sdd/.gitignore` 的 `*` 整体排除，**不随仓库发布**；它们是观察记录，不是交付
 产物）。两份都是 `evidenceKind: "automated-browser"`、`provenance: "unknown"`，截图在各自 `--out-dir`。
 `before` 量的是 **643433 字节**、`sha256 5a8c14db…` 的页面（提交 `5565e49`）；`after` 量的是
-**643423 字节**、`sha256 8484f482…` 的页面（提交 `6a56dba`）。当前提交的 `docs/architecture.html` 是
+**643423 字节**、`sha256 8484f482…` 的页面（提交 `6a56dba`）。当时提交的 `docs/architecture.html` 也是
 **643423 字节**、`sha256 ce55fe8b…`；把 `after` 量的那一版里的 revision 串等长替换（**11 处 40 位
-`bb3aa4f…` 加 1 处 `shortRevision`**，换成 `6a56dba…`）后，**逐字节等于**当前提交的这一份。即两者
-只差证据 blob 里指向哪个提交，几何、字号、DOM 完全相同。所以这 6 项结论对**现在这一版页面**成立，
-不是对某一版旧页面成立。
+`bb3aa4f…` 加 1 处 `shortRevision`**，换成 `6a56dba…`）后，**逐字节等于**当时提交的那一份。即两者
+只差证据 blob 里指向哪个提交，几何、字号、DOM 完全相同。
 
-**为什么这 6 项没顺手修掉。** 它们不是文案问题，是导航坞与舞台的几何预留，只能由 Archify 重新
-渲染解决——而**生成当前这份页面的那个版本本机没有、也拿不到**。实测（不是推断）：
+**这些数字描述的已经不是现在的 `docs/architecture.html`。** 那版页面（643423 字节、2.14.0 产出）在换成 3.0.1 渲染时被整体替换，现在是 **768655 字节**。上面这些读数在本节里作为「修复前」的对照保留，不是当前状态；当前状态是本节开头那句：**`ok: true`，0 项 error**。
 
-- 当前提交的 `docs/architecture.html` 里 `<meta name="generator">` 写的是 **archify 2.14.0**。
-- npm 上叫 `archify` 的包是 **0.0.4**，是与本项目无关的另一个包（仓库 `justin-calleja/archify`）；
-  按本项目名字发布的 `@tt-a1i/archify` 在 npm 上**不存在**（404）。所以 2.14.0 **装不回来**。
-- 本机确实装着 Archify，但装在 DSH 的 skill 形态里：`@tt-a1i/archify-dsh@1.0.0` 里的
-  **3.0.1**，入口 `bin/archify.mjs`，**不在 PATH 上**（`archify` 命令本身找不到）。用它对当前 spec 跑
-  `archify validate architecture docs/diagrams-src/architecture.json --quality showcase --repo-root . --json`
-  是 **ok（9/9 检查，0 error）**。
-- **3.0.1 交付出来的是另一个页面，而且那个页面是干净的**：同一份 spec 在 3.0.1 下是 **768304 字节**，
-  对它再跑 `archify visual-check` 是 **`ok: true` / `status: "pass"` / 0 diagnostics**，四个视口连同
-  两张暗色截图共六处 `dockStageGap` 都是 **+10px**、`dockStageIntersectionArea` **0**（当前这版是
-  -40.78125 / -30.78125）。而当前提交的是 **643423 字节**。
 
-所以结论不是"多加一行 CSS"，也不是"没有工具"：**要修这 6 项，得先决定这个仓库的图由哪个 Archify
-版本产出**——2.14.0 已不可得，3.0.1 会换掉整页（643423 → 768304 字节）、并让 `docs/` 下的四张截图、
-回执的 `artifact.sha256`/`bytes`、以及 `verify-diagrams.mjs` 的逐字节校验一起改口径。那是产品决定。
-本页因此只**记录**这 6 项，不假装已修。
 
