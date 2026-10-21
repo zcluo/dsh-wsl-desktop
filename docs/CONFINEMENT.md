@@ -11,7 +11,7 @@ read-only:        tmpfs /tmp        →  remount,ro,bind /
 
 顺序是负载性的：**先绑可写路径，再 remount 根为只读**。反过来的话新 bind 会继承只读状态（实测工作区写入会失败）。
 
-**所有 `rw` 挂载是在运行时逐个枚举出来的，不是一张写死的清单。** 把 `/` 改成只读之后，清扫用 `findmnt` 列出 namespace 里的每个挂载目标，跳过设备节点与内核状态那几个（`/dev`、`/proc`、`/sys` 这一类），把剩下的逐个 `mount -o remount,ro,bind`——实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变成 READONLY。只读模式（read-only）同样跑这条清扫，所以它对**每一次**受限运行都成立，这正是 `enforcement: 'partial'` 描述的那部分：mount namespace 管不到 `/dev`、`/proc`、`/sys` 与 interop，如实报 `partial`，不用「已沙箱化」掩盖。**清扫失败即拒绝执行**：任一步失败走同一条 `fail()`，保留退出码 **97**（`SETUP_FAILURE_EXIT`），命令不裸跑。
+**所有 `rw` 挂载是在运行时逐个枚举出来的，不是一张写死的清单。** 把 `/` 改成只读之后，清扫用 `findmnt` 列出 namespace 里的每个挂载目标，跳过设备节点与内核状态那几个（`/dev`、`/proc`、`/sys` 这一类），把剩下的逐个 `mount -o remount,ro,bind`——实测 `/mnt/c`、`/dev/shm`、`/run/user/<uid>` 从 WRITABLE 变成 READONLY。只读模式（read-only）同样跑这条清扫，所以它对**每一次**受限运行都成立，这正是 `enforcement: 'partial'` 描述的那部分：mount namespace 管不到 `/dev`、`/proc`、`/sys` 与 interop，如实报 `partial`，不用「已沙箱化」掩盖。**清扫失败即拒绝执行**：每条 remount 的错误被吞掉，但随后**逐个目标回读一遍**，还有可写的就 `fail()`；维持不了 `/` 只读同样 `fail()`。`fail()` 打印 `dsh-wsl-sandbox: setup failed` 标记并以退出码 **97**（`SETUP_FAILURE_EXIT`）结束，命令不裸跑。
 
 两个实测得出的前提：
 
