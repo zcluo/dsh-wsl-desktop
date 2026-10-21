@@ -35,9 +35,11 @@ readDefinition(agentPreset: string): Promise<Readonly<PresetDefinition>>
 1. 在 0.1.x 迁移文档中明确：「mount 作用域服务的唯一访问器是 `serviceForAgent`；`agent.ctx.get` 对 mount 内服务不可用」。
 2. 考虑在 `AgentPresetRegistry` 上提供实例方法包装（`registry.serviceFor(agent, name)` 委托 `serviceForAgent(ctx, agent, name)`），让动态导入整个包都不再必要。
 
+**现状（0.6.0）**：第 2 条已经在宿主侧提供——插件现在直接调用 `agentPresets.serviceFor(agent, name)`，不再动态导入。第 1 条（迁移文档的可发现性）仍然值得补。
+
 ### 附带问题：插件对宿主包的静态导入解析
 
-`serviceForAgent` 目前通过 `await import('@deepseek-ai/dsh-agent-preset-registry')` 动态导入——从插件的安装目录（`$DSH_HOME/profiles/<p>/plugins/<gen>/`）出发按 Node 标准算法解析。它在宿主进程内**能**解析（宿主的模块钩子覆盖插件图），但这依赖宿主实现细节。请求在插件 SDK 文档中明确：**宿主包从插件模块内动态导入的解析保证**（或提供 `hostImport(specifier)` 之类的官方通道）。背景：把这类包声明为插件 `dependencies` 会导致 pnpm 安装第二份副本——类身份（`instanceof`/`extends` 基类）与单例服务（cordis `Service`）都会漂移。
+**现状（0.6.0）**：本插件已不再从插件模块动态导入宿主包（`serviceFor` 是实例方法）。这条提案仍然成立，但动机变成未来任何需要从插件模块消费宿主包的场景：从插件安装目录（`$DSH_HOME/profiles/<p>/plugins/<gen>/`）出发，Node 标准解析能工作，但依赖宿主模块钩子的实现细节。
 
 ---
 
@@ -69,7 +71,7 @@ readDefinition(agentPreset: string): Promise<Readonly<PresetDefinition>>
 | # | 断裂 | 插件被迫的权宜实现 | 对应提案 |
 |---|---|---|---|
 | 1 | `agentPresets.read(id)` 移除 → `readDocument`（返回重 dump 文本） | 需要对象树 → 读私有 `definitions` Map | 提案 A |
-| 2 | mount 作用域服务离开 `agent.ctx.get` 可见域 | 动态导入 `serviceForAgent` + `ctx.get` 回退 | 提案 A（可发现性） |
+| 2 | mount 作用域服务离开 `agent.ctx.get` 可见域 | 已改用 `agentPresets.serviceFor(agent, name)` 实例方法（0.2.1-alpha.1 起），不再动态导入 | 提案 A（可发现性） |
 | 3 | 预设不再从 `~/.agent-presets` 目录加载 | 运行时 `register()` + 自持 disposer（这本身是更干净的架构 ✓） | — |
 | 4 | 行模块名必须可被 loader 以 URL/裸名导入（反斜杠路径双败） | 行名改 `file://` URL 拼写 | — |
 | 5 | `ShellExecutor.run` → `execute`，且返回从 settled 结果变为**活动句柄**（`result()` 投影） | execute 重写为句柄；selftest/套件改经 `result()` 取结果 | 建议迁移文档列出句柄字段 |
@@ -78,6 +80,6 @@ readDefinition(agentPreset: string): Promise<Readonly<PresetDefinition>>
 ## 请求的裁定
 
 - 提案 A：`readDefinition` 是否纳入 0.1.x 后续版本？（小 API 面，registry 内已有数据。）
-- 提案 A 附带：`serviceForAgent` 迁移文档化 + 实例包装是否可接受？
+- 提案 A 附带：实例包装 `agentPresets.serviceFor` 已经在 0.2.1-alpha.1 可用；本项只剩「迁移文档明确 mount 作用域访问器」这一条。
 - 提案 B 第 1 步：`SubprocessRuntime` 的沙箱暴露声明（只读事实）是否纳入？
 - 提案 B 第 2 步：基础设施 spawn 的围栏语义由谁裁定（harness 产品侧）——若裁定「不围栏为正式语义」，我们将把披露升级为正式契约文档。

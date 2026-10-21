@@ -129,6 +129,10 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
   harness — and changes to them interrupt it (0.1.6 → 0.1.7 broke four places in one go). So after
   updating the desktop, run `node scripts/verify-post-restart.mjs` once and only keep going when
   everything is green.
+- **Failures now carry a code, so you can diagnose first.** The browser receives a stable code and
+  the whitelisted params, never the host message, stderr or resolved paths; after the user is
+  confirmed, the W dialog shows an advisory health check whose failed rows carry the fix. Codes,
+  checks and degradation are in [Diagnostics](docs/DIAGNOSTICS.md).
 - **Who it is for.** For now it suits the plugin author or an operator of the same trust level, for
   long-term use. Distribution to third-party users, or unattended high-value environments, are not
   suitable yet — the reasoning is in [SECURITY.md](SECURITY.md).
@@ -144,6 +148,7 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
 - [Search inside the distribution](docs/SEARCH.md) — the eight semantic differences, the limits, how to verify yourself
 - [WSL file watching](docs/WATCH.md) — the polling strategy and its boundaries
 - [Verification](docs/VERIFICATION.md) — what each suite is responsible for, and how a SKIP is ruled
+- [Diagnostics](docs/DIAGNOSTICS.md) — error codes, the health check, degradation and the privacy boundary
 - [Engineering notes](docs/ENGINEERING-NOTES.md) — measured constraints, repository layout, release flow, install shape
 - [Distro support matrix](docs/DISTRO-SUPPORT.md) — which distros were verified, and what each one needs
 - [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) — the two proposals to the harness upstream

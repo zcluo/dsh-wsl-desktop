@@ -35,6 +35,16 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 
 于是有一条硬规则：**组必须隔离 `terminals`**。提供服务的插件若所在组没有声明 `isolate: { terminals: true }`，加载器**直接拒绝**这次挂载——不是静默降级。三个图谱之外的细节（为什么这三行不能照抄 harness、缺口清单、限额与人工核验清单）见 [常驻 shell](PERSISTENT-SHELL.md)。
 
+## 契约层与降级
+
+0.1.6 → 0.1.7 的断裂与 0.2.1-alpha.1 静默删除 `serviceForAgent`，把「宿主 API 漂移」变成这个插件的第一类维护风险。0.6 起，宿主面先被声明，再被探测：
+
+- `lib/host/contract.js` 用一张 manifest 列出每个运行期符号（`agentPresets.readDocument`、`tools.register`、`subprocess.spawnTerminal` 等）与静态导入的宿主包；`probeHost` 按 feature 聚合，宿主侧没有符号的 feature 返回 `unknown`，由 `lib/client.js` 检查自己注入的服务后合并。
+- `lib/protocol.js` 是浏览器侧的唯一词汇表：错误码、zh/en 文案、remedy 与 `SAFE_PARAMS`。`lib/index.js` 的 `bootstrap` 把目录与能力状态一次下发；`lib/client.js` 缓存它，并在 picker 的三个必需 feature 缺失时进入「已降级」卡片，而不是让 W 静默消失。
+- `lib/wsl/doctor.js` 提供只读的 `health`：一条批处理拿 userland 事实，复用缓存的 runner/NNP 探针；它是建议性的，从不按检查结果禁用创建。
+
+浏览器响应只带 `{code, params}`；message、stderr 与宿主路径留在宿主。细节与错误码表见 [诊断](DIAGNOSTICS.md)。
+
 ## 架构
 
 **执行世界由会话的 agent preset 决定。** `ctx.shell` / `ctx.fs` / `ctx.subprocess` 都是进程级单实例，而 Windows 与 WSL 的工具方言不同（pwsh vs bash），因此并存不是靠"按路径路由的全局 provider"，而是靠 preset 的 `isolate` realm：

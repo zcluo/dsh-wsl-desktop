@@ -29,6 +29,10 @@ node scripts/verify-sync.mjs         # runs the real sync.ps1 against a disposab
 node scripts/verify-all-skip.mjs     # the aggregate's ruling on a SKIP: an undeclared skip fails / a declared one is reported with its precondition / a dead declaration fails before any suite runs
 node scripts/verify-watch.mjs        # watch strategies: strategy choice, the entry-set difference and its first-reading baseline, absence versus failure, a tick that does not stack, an idempotent disposer and a late abort (no precondition, so it never skips)
 node scripts/verify-search.mjs       # search-inside-the-distribution pure logic: the glob translation and the two whole-argv golden vectors, the two parsers and their limits, the failure vocabulary (no precondition, so it never skips)
+node scripts/verify-protocol.mjs     # the browser error catalog and the route classifier: codes, bilingual copy, remedies, safe params, domain-to-wire mapping (never skips)
+node scripts/verify-world-errors.mjs # typed world failures with an injected run: missing dir vs unreachable distro, unknown user, default-user probe failure (never skips)
+node scripts/verify-host-contract.mjs # the host manifest and its code cross-check; host package export shapes when the dependencies are reachable (a declared skip without them)
+node scripts/verify-doctor.mjs       # the doctor's parser, cache and assembly, plus one live row (a declared skip when no distro is resolvable)
 node scripts/verify-route.mjs        # live: the acceptance route (needs a running host)
 node scripts/inspect-live-client.mjs # reads the client bundle the host actually delivers (accepts marker strings)
 .\scripts\sync.ps1                   # stage into the profile; an already-installed profile also gets its link re-pointed (a first install is still wired by plugin_manager)

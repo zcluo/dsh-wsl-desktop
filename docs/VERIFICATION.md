@@ -29,6 +29,10 @@ node scripts/verify-sync.mjs         # 对一次性 profile 跑真 sync.ps1：�
 node scripts/verify-all-skip.mjs     # 聚合器对 SKIP 的裁定：未声明的跳过判红 / 已声明的报 SKIP 并点名前提 / 失效声明在任何套件运行之前先判红
 node scripts/verify-watch.mjs        # 监听策略：策略选择、条目集合差分与首轮基线、absence 与错误的分流、tick 不叠加、disposer 幂等与晚到 abort（无前置条件，因此从不跳过）
 node scripts/verify-search.mjs       # 发行版内搜索的纯逻辑：glob 翻译与两条整条 argv 金标向量、两个解析器与限额、失败词汇分类（无前置条件，因此从不跳过）
+node scripts/verify-protocol.mjs     # 浏览器错误目录与路由分类器：code、双语、remedy、安全 params、domain→wire 映射（从不跳过）
+node scripts/verify-world-errors.mjs # 注入 run 的 world 类型化失败：目录不存在 vs 发行版不可达、未知用户、默认用户探针失败（从不跳过）
+node scripts/verify-host-contract.mjs # 宿主 manifest 与代码互查；依赖可达时核对宿主包导出形状（依赖缺失时按声明 SKIP）
+node scripts/verify-doctor.mjs       # 体检解析器、缓存与组装，外加一条 live 行（无法解析出发行版时按声明 SKIP）
 node scripts/verify-route.mjs        # 活体：验收路由（需要运行中的宿主）
 node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（可带若干标记串）
 .\scripts\sync.ps1                   # stage 进 profile；已装过时同时把链接重指向新一代（首次安装仍由 plugin_manager 接线）

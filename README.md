@@ -105,6 +105,9 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - **桌面更新后插件可能失效。** 插件依赖桌面内部的框架（harness）的 API，这些 API 变化会打断它
   （0.1.6 → 0.1.7 一次断了四处）。所以更新桌面之后先跑一次
   `node scripts/verify-post-restart.mjs`，全绿再继续用。
+- **失败现在带 code，可以先自己诊断。** 浏览器侧的错误只回稳定 code 与允许的 params，
+  宿主 message、stderr 与解析后的路径不会过线；W 对话框在确认用户后会显示一条建议性的
+  「环境检查」，失败项带修复命令。错误码、检查项与降级行为见 [诊断](docs/DIAGNOSTICS.md)。
 - **适合谁用。** 目前适合插件作者本人或同信任级别的操作者长期使用。分发给第三方用户、或放进
   无人值守的高价值环境，都还不适合——理由写在 [SECURITY.md](SECURITY.md)。
 
@@ -119,6 +122,7 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - [发行版内搜索](docs/SEARCH.md) — 八条语义差异、限额、怎么自己验
 - [WSL 文件变更监听](docs/WATCH.md) — 轮询策略与它的边界
 - [校验](docs/VERIFICATION.md) — 每个套件管什么，以及跳过（SKIP）怎么裁定
+- [诊断](docs/DIAGNOSTICS.md) — 错误码、环境检查、宿主能力缺失时的降级与隐私边界
 - [工程笔记](docs/ENGINEERING-NOTES.md) — 实测约束、仓库布局、发版流程、安装形态
 - [发行版支持矩阵](docs/DISTRO-SUPPORT.md) — 哪些发行版验证过，每种缺什么
 - [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) — 对 harness 上游的两项提案

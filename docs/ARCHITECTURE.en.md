@@ -35,6 +35,16 @@ After a distro is selected, the dialog **first asks for the user to enter that d
 
 That brings one hard rule: **the group must isolate `terminals`**. A service-providing plugin whose group does not declare `isolate: { terminals: true }` has that mount **refused outright** by the loader — not silently degraded. Everything beyond the diagrams (why those three rows cannot be copied from the harness, the gap list, the limits and the manual checklist) is in [The persistent shell](PERSISTENT-SHELL.en.md).
 
+## The contract layer and degradation
+
+The 0.1.6 → 0.1.7 break and the silent removal of `serviceForAgent` in 0.2.1-alpha.1 turned host-API drift into this plugin's first maintenance risk. Since 0.6 the host surface is declared first and probed second:
+
+- `lib/host/contract.js` declares every runtime symbol (`agentPresets.readDocument`, `tools.register`, `subprocess.spawnTerminal`, ...) and every statically imported host package in one manifest; `probeHost` aggregates by feature, a feature with no host symbol answers `unknown`, and `lib/client.js` merges it with its own injected-service probe.
+- `lib/protocol.js` is the browser's single vocabulary: codes, zh/en copy, remedies and `SAFE_PARAMS`. `bootstrap` in `lib/index.js` serves the catalog and the capability state in one call; `lib/client.js` caches it and enters the "degraded" card when any of the picker's three required features is missing, instead of letting W disappear silently.
+- `lib/wsl/doctor.js` answers the read-only `health`: one batch collects the userland facts, the cached runner/NNP probes are reused, and the result is advisory — it never disables creation.
+
+Browser responses carry only `{code, params}`; the message, stderr and host paths stay on the host. The details and the code table are in [Diagnostics](DIAGNOSTICS.en.md).
+
 ## Architecture
 
 **The execution world is decided by the session's agent preset.** `ctx.shell` / `ctx.fs` / `ctx.subprocess` are process-level singletons, and the Windows and WSL tool dialects differ (pwsh vs bash), so coexistence is achieved not by "a global provider that routes by path" but by the preset's `isolate` realm:
