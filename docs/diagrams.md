@@ -1,6 +1,6 @@
 # 架构与流程图
 
-本目录下的五份交互图由 [Archify](https://github.com/tt-a1i/archify) 生成（showcase 品质，9/9 构件检查）。**它们的视觉状态不是全绿**：在唯一做过真实自动化浏览器评审的那张图（architecture）上，容器（containment）与文字可读性（readability）实测通过，但导航坞与受保护的 SVG 舞台之间仍有 **6 项未修**（7 → 6，逐条见下文「architecture 图的视觉状态」）。每份 HTML 自包含，双击即开，内置主题切换、缩放、搜索、路径追踪与 PNG/SVG 导出。
+本目录下的五份交互图由 [Archify](https://github.com/tt-a1i/archify) 生成（showcase 品质，9/9 构件检查）。**当前五份全部通过真实自动化浏览器评审**：`archify browser-check` 在每张图上报 `ok: true`、**0 项 error**（Archify **3.0.1** 产出）。此前它们不是全绿——2.14.0 产出的页面上，architecture 有 7 项、其余四张各有 6 项导航坞与受保护 SVG 舞台的越界；换成 3.0.1 后全部清零，来龙去脉见下文「图的视觉状态」。每份 HTML 自包含，双击即开，内置主题切换、缩放、搜索、路径追踪与 PNG/SVG 导出。
 
 | 文件 | 类型 | 内容 |
 |---|---|---|
@@ -70,7 +70,13 @@ Navigation Dock enters the protected SVG stage at 1440x900 (light).
 
 **3.0.1 不渲染 `meta.views`，所以那些旁注被挪进了 `cards`。** `guidedViews.note` 在 3.0.1 的 schema 里仍然合法（`maxLength: 140`），但 3.0.1 **不把它渲染进页面**——实测三个视图标签在新页面里出现 0 次。为了不丢语义，「会话创建请求命名 WSL 预设，是唯一无竞态的绑定缝」与「fs 走 9P UNC 且过围栏；命令执行走 wsl.exe」两句被写进新的 `cards` 条目（「两条接缝」），isolate 五键与宿主 ACL 那句本来就在「执行世界」卡里。`views[]` 本身保留在 spec 中，将来渲染器恢复该功能时可直接再用。
 
-五张图里只有 architecture 有真实评审记录，另外四张的视觉状态**未评审**——它们的 `*.visual-check.json` 也只是打包记录。别把 architecture 的结论外推到那四张。
+**这次换代有一个必须说清的代价：查看器少了三个功能。** 逐段对比 2.14.0 与 3.0.1 的页面可见文本，2.14.0 有而 3.0.1 没有的是 **`Share Card` / `Copy Share Card`（分享卡）**、**`Guided views` / `Beat` / `Next` / `Play story`（引导视图，即 `meta.views` 的界面）** 与 **深链 / `Copy moment`**；3.0.1 新增的是 **`SVG · Auto / Light / Dark`** 主题化导出（`Matches host theme` / `Always light`）。**图的语义没有损失**——节点、连线、标签与 `cards` 都在，少的是查看器的三个交互入口。这是用「6 项越界清零」换「三个查看器功能」，不是免费升级；如果哪天需要这三个功能，得回到 2.14.0，而那意味着同时接受 6 项越界。
+
+**所有五张图都经历同一次换代。** architecture 之外的四张（sequence / dataflow / lifecycle / workflow）用的是同一个判断：换代前各有 6 项 `viewer/chrome-stage-clearance`，换代后为 0。它们的 spec 没有 `repository.revision`（没有 `sources` 证据块），所以换代不涉及重钉，只换了页面与回执的 `artifact.bytes`/`artifact.sha256`。
+
+
+**五张图现在都有真实评审记录，且都是 `ok: true` / 0 项 error。** 它们的 `*.visual-check.json` 仍然是打包记录（见上一节），真机结论要跑 `archify browser-check` 才拿得到——每张图都跑过，逐张见下文。另外四张（sequence / dataflow / lifecycle / workflow）在与 architecture 相同的 3.0.1 换代里一并清零：换代前它们各有 6 项 `viewer/chrome-stage-clearance`，换代后为 0。
+
 
 
 **上面那 7→6 的两次读数量的都是 2.14.0 那版页面（逐字节核定，属历史记录）。** 它们不在 `docs/` 里，而在本机的
