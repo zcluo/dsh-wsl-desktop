@@ -238,14 +238,16 @@ check('the health answer carries no process path or stderr',
   !healthAnswer.text.includes('/usr/bin/') && !healthAnswer.text.includes('stderr'),
   healthAnswer.text.slice(0, 120))
 const invalidResolve = await post({ method: 'resolve', params: { location: '' } }, { token })
+// A route error is a 4xx with the coded envelope; the browser half reads the
+// envelope, so the status may be 200 or 400 depending on the dispatcher's arm.
+const isPathInvalid = (answer) => answer.json?.ok === false && answer.json?.code === 'path-invalid'
 check('resolve rejects an empty location as path-invalid, not internal',
-  invalidResolve.status === 200 && invalidResolve.json?.ok === false
-  && invalidResolve.json?.code === 'path-invalid',
+  isPathInvalid(invalidResolve),
   `${invalidResolve.status} ${invalidResolve.text.slice(0, 120)}`)
 for (const location of ['not/a/path', '\\\\wsl.localhost\\..\\x']) {
   const answer = await post({ method: 'resolve', params: { location } }, { token })
   check(`resolve rejects ${JSON.stringify(location)} as path-invalid, not internal`,
-    answer.status === 200 && answer.json?.ok === false && answer.json?.code === 'path-invalid',
+    isPathInvalid(answer),
     `${answer.status} ${answer.text.slice(0, 120)}`)
 }
 const probeFile = `/tmp/dsh-wsl-fence-probe-${process.pid}.txt`
