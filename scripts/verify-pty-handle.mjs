@@ -429,9 +429,19 @@ function allocateFifoTerminal(spawnImpl = fifoAdapter) {
 console.log('\nscenario A: the data process is KILLED (the bridge finally cannot run)')
 const fifoBaseline = await fifos()
 const terminalA = await allocateFifoTerminal()
-const fifoLiveA = (await fifos()).filter((path) => fifoBaseline.includes(path) === false)
+// THIS SESSION'S OWN name, not "exactly one new name". A delta of one is only true when nothing
+// else on the machine is allocating at the same time: a second run of this suite overlaps, its
+// live FIFO lands in the delta, and both rows used to redden with `live.length === 2` while this
+// session's own FIFO was perfectly healthy (measured — two concurrent runs reproduce it, one run
+// alone does not). The name carries this process's pid and the session's own uuid
+// (`/tmp/dsh-pty-<pid>-<uuid>.fifo`, lib/wsl/pty.js), so the honest selection is "the new name
+// whose pid is MINE", and the rows below assert on THAT name. Anything else new is reported, not
+// treated as this session's.
+const newFifosA = (await fifos()).filter((path) => fifoBaseline.includes(path) === false)
+const ownFifo = (path) => path.includes(`-${process.pid}-`)
+const fifoLiveA = newFifosA.filter(ownFifo).slice(0, 1)
 check('the live session created its FIFO (so the row below cannot pass vacuously)',
-  fifoLiveA.length === 1, { live: fifoLiveA, baseline: fifoBaseline })
+  fifoLiveA.length === 1, { live: fifoLiveA, newSinceBaseline: newFifosA, baseline: fifoBaseline, ownPid: process.pid })
 const dataChild = fifoChildren.find((entry) => entry.argv.some((arg) => arg === 'python3'))
 check('the data process is a python3 bridge',
   dataChild !== undefined, { spawns: fifoChildren.map((entry) => entry.argv[0] + ' ' + entry.argv[1]) })
@@ -446,9 +456,12 @@ try { await terminalA.terminate() } catch { /* the session is already over */ }
 console.log('scenario B: the ordinary close')
 const fifoBeforeB = await fifos()
 const terminalB = await allocateFifoTerminal()
-const fifoLiveB = (await fifos()).filter((path) => fifoBeforeB.includes(path) === false)
+// Same selection as scenario A, for the same measured reason: pick the name that carries THIS
+// process's pid, so a concurrent run's FIFO cannot make the delta look wrong.
+const newFifosB = (await fifos()).filter((path) => fifoBeforeB.includes(path) === false)
+const fifoLiveB = newFifosB.filter(ownFifo).slice(0, 1)
 check('the second session created its FIFO (so the row below cannot pass vacuously)',
-  fifoLiveB.length === 1, { live: fifoLiveB })
+  fifoLiveB.length === 1, { live: fifoLiveB, newSinceBaseline: newFifosB, ownPid: process.pid })
 await Promise.race([terminalB.terminate(), new Promise((resolve) => setTimeout(resolve, 20_000))])
 const fifoGoneB = await untilAsync(async () => (await fifos()).includes(fifoLiveB[0] ?? '/nonexistent') === false, 15_000)
 check('after terminate() the session FIFO is gone',
@@ -740,9 +753,13 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   // E1: the ordinary close. `terminate()` is awaited and the FIFO is read with NO `untilAsync`.
   const beforeE1 = await fifos()
   const terminalE1 = await allocateFifoTerminal()
-  const liveE1 = (await fifos()).filter((path) => !beforeE1.includes(path))
+  // Same selection rule as A, B, E2 and F (measured: a concurrent run's live FIFO lands in a plain
+  // delta and reddens this row while this session's own FIFO is healthy). Pick the new name that
+  // carries THIS process's pid.
+  const newFifosE1 = (await fifos()).filter((path) => !beforeE1.includes(path))
+  const liveE1 = newFifosE1.filter(ownFifo).slice(0, 1)
   check('E1: the session created its FIFO (so the row below cannot pass vacuously)',
-    liveE1.length === 1, { live: liveE1, baseline: beforeE1 })
+    liveE1.length === 1, { live: liveE1, newSinceBaseline: newFifosE1, baseline: beforeE1, ownPid: process.pid })
   await Promise.race([terminalE1.terminate(), new Promise((resolve) => setTimeout(() => resolve(null), 20_000))])
   const instantE1 = await fifos()
   const stillE1 = liveE1.filter((path) => instantE1.includes(path))
@@ -803,9 +820,13 @@ console.log('\nscenario E: the read point the live gate uses (a torn-down sessio
   const beforeE2 = await fifos()
   const recordsBeforeE2 = fifoChildren.length
   const terminalE2 = await allocateFifoTerminal()
-  const liveE2 = (await fifos()).filter((path) => !beforeE2.includes(path))
+  // Same selection rule as A, B and F (measured: a concurrent run's live FIFO lands in a plain
+  // delta and reddens this row while this session's own FIFO is healthy). Pick the new name that
+  // carries THIS process's pid.
+  const newFifosE2 = (await fifos()).filter((path) => !beforeE2.includes(path))
+  const liveE2 = newFifosE2.filter(ownFifo).slice(0, 1)
   check('E2: the killed-bridge session created its FIFO (so the row below cannot pass vacuously)',
-    liveE2.length === 1, { live: liveE2, baseline: beforeE2 })
+    liveE2.length === 1, { live: liveE2, newSinceBaseline: newFifosE2, baseline: beforeE2, ownPid: process.pid })
   const killerE2 = fifoChildren.slice(recordsBeforeE2).find((entry) => entry.argv.some((arg) => arg === 'python3'))
   check('E2: the data process is the python3 bridge', killerE2 !== undefined,
     { spawns: fifoChildren.slice(recordsBeforeE2).map((entry) => entry.argv[0] + ' ' + entry.argv[1]) })
@@ -850,9 +871,12 @@ console.log('\nscenario F: a live claim whose cleanup never ran becomes collecta
   const beforeF = await fifos()
   const recordsBeforeF = fifoChildren.length
   const terminalF = await allocateFifoTerminal()
-  const liveF = (await fifos()).filter((path) => !beforeF.includes(path))
+  // Same selection rule as scenarios A and B, for the same measured reason: this session's own
+  // name carries THIS process's pid, so a concurrent run's live FIFO cannot make the delta wrong.
+  const newFifosF = (await fifos()).filter((path) => !beforeF.includes(path))
+  const liveF = newFifosF.filter(ownFifo).slice(0, 1)
   check('F: the stale-claim session created its FIFO (so the row below cannot pass vacuously)',
-    liveF.length === 1, { live: liveF, baseline: beforeF })
+    liveF.length === 1, { live: liveF, newSinceBaseline: newFifosF, baseline: beforeF, ownPid: process.pid })
   // The claim this session holds is the one that goes stale. `terminalF` is deliberately NOT
   // terminated before the next allocation: a session whose claim was released by its own teardown
   // would prove nothing about a claim that was never released.

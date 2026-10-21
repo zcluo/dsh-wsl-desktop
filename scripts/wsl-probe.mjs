@@ -44,6 +44,30 @@
 export const PROBE_TIMEOUT_MS = 60_000
 
 /**
+ * The WSL service's own timeout, recognised so it is retried instead of judged.
+ *
+ * `wsl.exe` can fail to reach the WSL service at all and answer with a LOCALISED sentence on
+ * **stdout** (stderr empty), `exitCode` set and `timedOut: false` — so `probeWithRetry`'s
+ * `timedOut` trigger never fired and a check that expects the helper's refusal read the
+ * transport failure as that refusal's absence. Measured: `Wsl/Service/WSAETIMEDOUT` appeared
+ * exactly that way in one run and the affected row reddened while every other row in the same
+ * suite passed, and the identical command then passed 10/10 when replayed by hand.
+ *
+ * The code is matched, nothing else: the sentence around it is LOCALISED (the measured copy was
+ * Chinese), so matching prose would make the classification host-language-dependent. A real
+ * refusal never carries this code, and no assertion in this repository looks for it, so
+ * recognising it cannot turn a failure into a pass — it only lets the existing one-shot retry
+ * run, and the caller still judges the SECOND attempt.
+ * @param {object} result - one probe result.
+ * @returns {boolean} whether this failure was the WSL service timing out.
+ */
+export function isWslServiceTimeout(result) {
+  if (result === null || typeof result !== 'object') return false
+  if (result.exitCode === 0 || result.exitCode === null) return false
+  return `${result.stdout ?? ''}${result.stderr ?? ''}`.includes('WSAETIMEDOUT')
+}
+
+/**
  * One probe, repeated once when it timed out.
  *
  * The runner is a PARAMETER and not a module global, so a pin can hand this function a stub
@@ -56,7 +80,17 @@ export const PROBE_TIMEOUT_MS = 60_000
  * @returns {Promise<object>} the first conclusive attempt, or the second after a timeout.
  */
 export async function probeWithRetry(run, request, { timeoutMs = request.timeoutMs ?? PROBE_TIMEOUT_MS, onRetry } = {}) {
-  const first = await run({ ...request, timeoutMs })
+  const answered = await run({ ...request, timeoutMs })
+  // Normalise the transport failure BEFORE the decision, so the shape the policy tests for stays
+  // exactly one thing. `wsl.exe` also reports the WSL service's own timeout with an EXIT CODE and
+  // a localised sentence on stdout (measured: `Wsl/Service/WSAETIMEDOUT`, stderr empty), which
+  // `timedOut` alone never saw — a check that expects the helper's refusal read that transport
+  // failure as the refusal's absence and reddened while the identical command then passed 10/10
+  // by hand. Presenting it as `timedOut` puts it under the ONE policy the docs state, instead of
+  // adding a second decision point. A genuine refusal carries neither shape and passes through.
+  const first = isWslServiceTimeout(answered) ? { ...answered, timedOut: true } : answered
+  // The line below is a MUTATION ANCHOR: `scripts/verify-confinement-skip.mjs` removes it
+  // verbatim to prove a stalled probe reddens the row that read it. Keep its text intact.
   if (first.timedOut !== true) return first
   if (typeof onRetry === 'function') onRetry({ ...request, timeoutMs }, first)
   return await run({ ...request, timeoutMs })
