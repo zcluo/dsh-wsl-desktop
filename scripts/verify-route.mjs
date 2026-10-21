@@ -237,6 +237,11 @@ check('health answers ok with a checklist',
 check('the health answer carries no process path or stderr',
   !healthAnswer.text.includes('/usr/bin/') && !healthAnswer.text.includes('stderr'),
   healthAnswer.text.slice(0, 120))
+const invalidResolve = await post({ method: 'resolve', params: { location: '' } }, { token })
+check('resolve rejects an empty location as path-invalid, not internal',
+  invalidResolve.status === 200 && invalidResolve.json?.ok === false
+  && invalidResolve.json?.code === 'path-invalid',
+  `${invalidResolve.status} ${invalidResolve.text.slice(0, 120)}`)
 const probeFile = `/tmp/dsh-wsl-fence-probe-${process.pid}.txt`
 rmSync(`${shareRoot}${probeFile}`, { force: true })
 const probeDefaultFile = `/tmp/dsh-wsl-fence-default-${process.pid}.txt`
