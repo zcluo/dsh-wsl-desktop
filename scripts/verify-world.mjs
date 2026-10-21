@@ -204,6 +204,29 @@ await runWslShell({ distro, linuxCwd: '/', command: 'rm -rf ' + shortProbe })
 const homeListing = await listLinuxDir(distro, home)
 check('the user home lists without error', homeListing.path === home && Array.isArray(homeListing.entries), homeListing)
 console.log('        ' + homeListing.entries.length + ' entries in ' + home + '; first: ' + homeListing.entries.slice(0, 5).map((e) => e.name + '(' + e.kind[0] + ')').join(' '))
+{
+  // The real script, not the consumer: /etc/hostname exercises the `-d` branch.
+  const fileFailure = await (async () => {
+    try {
+      await listLinuxDir(distro, '/etc/hostname')
+      return null
+    } catch (error) {
+      return error
+    }
+  })()
+  check('a real file path is path-not-directory, not path-not-found',
+    fileFailure?.code === 'path-not-directory', fileFailure?.code)
+  const missingFailure = await (async () => {
+    try {
+      await listLinuxDir(distro, '/definitely-not-here-xyz')
+      return null
+    } catch (error) {
+      return error
+    }
+  })()
+  check('a real missing directory is path-not-found, not unreachable',
+    missingFailure?.code === 'path-not-found', missingFailure?.code)
+}
 const facts = await checkLinuxPath(distro, home)
 check('an existing directory is reported as a directory', facts.isDirectory === true, facts)
 const missing = await checkLinuxPath(distro, '/definitely-not-here-xyz')

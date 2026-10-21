@@ -6,6 +6,23 @@
 
 浏览器半边的每次失败都带一个稳定的 `code` 与一组经白名单过滤的 `params`。宿主侧的 message、`wsl.exe` stderr、解析后的 Windows 路径与堆栈不会出现在响应里；未分类的内部错误只回一个 `ref`，宿主日志里有对应的堆栈。开发令牌调用者仍会拿到人类可读的 message，这是调试面，不是产品面。
 
+<!-- 错误码锚点：每个 doc 链接都落在下面这张表上，而不是页首。 -->
+<a id="wsl-not-available"></a>
+<a id="distro-unknown"></a>
+<a id="distro-unreachable"></a>
+<a id="user-unknown"></a>
+<a id="path-invalid"></a>
+<a id="path-not-found"></a>
+<a id="path-not-directory"></a>
+<a id="path-denied"></a>
+<a id="preset-not-ready"></a>
+<a id="host-capability-missing"></a>
+<a id="host-plugin-stale"></a>
+<a id="too-busy"></a>
+<a id="internal"></a>
+<a id="transport"></a>
+<a id="catalog-unavailable"></a>
+
 | code | 何时出现 | 浏览器 params | 修法 |
 |---|---|---|---|
 | `wsl-not-available` | 找不到可执行的 `wsl.exe`，或 WSL2 不可用 | 无 | 安装/启用 WSL2；确认 `wsl.exe` 在 PATH 上 |

@@ -572,6 +572,46 @@ function routeStub(handlers) {
   live.dispose()
 }
 {
+  // A degraded answer is a phase, not a cached fact: the card must offer a fresh
+  // check, and a recovered host must let the picker proceed.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  let boots = 0
+  const degraded = {
+    ok: true,
+    value: {
+      pluginVersion: '0.6.0',
+      catalog: catalogFixture(),
+      capabilities: {
+        status: 'degraded',
+        features: { ...healthyCapabilities().features, 'preset-generation': 'degraded' },
+        missing: [],
+      },
+    },
+  }
+  const stub = routeStub({
+    bootstrap: () => {
+      boots += 1
+      return boots === 1 ? degraded : healthyBootstrap()
+    },
+    listDistros: () => ({ ok: true, value: ['debian'] }),
+    defaultDistro: () => ({ ok: true, value: { distro: 'debian' } }),
+  })
+  const live = apply(parts.dom, { items: [] }, stub)
+  await settle()
+  live.button.click()
+  await settle()
+  const retry = parts.dom.window.document.querySelector('[data-wsl-degraded-retry]')
+  check('the degraded card offers a fresh check', retry !== null)
+  retry?.click()
+  await settle()
+  check('retrying after a degraded answer re-runs bootstrap and proceeds',
+    boots === 2 && stub.calls.includes('listDistros')
+    && parts.dom.window.document.querySelector('[data-wsl-degraded]') === null,
+    { boots, calls: stub.calls })
+  live.dispose()
+}
+{
   // No route at all: bootstrap fails twice, discovery fails too, and the dialog
   // must still open with a code-carrying error instead of a stack.
   const parts = fixture()
@@ -676,7 +716,15 @@ function browseHandlers(health) {
     listDistros: () => ({ ok: true, value: ['debian'] }),
     defaultDistro: () => ({ ok: true, value: { distro: 'debian' } }),
     resolveHome: () => ({ ok: true, value: { user: 'me', home: '/home/me' } }),
-    listDir: () => ({ ok: true, value: { path: '/home/me', parent: '/home', entries: [] } }),
+    listDir: () => ({
+      ok: true,
+      value: {
+        path: '/home/me',
+        parent: '/home',
+        entries: [{ name: 'ok', kind: 'directory' }],
+        hidden: 1,
+      },
+    }),
     health,
   }
 }
@@ -723,6 +771,9 @@ async function reachBrowse(dom) {
   const create = parts.dom.window.document.querySelector('[data-wsl-action="create"]')
   check('an advisory check does not disable creation', create !== null && create.disabled === false,
     create?.disabled)
+  check('a hidden unrepresentable name is disclosed',
+    parts.dom.window.document.body.textContent.includes('1 name(s) contain characters') === true,
+    parts.dom.window.document.body.textContent?.slice(0, 200))
   parts.dom.window.document.querySelector('[data-wsl-health-toggle]')?.click()
   await settle()
   const expanded = parts.dom.window.document.querySelector('[data-wsl-health]')
@@ -750,6 +801,56 @@ async function reachBrowse(dom) {
     strip?.getAttribute('data-wsl-health'))
   const create = parts.dom.window.document.querySelector('[data-wsl-action="create"]')
   check('a failed health call still leaves creation enabled', create !== null && create.disabled === false)
+  live.dispose()
+}
+{
+  // An all-unknown batch measured nothing: it must not claim restricted mode is
+  // unavailable, which is a fact about a measured distribution.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub(browseHandlers(() => ({
+    ok: true,
+    value: {
+      distro: 'debian',
+      checks: [{ id: 'bash', status: 'unknown', detail: 'not measured' }],
+      ok: true,
+      restricted: false,
+    },
+  })))
+  const live = apply(parts.dom, { items: [] }, stub)
+  await reachBrowse(parts.dom)
+  const strip = parts.dom.window.document.querySelector('[data-wsl-health]')
+  check('an unmeasured batch does not claim restricted mode is unavailable',
+    strip !== null && strip.textContent.includes('Restricted mode is unavailable') === false,
+    strip?.textContent?.slice(0, 160))
+  live.dispose()
+}
+{
+  // The zh locale must localise the status and the fixed detail vocabulary; a
+  // version string keeps its own identity.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  Object.defineProperty(parts.dom.window.navigator, 'language', { value: 'zh-CN', configurable: true })
+  const stub = routeStub(browseHandlers(() => ({
+    ok: true,
+    value: {
+      distro: 'debian',
+      user: 'me',
+      runner: 'helper',
+      ok: true,
+      restricted: true,
+      checks: [{ id: 'python3', status: 'warn', detail: 'version unreadable or below 3.8' }],
+    },
+  })))
+  const live = apply(parts.dom, { items: [] }, stub)
+  await reachBrowse(parts.dom)
+  parts.dom.window.document.querySelector('[data-wsl-health-toggle]')?.click()
+  await settle()
+  const strip = parts.dom.window.document.querySelector('[data-wsl-health]')
+  check('the zh locale renders the localised health detail',
+    strip?.textContent.includes('版本无法识别或低于 3.8') === true
+    && strip?.textContent.includes('建议处理') === true,
+    strip?.textContent?.slice(0, 200))
   live.dispose()
 }
 

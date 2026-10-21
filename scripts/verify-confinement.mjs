@@ -462,6 +462,12 @@ if (typeof detectNoNewPrivs !== 'function' || typeof noNewPrivsRefusal !== 'func
   check('a measured answer is cached, so the next command does not re-probe it',
     againNo === false && noCalls === 1, { got: againNo, probes: noCalls })
   resetConfinementCache()
+  let keyCalls = 0
+  const worldA = await detectNoNewPrivs({ distro, cacheKey: 'world-a', run: async () => { keyCalls += 1; return { stdout: 'yes\n' } } })
+  const worldB = await detectNoNewPrivs({ distro, cacheKey: 'world-b', run: async () => { keyCalls += 1; return { stdout: 'no\n' } } })
+  check('the NNP cache is keyed by the configured world',
+    worldA === true && worldB === false && keyCalls === 2, { worldA, worldB, probes: keyCalls })
+  resetConfinementCache()
   const saidYes = await detectNoNewPrivs({ distro, run: async () => ({ stdout: 'yes\n' }) })
   check('the probe answering "yes" reports true (measured supported)', saidYes === true, { got: saidYes })
   resetConfinementCache()

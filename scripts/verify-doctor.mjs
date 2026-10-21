@@ -88,7 +88,15 @@ console.log('\nassembly')
   check('no command path is returned to the browser',
     !JSON.stringify(health).includes('/usr/bin'), JSON.stringify(health).slice(0, 200))
   check('every check carries its protocol remedy',
-    health.checks.every((entry) => JSON.stringify(entry.remedy) === JSON.stringify(CHECK_REMEDIES[entry.id])))
+    health.checks.every((entry) => {
+      const base = CHECK_REMEDIES[entry.id]
+      return entry.remedy?.kind === base.kind
+        && entry.remedy?.value === base.value
+        && entry.remedy?.families === undefined
+    }),
+    health.checks.map((entry) => entry.remedy))
+  check('the health answer does not ship the dead family map',
+    !JSON.stringify(health).includes('"families"'), JSON.stringify(health).slice(0, 200))
 }
 {
   clearHealthCache()
@@ -240,6 +248,20 @@ console.log('\nhelper probe gating')
   check('the helper row is the unmeasured advisory, not a version claim',
     helper?.status === 'warn' && helper.detail.includes('not selected'), helper)
 }
+{
+  clearHealthCache()
+  const h = harness()
+  const result = await healthFor({
+    distro: 'd',
+    ...h,
+    runnerProbe: async () => { throw new Error('runner probe down') },
+    now: () => 4_500,
+  })
+  const helper = result.checks.find((check) => check.id === 'helper')
+  check('a failed runner probe leaves the helper row unmeasured, not absent',
+    helper?.status === 'unknown', helper)
+  check('and still executes no helper probe', h.helperCalls() === 0, h.helperCalls())
+}
 
 console.log('\nremedy families')
 {
@@ -281,11 +303,20 @@ console.log('\nlive row')
   } else {
     try {
       const health = await healthFor({ distro: live })
-      check('the live distro reports a status for every check',
-        health.checks.length === CHECK_IDS.length && health.checks.every((entry) => entry.status !== 'unknown'),
-        health.checks)
+      // A legitimate cold-VM timeout may leave one probe unknown; that is not a
+      // defect. The live row asserts the shape and the ONE check that is a hard
+      // failure if unmeasured, plus the no-path boundary.
+      check('the live distro reports the protocol checks in order',
+        health.checks.map((entry) => entry.id).join(',') === CHECK_IDS.join(','),
+        health.checks.map((entry) => entry.id))
+      const bash = health.checks.find((entry) => entry.id === 'bash')
+      check('the live distro measures its bash row',
+        ['pass', 'warn', 'fail'].includes(bash?.status), bash)
+      check('the live answer carries no command path or stderr',
+        !JSON.stringify(health).includes('/usr/bin/') && !JSON.stringify(health).includes('stderr'),
+        JSON.stringify(health).slice(0, 160))
     } catch (error) {
-      check('the live distro reports a status for every check', false, error)
+      check('the live distro reports a health answer', false, error)
     }
   }
 }

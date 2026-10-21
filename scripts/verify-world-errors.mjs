@@ -94,13 +94,11 @@ console.log('\nlistLinuxDir')
 }
 {
   const listing = await listLinuxDir('d', '/home', {
-    run: async () => outcome('d\ta\0f\tb\0', 0, '', true),
+    run: async () => outcome('d\tok\0d\tbad\\name\0d\tbad\nname\0', 0, '', true),
   })
   check('a successful listing keeps its NUL-framed entries',
-    listing.entries.length === 2
-    && listing.entries[0].name === 'a' && listing.entries[0].kind === 'directory'
-    && listing.entries[1].name === 'b' && listing.entries[1].kind === 'file',
-    listing.entries)
+    listing.entries.length === 1 && listing.entries[0].name === 'ok' && listing.hidden === 2,
+    listing)
 }
 
 console.log('\ncheckLinuxPath')

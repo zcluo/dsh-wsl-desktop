@@ -6,6 +6,23 @@ For operators on 0.6.0 and later. It explains the codes the browser sees, the en
 
 Every failure the browser half sees carries a stable `code` and a whitelisted set of `params`. The host message, `wsl.exe` stderr, resolved Windows paths and stacks never cross the wire; an unclassified internal failure returns only a `ref`, and the matching stack stays in the host log. A development-token caller still receives the human message — that is the debugging surface, not the product surface.
 
+<!-- Code anchors: every doc link lands on the table below, not at the page top. -->
+<a id="wsl-not-available"></a>
+<a id="distro-unknown"></a>
+<a id="distro-unreachable"></a>
+<a id="user-unknown"></a>
+<a id="path-invalid"></a>
+<a id="path-not-found"></a>
+<a id="path-not-directory"></a>
+<a id="path-denied"></a>
+<a id="preset-not-ready"></a>
+<a id="host-capability-missing"></a>
+<a id="host-plugin-stale"></a>
+<a id="too-busy"></a>
+<a id="internal"></a>
+<a id="transport"></a>
+<a id="catalog-unavailable"></a>
+
 | code | When | Browser params | Fix |
 |---|---|---|---|
 | `wsl-not-available` | No executable `wsl.exe`, or WSL2 is unavailable | none | Install/enable WSL2; make sure `wsl.exe` is on PATH |
