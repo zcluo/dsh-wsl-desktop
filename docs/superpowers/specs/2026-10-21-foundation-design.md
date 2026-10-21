@@ -259,7 +259,7 @@ export const CLIENT_SYMBOLS = Object.freeze([
 export async function probeHost(hostCtx) // -> { status:'ok'|'degraded'|'pending', features:{[id]:'ok'|'degraded'|'unknown'}, missing:[{id, feature, reason}] }
 ```
 
-- `status` 只看三个 required feature（`picker` / `preset-generation` / `session-create`）：全 `ok` → `ok`；任一 `degraded` → `degraded`；未探测 → `pending`。其余 feature 只进 `features` / `missing`，不改变 `status`。
+- `status` 只看**宿主侧**的 required feature：`preset-generation`（`picker` / `session-create` 的 required 符号都在浏览器侧，宿主返回 `unknown`，由客户端合并）。`ok` / `degraded` / `pending` 由此得出；其余 feature 只进 `features` / `missing`，不改变 `status`。
 
 - 幂等、5s TTL；并发调用共享同一个 in-flight promise。
 - 逐条解析 `HOST_SYMBOLS`；解析失败不抛，记入 `missing`。
@@ -311,7 +311,7 @@ export async function probeHost(hostCtx) // -> { status:'ok'|'degraded'|'pending
 - 经 dev token 调 `bootstrap`。
 - `unknown-method` → FAIL「宿主半边未更新，请重启桌面」。
 - `pluginVersion` 必须等于 `package.json` 的 `version`。
-- `capabilities.status === 'ok'`；`picker`、`preset-generation`、`session-create` 必须 `ok`；缺失时 FAIL 并点名 feature 与缺失 symbol。
+- `capabilities.status === 'ok'` 且 `capabilities.features['preset-generation'] === 'ok'`；这是 post-restart 能看到的那一半。`picker` / `session-create` 是浏览器侧符号，由 `bootstrap` 下发的 `clientSymbols` 与客户端的 probe 负责，post-restart 不代它声明。
 - `terminal` / `search` 缺失 → WARN（不判红），与 7.3 的矩阵一致。
 - `catalog.codes` 至少包含客户端会渲染的固定集合（`wsl-not-available`、`distro-unreachable`、`user-unknown`、`path-not-found`、`preset-not-ready`、`too-busy`、`internal`）；少一个即 FAIL。
 

@@ -26,6 +26,11 @@ import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = process.env.DSH_WSL_ROOT ?? join(here, '..')
+// The checkout's own version, so a host half that loaded a different generation is
+// named here rather than inferred from the deployed manifest check above.
+const sourceVersion = await readFile(join(pluginRoot, 'package.json'), 'utf8')
+  .then((raw) => JSON.parse(raw).version)
+  .catch(() => '')
 // The harness exports DSH_WEB_URL for the host it just started, and `verify-all --live`
 // runs this suite with NO argv (its spawnSync inherits the environment). Reading only
 // argv[2] meant the live mode was structurally broken after every restart: DSH's web port
@@ -705,6 +710,36 @@ if (anomalous.length === 0) {
 }
 todo('a GUI-created WSL session runs on the WSL preset',
   'Click the W button in the sidebar, add a WSL workspace, and open a session; its preset should read WSL · <base>.')
+
+console.log('\nhost contract (bootstrap)')
+{
+  let bootstrap
+  try {
+    bootstrap = await call('bootstrap')
+  } catch (error) {
+    check('the host half exposes the bootstrap catalog', false,
+      `${error?.message ?? error} — the host half is older than the checkout; restart DSH Desktop`)
+  }
+  if (bootstrap !== undefined) {
+    check('bootstrap answers with the catalog',
+      bootstrap.catalog !== null && typeof bootstrap.catalog?.codes === 'object', bootstrap?.catalog)
+    check('bootstrap reports this checkout version',
+      bootstrap.pluginVersion === sourceVersion,
+      `host=${String(bootstrap.pluginVersion)} checkout=${sourceVersion}`)
+    check('the host-scope capability probe is ok',
+      bootstrap.capabilities?.status === 'ok'
+      && bootstrap.capabilities?.features?.['preset-generation'] === 'ok',
+      bootstrap.capabilities)
+    const pinned = ['wsl-not-available', 'distro-unreachable', 'user-unknown', 'path-not-found', 'preset-not-ready', 'too-busy', 'internal']
+    check('the catalog carries the pinned browser codes',
+      pinned.every((code) => bootstrap.catalog?.codes?.[code] !== undefined),
+      pinned.filter((code) => bootstrap.catalog?.codes?.[code] === undefined))
+    check('the catalog carries the doctor vocabulary',
+      Array.isArray(bootstrap.catalog?.checks) && bootstrap.catalog.checks.length === 7
+      && bootstrap.catalog?.checkRemedies !== null && typeof bootstrap.catalog?.checkRemedies === 'object',
+      bootstrap.catalog?.checks)
+  }
+}
 
 console.log('\nbrowser half served to the page')
 

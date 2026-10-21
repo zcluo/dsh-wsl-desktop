@@ -228,7 +228,7 @@ Assert `browserFailure(new WslRouteError('too-busy'))` → `{code:'too-busy', pa
 - [ ] **Step 3: Extend the live suites.**
 
 `verify-route.mjs`: add browser-reachable rows for `bootstrap` (200, `ok:true`, has `catalog.codes`), and assert a browser caller still cannot call `execInWsl`/`selftest` (existing behavior). No new dev-token surface.
-`verify-post-restart.mjs`: after the binding section, call `bootstrap` with the dev token; assert method present, version equals `package.json.version`, `capabilities.status==='ok'`, required features `ok`, and the seven pinned codes exist. Missing required feature = FAIL naming it; terminal/search missing = WARN line (no red).
+`verify-post-restart.mjs`: after the binding section, call `bootstrap` with the dev token; assert method present, version equals `package.json.version`, `capabilities.status==='ok'` and the host-scope required feature (`preset-generation`) `ok` (client-scope features are the browser probe's to answer), and the seven pinned codes exist. Missing preset-generation = FAIL naming it; terminal/search missing = WARN line (no red).
 
 - [ ] **Step 4: Run offline suites green; run live only if a staged host is available.**
 

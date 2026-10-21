@@ -164,6 +164,8 @@ check('a browser caller can reach a discovery method',
   dispatchAdmission({ method: 'listDistros', developer: false, known: true, browserReachable: true }).ok === true)
 check('a developer caller can reach everything',
   dispatchAdmission({ method: 'execInWsl', developer: true, known: true, browserReachable: false }).ok === true)
+check('a browser caller can reach the wrapper-free bootstrap',
+  dispatchAdmission({ method: 'bootstrap', developer: false, known: true, browserReachable: true }).ok === true)
 check('the token comparison is length- and value-checked',
   tokenMatches('abc', 'abc', (l, r) => l.equals(r)) === true
   && tokenMatches('abc', 'abd', (l, r) => l.equals(r)) === false
@@ -256,6 +258,15 @@ console.log('\ndevelopment surface')
 const authorized = await post({ method: 'listDistros', params: {} }, { token })
 check('a caller holding the token reaches the acceptance surface',
   authorized.status === 200 && authorized.json?.ok === true, `${authorized.status} ${authorized.text.slice(0, 120)}`)
+const bootstrapAnswer = await post({ method: 'bootstrap', params: {} }, { token })
+check('bootstrap answers with the catalog and the plugin version',
+  bootstrapAnswer.status === 200 && bootstrapAnswer.json?.ok === true
+  && typeof bootstrapAnswer.json?.value?.pluginVersion === 'string'
+  && typeof bootstrapAnswer.json?.value?.catalog?.codes === 'object',
+  `${bootstrapAnswer.status} ${bootstrapAnswer.text.slice(0, 160)}`)
+check('bootstrap reports a capability status',
+  typeof bootstrapAnswer.json?.value?.capabilities?.status === 'string',
+  bootstrapAnswer.json?.value?.capabilities)
 // POSITIVE CONTROLS for the transport-fence pair above, and what makes that pair evidence rather
 // than a blind spot: "the file is absent" only means "the command did not run" if the SAME write
 // is observable through the SAME measurement when it DOES run. An admitted caller (developer

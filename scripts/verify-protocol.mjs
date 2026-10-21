@@ -19,7 +19,7 @@ import {
   FEATURE_LABELS,
   SAFE_PARAMS,
 } from '../lib/protocol.js'
-import { WslRouteError, browserFailure, classifyRouteFailure } from '../lib/route-errors.js'
+import { WslRouteError, browserFailure, classifyRouteFailure, routeErrorFor } from '../lib/route-errors.js'
 import { WslDomainError } from '../lib/wsl/errors.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 300) })
@@ -140,6 +140,28 @@ check('a typed unreachable error maps to distro-unreachable',
   let rejected = false
   try { new WslDomainError('ghost', 'x') } catch { rejected = true }
   check('a domain error refuses an unknown domain code', rejected)
+}
+
+console.log('\ndomain-to-wire mapping')
+{
+  const user = routeErrorFor(new WslDomainError('user-unknown', 'x'), { user: 'me', distro: 'd', path: '/p' })
+  check('a domain user error keeps only the user',
+    user instanceof WslRouteError && user.code === 'user-unknown'
+    && JSON.stringify(browserFailure(user)) === JSON.stringify({ code: 'user-unknown', params: { user: 'me' } }),
+    user)
+  const missing = routeErrorFor(new WslDomainError('path-not-found', 'x'), { path: '/gone', user: 'me' })
+  check('a domain path error keeps only the path',
+    missing instanceof WslRouteError
+    && JSON.stringify(browserFailure(missing)) === JSON.stringify({ code: 'path-not-found', params: { path: '/gone' } }),
+    missing)
+  const directory = routeErrorFor(new WslDomainError('path-not-directory', 'x'), { path: '/file' })
+  check('a domain directory error keeps the path',
+    directory.code === 'path-not-directory' && directory.params.path === '/file', directory)
+  const down = routeErrorFor(new WslDomainError('distro-unreachable', 'x'), { distro: 'debian' })
+  check('a domain unreachable error keeps the distro',
+    down.code === 'distro-unreachable' && down.params.distro === 'debian', down)
+  const passthrough = new Error('boom')
+  check('a non-domain error is passed through unchanged', routeErrorFor(passthrough) === passthrough)
 }
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
