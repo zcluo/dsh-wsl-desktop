@@ -69,6 +69,18 @@ scripts/verify-all.mjs  聚合运行全部套件（--live 追加需要运行中�
 
 每次 DSH Desktop 更新后，插件都可能因 harness 内部 API 变化而失效（0.1.6 → 0.1.7 一次断裂四处）。纪律是：**更新桌面 → 跑 `node scripts/verify-post-restart.mjs` → 全绿才继续使用；任何一次红都先修再干。** 该套件覆盖预设注册、执行世界、会话绑定、Windows 隔离与对话框契约，新宿主的破坏会在这些断言上现形，而不是静默降级成宿主世界。逐套件职责见 [校验](VERIFICATION.md)。
 
+## 开发回路
+
+```bash
+git clone https://github.com/zcluo/dsh-wsl-desktop.git
+cd dsh-wsl-desktop
+node scripts/verify-all.mjs        # 离线全量
+.\scripts\sync.ps1                 # stage 进 profile 并重指向（开发者模式：developerTools 开启；首次安装需先接线）
+# 重启 DSH Desktop → verify-post-restart.mjs
+```
+
+宿主代码改动需要重启 DSH Desktop 才会加载，重启后先跑 `verify-post-restart.mjs`；浏览器半边改动不需要重启，但「文件已改」不等于「投放已变」，见下面「改动何时生效」。
+
 ## 发版流程
 
 语义化版本在这个仓库里有具体含义：`patch` = 缺陷修复；`minor` = 兼容的桌面大版本适配（每次 harness 断裂适配后升 minor，如 0.1.x 里的 0.1.7 适配）；`major` = 边界语义或支持矩阵变化。**所以桌面大版本变了，先看有没有对应的 minor。** 流程：改 `package.json` 的 version → 全量套件 + `verify-post-restart.mjs` 全绿 → `npm publish --access public` → 打 git tag。

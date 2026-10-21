@@ -69,6 +69,18 @@ scripts/verify-all.mjs  Aggregates and runs all suites (--live adds the suites n
 
 After every DSH Desktop update the plugin may break, because harness internal APIs can change (0.1.6 → 0.1.7 broke four places in one go). The discipline: **update the desktop → run `node scripts/verify-post-restart.mjs` → only keep going when everything is green; any red gets fixed before anything else.** That suite covers preset registration, the execution world, session binding, Windows isolation and dialog contracts, so breakage from a new host shows up on these assertions instead of silently degrading into the host world. Per-suite responsibilities are in [Verification](VERIFICATION.en.md).
 
+## Development loop
+
+```bash
+git clone https://github.com/zcluo/dsh-wsl-desktop.git
+cd dsh-wsl-desktop
+node scripts/verify-all.mjs        # full offline run
+.\scripts\sync.ps1                 # stage into the profile and re-point (developer mode: developerTools enabled; a first install needs the wiring first)
+# restart DSH Desktop → verify-post-restart.mjs
+```
+
+Host-code changes require restarting DSH Desktop to load, and `verify-post-restart.mjs` runs first after the restart; browser-half changes need no restart, but "the file changed" is not "the served bytes changed" — see "When a change takes effect" below.
+
 ## Release procedure
 
 Semantic versions mean something specific here: `patch` = defect fixes; `minor` = a compatible desktop-major adaptation (each harness-break adaptation bumps minor, e.g. the 0.1.7 adaptation inside 0.1.x); `major` = boundary semantics or support-matrix changes. **So when the desktop major changes, check first whether a matching minor exists.** Flow: bump the `package.json` version → full suites + `verify-post-restart.mjs` all green → `npm publish --access public` → git tag.
