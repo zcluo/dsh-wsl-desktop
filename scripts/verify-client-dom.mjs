@@ -569,6 +569,14 @@ function routeStub(handlers) {
     panel?.textContent?.slice(0, 160))
   check('a degraded picker asks for no distribution',
     !stub.calls.includes('listDistros'), stub.calls)
+  const copyDiagnostics = [...(panel?.querySelectorAll('button') ?? [])]
+    .find((button) => button.textContent === 'Copy diagnostics')
+  copyDiagnostics?.click()
+  const overlay = parts.dom.window.document.querySelector('[role="dialog"]')
+  const announcer = [...(overlay?.children ?? [])]
+    .find((node) => node.getAttribute?.('role') === 'status' && node.getAttribute('aria-live') === 'polite')
+  check('a copy action is announced through the dialog live region',
+    announcer?.textContent === 'Copied', announcer?.textContent)
   live.dispose()
 }
 {
@@ -851,6 +859,57 @@ async function reachBrowse(dom) {
     strip?.textContent.includes('版本无法识别或低于 3.8') === true
     && strip?.textContent.includes('建议处理') === true,
     strip?.textContent?.slice(0, 200))
+  const dialog = parts.dom.window.document.querySelector('[role="dialog"]')
+  check('the zh locale renders the older dialog copy in Chinese',
+    dialog?.textContent.includes('创建并打开') === true
+    && live.button?.getAttribute('aria-label') === '添加 WSL 工作区',
+    dialog?.textContent?.slice(0, 200))
+  live.dispose()
+}
+
+console.log('\nthe English dialog, its description and the keyboard trap')
+{
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub(browseHandlers(() => ({
+    ok: true,
+    value: {
+      distro: 'debian',
+      user: 'me',
+      runner: 'helper',
+      ok: true,
+      restricted: true,
+      checks: [],
+    },
+  })))
+  const live = apply(parts.dom, { items: [] }, stub)
+  await reachBrowse(parts.dom)
+  const doc = parts.dom.window.document
+  const overlay = doc.querySelector('[role="dialog"]')
+  const text = overlay?.textContent ?? ''
+  check('the English dialog carries no Chinese copy',
+    overlay !== null && !/[\u4e00-\u9fff]/.test(text), text.slice(0, 200))
+  check('the dialog and its trigger use the English accessible name',
+    overlay?.getAttribute('aria-label') === 'Add a WSL workspace'
+    && live.button?.getAttribute('aria-label') === 'Add a WSL workspace')
+  const description = doc.getElementById(overlay?.getAttribute('aria-describedby') ?? '')
+  check('aria-describedby names the dialog purpose',
+    description?.textContent === 'Create a workspace from a WSL distribution directory.',
+    description?.textContent)
+  const focusable = [...(overlay?.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])]
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  last?.focus()
+  doc.dispatchEvent(new parts.dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+  check('Tab from the last control wraps to the first', doc.activeElement === first,
+    doc.activeElement?.outerHTML?.slice(0, 80))
+  first?.focus()
+  doc.dispatchEvent(new parts.dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+  check('Shift+Tab from the first control wraps to the last', doc.activeElement === last,
+    doc.activeElement?.outerHTML?.slice(0, 80))
+  doc.dispatchEvent(new parts.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  check('Escape closes the dialog', doc.querySelector('[role="dialog"]') === null)
+  check('focus returns to the W button', doc.activeElement === live.button)
   live.dispose()
 }
 

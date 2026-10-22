@@ -2,6 +2,10 @@
 
 面向 0.6.0 及以上的操作者。本文解释浏览器看到的错误码、W 对话框里的环境检查，以及宿主能力缺失时的降级行为。执行世界的机制见 [ARCHITECTURE.md](ARCHITECTURE.md)；围栏与发行版前提见 [CONFINEMENT.md](CONFINEMENT.md) 与 [DISTRO-SUPPORT.md](DISTRO-SUPPORT.md)。
 
+## 文案语言
+
+W 对话框按 `navigator.language` 在中文（`zh*`）与英文之间选择文案，覆盖错误目录、体检明细与旧对话框按钮。动态版本串（`Python x.y`、`dsh-wsl-confine v1.2`）以及发行版、用户、路径保持原样。没有运行时切换语言的开关。
+
 ## 错误码
 
 浏览器半边的每次失败都带一个稳定的 `code` 与一组经白名单过滤的 `params`。宿主侧的 message、`wsl.exe` stderr、解析后的 Windows 路径与堆栈不会出现在响应里；未分类的内部错误只回一个 `ref`，宿主日志里有对应的堆栈。开发令牌调用者仍会拿到人类可读的 message，这是调试面，不是产品面。

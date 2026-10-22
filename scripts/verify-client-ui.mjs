@@ -264,6 +264,105 @@ check('a missing sidebar anchor has a visible fallback entry', source.includes('
 check('the W button advertises and tracks the dialog',
   source.includes("aria-haspopup") && source.includes("aria-expanded"))
 
+console.log('\nlocalised copy and dialog accessibility')
+
+/**
+ * String literals with their source offsets, skipping comments.
+ *
+ * The scan below asks whether every Chinese literal sits inside a bilingual
+ * structure. A regex cannot answer that (the file is full of zh/en pairs), so the
+ * literals are tokenised and their positions checked against the structures.
+ * @param {string} text - the client source.
+ * @returns {{ start: number, text: string }[]} the literals.
+ */
+function stringLiterals(text) {
+  const found = []
+  let index = 0
+  while (index < text.length) {
+    const char = text[index]
+    if (char === '/' && text[index + 1] === '/') {
+      const end = text.indexOf('\n', index)
+      if (end < 0) break
+      index = end + 1
+      continue
+    }
+    if (char === '/' && text[index + 1] === '*') {
+      const end = text.indexOf('*/', index + 2)
+      index = end < 0 ? text.length : end + 2
+      continue
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      const start = index
+      index += 1
+      while (index < text.length) {
+        if (text[index] === '\\') { index += 2; continue }
+        if (text[index] === char) { index += 1; break }
+        index += 1
+      }
+      found.push({ start, text: text.slice(start + 1, index - 1) })
+      continue
+    }
+    index += 1
+  }
+  return found
+}
+
+/**
+ * The spans of the named top-level objects, closed by a line-initial `}`.
+ * @param {string} text - the client source.
+ * @param {string[]} names - the constant names.
+ * @returns {{ start: number, end: number }[]} the spans.
+ */
+function objectSpans(text, names) {
+  const spans = []
+  for (const name of names) {
+    const start = text.indexOf(`const ${name} = {`)
+    if (start < 0) continue
+    const lineStart = text.lastIndexOf('\n', start) + 1
+    const indent = text.slice(lineStart, start).match(/^\s*/)[0]
+    const end = text.indexOf(`\n${indent}}`, start)
+    spans.push({ start, end: end < 0 ? text.length : end })
+  }
+  return spans
+}
+
+const allowedSpans = objectSpans(source, ['COPY', 'FALLBACK_MESSAGES', 'CHECK_STATUS_LABELS', 'DETAIL_ZH'])
+const offCopy = []
+for (const literal of stringLiterals(source)) {
+  if (!/[\u4e00-\u9fff]/.test(literal.text)) continue
+  const lineStart = source.lastIndexOf('\n', literal.start) + 1
+  const line = source.slice(lineStart, source.indexOf('\n', literal.start)).trim()
+  if (line.startsWith('console.')) continue
+  if (allowedSpans.some((span) => literal.start > span.start && literal.start < span.end)) continue
+  if (/t\(\s*$/.test(source.slice(Math.max(0, literal.start - 40), literal.start))) continue
+  const lineNumber = source.slice(0, literal.start).split('\n').length
+  offCopy.push(`L${lineNumber} ${literal.text.slice(0, 30)}`)
+}
+check('no user-visible copy bypasses the bilingual structures',
+  offCopy.length === 0, offCopy.slice(0, 8).join(' | '))
+
+const copyBlock = objectSpans(source, ['COPY'])[0]
+check('the older dialog copy lives in one COPY table',
+  copyBlock !== undefined && source.includes('function copy(') && source.includes("copy('trigger')"))
+if (copyBlock !== undefined) {
+  const block = source.slice(copyBlock.start, copyBlock.end)
+  const keys = [...block.matchAll(/^\s+(\w+): \{ zh:/gm)].map((match) => match[1])
+  const paired = [...block.matchAll(/^\s+(\w+): \{ zh: '.*', en: .* \},$/gm)].map((match) => match[1])
+  check('every COPY key carries both languages on one line',
+    keys.length > 10 && paired.length === keys.length, `keys=${keys.length} paired=${paired.length}`)
+  check('COPY covers the trigger, the user gate and the commit buttons',
+    ['trigger', 'distroLabel', 'userPlaceholder', 'createOpen'].every((key) => keys.includes(key)),
+    keys.join(','))
+}
+
+check('the dialog is described by a stable description element', source.includes('aria-describedby'))
+check('async health and copy feedback announce through a live region',
+  source.includes("'aria-live'") && source.includes("role', 'status'"))
+check('Tab is trapped inside the dialog',
+  source.includes("event.key !== 'Tab'") || source.includes("event.key === 'Tab'"))
+check('the client declares no transition or animation to reduce',
+  !/\btransition\s*:/.test(source) && !/\banimation\s*:/.test(source))
+
 // A skip is a check that did not run; reporting it as a pass would make the
 // suite's green meaningless exactly when the checkout is wrong. It gets its own
 // exit code (2), which `verify-all` shows as SKIP only because verify-client-ui.mjs

@@ -2,6 +2,10 @@
 
 For operators on 0.6.0 and later. It explains the codes the browser sees, the environment check in the W dialog, and what happens when a host capability is missing. The execution-world mechanics live in [ARCHITECTURE.en.md](ARCHITECTURE.en.md); the fence and the distribution prerequisites live in [CONFINEMENT.en.md](CONFINEMENT.en.md) and [DISTRO-SUPPORT.md](DISTRO-SUPPORT.md).
 
+## Copy language
+
+The W dialog selects its copy between Chinese (`zh*`) and English from `navigator.language`, covering the error catalog, the health details and the older dialog buttons. Dynamic version strings (`Python x.y`, `dsh-wsl-confine v1.2`) and distribution, user and path values stay verbatim. There is no runtime language switch.
+
 ## Error codes
 
 Every failure the browser half sees carries a stable `code` and a whitelisted set of `params`. The host message, `wsl.exe` stderr, resolved Windows paths and stacks never cross the wire; an unclassified internal failure returns only a `ref`, and the matching stack stays in the host log. A development-token caller still receives the human message — that is the debugging surface, not the product surface.
