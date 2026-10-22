@@ -105,12 +105,13 @@ const STANDALONE = [
   'verify-search.mjs',
   'verify-protocol.mjs',
   'verify-world-errors.mjs',
+  'verify-release-preflight.mjs',
   'verify-host-contract.mjs',
   'verify-doctor.mjs',
 ]
 
 /** Suites that require the installed plugin behind a running Desktop host. */
-const LIVE = ['verify-route.mjs', 'inspect-live-client.mjs', 'verify-post-restart.mjs']
+const LIVE = ['verify-live-env.mjs', 'verify-route.mjs', 'inspect-live-client.mjs', 'verify-post-restart.mjs']
 
 /**
  * The suites that may legitimately SKIP, each with the precondition that allows it.
@@ -220,12 +221,14 @@ const DECLARED_SKIPS = [
     precondition: 'there is no harness checkout to resolve jsdom from, or jsdom is not installed in one, so the browser half cannot be run in a real DOM',
   },
   {
-    // verify-host-contract.mjs — the branch tests `!existsSync(deps)`, true when the
-    // plugin root node_modules is absent AND when DSH_WSL_DEPS names a directory that
-    // is not there. Without the host packages, their exports cannot be imported.
+    // verify-host-contract.mjs — the branch tests `!existsSync(deps)` (no dependency
+    // directory at all) and `unresolved` (a directory exists but one or more declared
+    // host packages do not resolve from it, e.g. a profile node_modules that carries
+    // the plugin's dependencies but not the host's internal packages). The second
+    // class used to FAIL on import; it is now a per-module SKIP.
     suite: 'verify-host-contract.mjs',
-    branch: ['!existsSync(deps)'],
-    precondition: 'the dependency directory the suite resolves (DSH_WSL_DEPS when it names one, otherwise the plugin root node_modules) does not exist, so the host packages and their exports cannot be imported here',
+    branch: ['!existsSync(deps)', 'unresolved'],
+    precondition: 'the dependency directory the suite resolves (DSH_WSL_DEPS when it names one, otherwise the plugin root node_modules) does not exist, or one or more declared host packages cannot be resolved from it, so those export checks cannot be imported here',
   },
   {
     // verify-doctor.mjs — the live row skips when DSH_WSL_DISTRO is unset and

@@ -43,6 +43,15 @@
 
 这些预设是**运行时注册的，不是从目录加载的**——这正是 0.1.7 这个版本下限的真实原因：更旧的宿主没有运行时注册，会在激活时明确拒绝。`SECURITY.md` 把同一条事实记作部署前提。
 
+## 开发 profile 与发布 profile
+
+同一个 profile 可以装两种形态，它们只差 `cordis.patch.yml` 里有没有 `config.developerTools`：
+
+- **发布形态**：`plugin_manager install_bundle dsh-wsl-desktop@<version>` 从 registry 安装。包内 patch 不带 `config`，`developerTools` 因此是 `false`，dev-token 调用一律 401。这是给用户用的形态。
+- **开发形态**：`.\scripts\sync.ps1` 把 checkout stage 成带时间戳的代次，并在 patch 里写 `config: developerTools: true`，再把 profile 链接指过去。`verify-route`、`verify-post-restart`、`verify-live-env` 需要这一形态。
+
+切换：发布 → 开发用 `sync.ps1`；开发 → 发布用 `plugin_manager remove_bundle dsh-wsl-desktop` 再 `install_bundle dsh-wsl-desktop@<version>`。两种切换都要**重启 DSH Desktop** 才换得掉宿主半边；客户端半边刷新页面即可。`verify-all --live` 现在先跑 `verify-live-env.mjs`：401 时它会直接打印上面的切换步骤，而不是让三个 live 套件各自报 401。
+
 ## 仓库布局
 
 ```

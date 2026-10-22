@@ -43,6 +43,15 @@ The `wsl-*` presets this plugin registers are held by the plugin's own disposer 
 
 The presets are **registered at runtime rather than loaded from a directory**, which is the 0.1.7 floor's real reason: a host older than that has no runtime registration and explicitly rejects the plugin at activation. That is the same fact `SECURITY.md` records as a deployment precondition.
 
+## Dev profile vs release profile
+
+One profile can hold either shape; they differ only by whether `cordis.patch.yml` carries `config.developerTools`:
+
+- **Release shape**: `plugin_manager install_bundle dsh-wsl-desktop@<version>` installs from the registry. The shipped patch has no `config`, so `developerTools` is `false` and every dev-token call is a 401. This is the shape users get.
+- **Dev shape**: `.\scripts\sync.ps1` stages the checkout into a timestamped generation, writes `config: developerTools: true` into its patch, and re-points the profile link at it. `verify-route`, `verify-post-restart` and `verify-live-env` need this shape.
+
+To switch: release → dev with `sync.ps1`; dev → release with `plugin_manager remove_bundle dsh-wsl-desktop` then `install_bundle dsh-wsl-desktop@<version>`. Either switch needs a **DSH Desktop restart** to replace the host half; a page refresh only reloads the client half. `verify-all --live` now runs `verify-live-env.mjs` first: on a 401 it prints those switch steps instead of leaving three live suites to each report 401.
+
 ## Repository layout
 
 ```

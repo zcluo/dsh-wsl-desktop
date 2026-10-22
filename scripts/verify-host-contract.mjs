@@ -11,7 +11,9 @@
  */
 import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
@@ -282,18 +284,51 @@ if (!existsSync(deps)) {
   console.log(`  SKIP  ${HOST_IMPORTS.length} import check(s) not evaluated, no dependencies at ${deps}; link the host node_modules there, or set DSH_WSL_DEPS`)
 } else {
   const modules = [...new Set(HOST_IMPORTS.map((entry) => entry.module))]
+  // Resolve through the directory the caller named, not through the plugin root:
+  // DSH_WSL_DEPS is allowed to point at a profile's node_modules, whose packages
+  // resolve from the profile package.json beside it. A package that is not there
+  // (host internals live inside the app bundle, not the profile) is a SKIP for
+  // those exports, not a FAIL — the false red this check used to produce.
+  const resolutionBase = process.env.DSH_WSL_DEPS === undefined
+    ? join(pluginRoot, 'package.json')
+    : join(dirname(deps), 'package.json')
+  const requireFrom = createRequire(resolutionBase)
+  const resolvedPaths = new Map()
+  const unresolved = []
   for (const spec of modules) {
-    let module = null
-    let failure = null
     try {
-      module = await import(spec)
-    } catch (error) {
-      failure = error
+      resolvedPaths.set(spec, requireFrom.resolve(spec))
+    } catch {
+      unresolved.push(spec)
     }
-    for (const entry of HOST_IMPORTS.filter((item) => item.module === spec)) {
-      check(`${entry.id} is exported by the installed host`,
-        failure === null && module !== null && entry.export in module,
-        failure === null ? Object.keys(module ?? {}) : failure)
+  }
+  if (unresolved.length === modules.length) {
+    checker.skip(HOST_IMPORTS.length)
+    console.log(`  SKIP  ${HOST_IMPORTS.length} import check(s) not evaluated: no declared host package resolves from ${deps}`)
+  } else {
+    for (const spec of modules) {
+      const entries = HOST_IMPORTS.filter((item) => item.module === spec)
+      if (unresolved.includes(spec)) {
+        checker.skip(entries.length)
+        console.log(`  SKIP  ${entries.length} check(s) for ${spec}: it does not resolve from ${deps}`)
+        continue
+      }
+      let module = null
+      let failure = null
+      try {
+        // Import the RESOLVED path, not the bare specifier: with DSH_WSL_DEPS pointing
+        // at a profile, bare ESM resolution would still walk from this script's
+        // directory (the plugin root) and miss the profile package the resolver just
+        // found. The URL import uses the same package file the host would.
+        module = await import(pathToFileURL(resolvedPaths.get(spec)).href)
+      } catch (error) {
+        failure = error
+      }
+      for (const entry of entries) {
+        check(`${entry.id} is exported by the installed host`,
+          failure === null && module !== null && entry.export in module,
+          failure === null ? Object.keys(module ?? {}) : failure)
+      }
     }
   }
 }
