@@ -22,6 +22,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
+import { CHECK_IDS } from '../lib/protocol.js'
 import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -743,7 +744,11 @@ console.log('\nhost contract (bootstrap)')
       }
     }
     check('the catalog carries the doctor vocabulary',
-      Array.isArray(bootstrap.catalog?.checks) && bootstrap.catalog.checks.length === 7
+      // Compare against the protocol's own list, not a hardcoded count: the
+      // vocabulary evolves (wsl2 was added in 0.7.x) and a pinned length turns
+      // every addition into a false red on a restarted host.
+      Array.isArray(bootstrap.catalog?.checks)
+      && bootstrap.catalog.checks.join(',') === CHECK_IDS.join(',')
       && bootstrap.catalog?.checkRemedies !== null && typeof bootstrap.catalog?.checkRemedies === 'object',
       bootstrap.catalog?.checks)
   }
