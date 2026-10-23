@@ -91,6 +91,9 @@ const verdict = classifyPublish({
 })
 const blockers = [...verdict.blockers]
 if (!facts.authenticated) blockers.push('npm is not authenticated (npm whoami failed)')
+// `npm view` failing while whoami succeeds is a network/registry fault, not
+// evidence that the target is free. Treat an unreadable latest as blocking.
+if (facts.latest === null) blockers.push('the registry latest version could not be read (npm view failed)')
 if (facts.minimumReleaseAge === null) blockers.push('pnpm minimumReleaseAge could not be read from the profile')
 const window = facts.published === false && facts.publishedAt !== null && facts.minimumReleaseAge !== null
   ? installWindow({ publishedAt: facts.publishedAt, minimumReleaseAgeMinutes: facts.minimumReleaseAge, now: new Date() })

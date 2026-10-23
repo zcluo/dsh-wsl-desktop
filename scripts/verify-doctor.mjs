@@ -91,6 +91,8 @@ console.log('\nWSL version table')
     parseWslVersionTable('  NAME  STATE  VERSION\n  d  Running  n/a', 'd') === null)
   check('a tab-separated row parses',
     parseWslVersionTable('d\tRunning\t2', 'd') === '2')
+  check('a distribution name with a single space still matches',
+    parseWslVersionTable('  NAME            STATE           VERSION\n* Ubuntu 22.04    Running         2', 'Ubuntu 22.04') === '2')
 }
 
 console.log('\nassembly')
