@@ -37,6 +37,11 @@ console.log('\npublish target')
   check('a version already on the registry is blocked',
     classifyPublish({ target: '0.7.0', latest: '0.7.0', published: true }).blockers
       .some((entry) => entry.includes('already published')) === true)
+  check('an unreadable registry latest blocks instead of passing',
+    classifyPublish({ target: '0.8.0', latest: null }).blockers
+      .some((entry) => entry.includes('unknown')) === true)
+  check('an undefined registry latest blocks instead of passing',
+    classifyPublish({ target: '0.8.0' }).blockers.length > 0)
   check('a target not newer than latest is blocked',
     classifyPublish({ target: '0.7.0', latest: '0.7.0', published: false }).blockers
       .some((entry) => entry.includes('not newer')) === true)
