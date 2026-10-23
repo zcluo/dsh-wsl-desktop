@@ -106,6 +106,7 @@ const STANDALONE = [
   'verify-protocol.mjs',
   'verify-world-errors.mjs',
   'verify-release-preflight.mjs',
+  'verify-release-check.mjs',
   'verify-host-contract.mjs',
   'verify-doctor.mjs',
 ]
