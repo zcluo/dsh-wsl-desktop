@@ -59,6 +59,7 @@ const DOC_PAIRS = [
   ['docs/SEARCH.md', 'docs/SEARCH.en.md'],
   ['docs/PERSISTENT-SHELL.md', 'docs/PERSISTENT-SHELL.en.md'],
   ['docs/DIAGNOSTICS.md', 'docs/DIAGNOSTICS.en.md'],
+  ['docs/COMPATIBILITY.md', 'docs/COMPATIBILITY.en.md'],
 ]
 
 /** The `.en` side of a declared pair, keyed by basename, mapping onto its primary's basename. */

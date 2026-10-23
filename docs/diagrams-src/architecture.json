@@ -12,6 +12,8 @@
         "focus": [
           "client",
           "host",
+          "protocol",
+          "contract",
           "registry",
           "realm"
         ],
@@ -234,6 +236,63 @@
           "path": "lib/wsl/dsh-wsl-confine.sh"
         }
       ]
+    },
+    {
+      "id": "protocol",
+      "type": "backend",
+      "label": "错误目录",
+      "sublabel": "lib/protocol.js",
+      "pos": [
+        220,
+        40
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "lib/protocol.js"
+        }
+      ]
+    },
+    {
+      "id": "contract",
+      "type": "backend",
+      "label": "宿主契约",
+      "sublabel": "manifest + probe",
+      "pos": [
+        430,
+        40
+      ],
+      "size": [
+        160,
+        60
+      ],
+      "sources": [
+        {
+          "path": "lib/host/contract.js"
+        }
+      ]
+    },
+    {
+      "id": "doctor",
+      "type": "backend",
+      "label": "发行版体检",
+      "sublabel": "lib/wsl/doctor.js",
+      "pos": [
+        640,
+        40
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "lib/wsl/doctor.js"
+        }
+      ]
     }
   ],
   "boundaries": [
@@ -254,7 +313,10 @@
         "realm",
         "shell",
         "fs",
-        "sub"
+        "sub",
+        "protocol",
+        "contract",
+        "doctor"
       ]
     },
     {
@@ -266,6 +328,47 @@
     }
   ],
   "connections": [
+    {
+      "id": "client-protocol",
+      "from": "client",
+      "to": "protocol",
+      "label": "bootstrap 拉取目录",
+      "variant": "dashed"
+    },
+    {
+      "id": "host-protocol",
+      "from": "host",
+      "to": "protocol",
+      "label": "错误目录",
+      "labelAt": [
+        250,
+        300
+      ]
+    },
+    {
+      "id": "host-contract",
+      "from": "host",
+      "to": "contract",
+      "label": "启动探测"
+    },
+    {
+      "id": "host-doctor",
+      "from": "host",
+      "to": "doctor",
+      "label": "health（按需）",
+      "variant": "dashed"
+    },
+    {
+      "id": "doctor-protocol",
+      "from": "doctor",
+      "to": "protocol",
+      "label": "CHECK_IDS",
+      "variant": "dashed",
+      "labelAt": [
+        500,
+        114
+      ]
+    },
     {
       "id": "client-host",
       "from": "client",
@@ -422,6 +525,14 @@
       "items": [
         "会话创建请求命名 WSL 预设，是唯一无竞态的绑定缝",
         "fs 走 9P UNC 且过围栏；命令执行走 wsl.exe"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "可读失败",
+      "items": [
+        "protocol 是 code、remedy 与允许 params 的唯一来源；浏览器经 bootstrap 拉取，不复制第二份目录",
+        "contract 在启动时探测宿主能力，doctor 在确认用户后按需体检；两者都不按版本号猜"
       ]
     }
   ]

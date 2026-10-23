@@ -155,6 +155,7 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
 - [Diagnostics](docs/DIAGNOSTICS.md) — error codes, the health check, degradation and the privacy boundary
 - [Engineering notes](docs/ENGINEERING-NOTES.md) — measured constraints, repository layout, release flow, install shape
 - [Distro support matrix](docs/DISTRO-SUPPORT.md) — which distros were verified, and what each one needs
+- [Compatibility and upgrades](docs/COMPATIBILITY.md) — plugin/desktop version relation, upgrade order, rollback steps
 - [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) — the two proposals to the harness upstream
 - [Architecture and flow diagrams](docs/diagrams.md) — interactive architecture, sequence and lifecycle diagrams
 

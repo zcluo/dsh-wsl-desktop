@@ -128,6 +128,7 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - [诊断](docs/DIAGNOSTICS.md) — 错误码、环境检查、宿主能力缺失时的降级与隐私边界
 - [工程笔记](docs/ENGINEERING-NOTES.md) — 实测约束、仓库布局、发版流程、安装形态
 - [发行版支持矩阵](docs/DISTRO-SUPPORT.md) — 哪些发行版验证过，每种缺什么
+- [兼容性与升级](docs/COMPATIBILITY.md) — 插件与桌面的版本关系、升级顺序、回退步骤
 - [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) — 对 harness 上游的两项提案
 - [架构与流程图](docs/diagrams.md) — 可交互的架构、时序与生命周期图
 

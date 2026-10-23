@@ -929,6 +929,83 @@ console.log('\nthe English dialog, its description and the keyboard trap')
   live.dispose()
 }
 
+console.log('\nthe browse filter and a failed listing')
+{
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const stub = routeStub({
+    ...browseHandlers(() => ({
+      ok: true,
+      value: { distro: 'debian', user: 'me', runner: 'helper', ok: true, restricted: true, checks: [] },
+    })),
+    listDir: () => ({
+      ok: true,
+      value: {
+        path: '/home/me',
+        parent: '/home',
+        entries: [
+          { name: 'alpha', kind: 'directory' },
+          { name: 'beta', kind: 'directory' },
+          { name: 'alphabet', kind: 'directory' },
+        ],
+        hidden: 0,
+      },
+    }),
+  })
+  const live = apply(parts.dom, { items: [] }, stub)
+  await reachBrowse(parts.dom)
+  const doc = parts.dom.window.document
+  const filter = doc.querySelector('[data-wsl-filter]')
+  check('the browse phase offers a filter box', filter !== null)
+  const names = () => [...doc.querySelectorAll('[data-wsl-entry]')]
+    .filter((node) => node.style.display !== 'none')
+    .map((node) => node.textContent.replace('📁 ', ''))
+  check('every directory is listed before filtering', names().length === 3, names())
+  filter.value = 'alp'
+  filter.dispatchEvent(new parts.dom.window.Event('input', { bubbles: true }))
+  await settle()
+  check('the filter narrows the list to matching names',
+    names().join(',') === 'alpha,alphabet', names())
+  filter.value = 'zzz'
+  filter.dispatchEvent(new parts.dom.window.Event('input', { bubbles: true }))
+  await settle()
+  check('a filter with no match says so instead of an empty box',
+    names().length === 0 && doc.querySelector('[data-wsl-filter-empty]') !== null)
+  live.dispose()
+}
+{
+  const parts = fixture()
+  layout(parts, 344, 60)
+  let calls = 0
+  const stub = routeStub({
+    ...browseHandlers(() => ({
+      ok: true,
+      value: { distro: 'debian', user: 'me', runner: 'helper', ok: true, restricted: true, checks: [] },
+    })),
+    listDir: () => {
+      calls += 1
+      if (calls === 1) throw new Error('permission denied')
+      return {
+        ok: true,
+        value: { path: '/home/me', parent: '/home', entries: [{ name: 'ok', kind: 'directory' }], hidden: 0 },
+      }
+    },
+  })
+  const live = apply(parts.dom, { items: [] }, stub)
+  await reachBrowse(parts.dom)
+  const doc = parts.dom.window.document
+  const retry = doc.querySelector('[data-wsl-list-retry]')
+  check('a failed listing offers a retry that re-runs the same load', retry !== null,
+    doc.querySelector('[data-wsl-error]')?.textContent?.slice(0, 120))
+  retry?.click()
+  await settle()
+  check('the retry clears the error and shows the directory',
+    doc.querySelector('[data-wsl-error]') === null
+    && [...doc.querySelectorAll('[data-wsl-entry]')].some((node) => node.textContent.includes('ok')),
+    calls)
+  live.dispose()
+}
+
 console.log('\nthe fallback entry and focus return')
 {
   // No anchor at all: the companion stands down, and the timed fallback is the
