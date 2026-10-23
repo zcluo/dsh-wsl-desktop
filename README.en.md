@@ -133,6 +133,10 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
   the whitelisted params, never the host message, stderr or resolved paths; after the user is
   confirmed, the W dialog shows an advisory health check whose failed rows carry the fix. Codes,
   checks and degradation are in [Diagnostics](docs/DIAGNOSTICS.md).
+- **The W dialog is bilingual and keyboard-contained.** Copy follows `navigator.language` between
+  Chinese and English; the dialog traps Tab, closes on Escape and returns focus to the W button,
+  and copy feedback goes through a screen-reader live region. Details in
+  [Diagnostics](docs/DIAGNOSTICS.md#copy-language).
 - **Who it is for.** For now it suits the plugin author or an operator of the same trust level, for
   long-term use. Distribution to third-party users, or unattended high-value environments, are not
   suitable yet — the reasoning is in [SECURITY.md](SECURITY.md).

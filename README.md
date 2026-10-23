@@ -108,6 +108,9 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - **失败现在带 code，可以先自己诊断。** 浏览器侧的错误只回稳定 code 与允许的 params，
   宿主 message、stderr 与解析后的路径不会过线；W 对话框在确认用户后会显示一条建议性的
   「环境检查」，失败项带修复命令。错误码、检查项与降级行为见 [诊断](docs/DIAGNOSTICS.md)。
+- **W 对话框是双语的，键盘也关得住。** 文案按 `navigator.language` 在中英文之间选择；对话框有
+  Tab 焦点陷阱、Escape 关闭并把焦点还给 W 按钮，复制反馈走读屏实时区。细节见
+  [诊断](docs/DIAGNOSTICS.md#文案语言)。
 - **适合谁用。** 目前适合插件作者本人或同信任级别的操作者长期使用。分发给第三方用户、或放进
   无人值守的高价值环境，都还不适合——理由写在 [SECURITY.md](SECURITY.md)。
 
