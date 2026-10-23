@@ -60,6 +60,7 @@ W 对话框按 `navigator.language` 在中文（`zh*`）与英文之间选择文
 | `runner` | helper 或 sudo-unshare 可用 | 建议（受限模式依赖） |
 | `helper` | 已安装且版本为 v1.2 | 建议（缺失但 sudo 可用时仍可运行） |
 | `nnp` | setpriv 支持 `--no-new-privs` | 建议（受限模式依赖） |
+| `wsl2` | 发行版的 WSL 主版本是 2（宿主侧 `wsl.exe -l -v` 读取） | 硬失败（WSL1 没有 mount namespace） |
 
 返回里另有 `ok`（没有硬失败）与 `restricted`（util-linux、runner、nnp 三项都通过）。`restricted:false` 时界面会明说「受限模式不可用；danger-full-access 仍可创建」。结果按发行版+用户缓存 60 秒；批处理预算 15 秒，runner/NNP 各自 20 秒 race，整体 35 秒上限。修复命令按 `/etc/os-release` 的家族选择（Debian/Ubuntu、Fedora/RHEL、Arch、Alpine、SUSE）；识别不出时显示通用命令，不猜。
 

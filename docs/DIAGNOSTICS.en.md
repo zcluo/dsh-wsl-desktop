@@ -60,6 +60,7 @@ After the operator confirms the distribution user, the browse phase shows an exp
 | `runner` | helper or sudo-unshare available | advisory (restricted mode) |
 | `helper` | Installed and v1.2 | advisory (sudo is enough without it) |
 | `nnp` | setpriv supports `--no-new-privs` | advisory (restricted mode) |
+| `wsl2` | The distribution's WSL major version is 2 (read host-side from `wsl.exe -l -v`) | hard failure (WSL1 has no mount namespace) |
 
 The answer also carries `ok` (no hard failure) and `restricted` (util-linux, runner and nnp all pass). When `restricted:false` the strip says "Restricted mode is unavailable; danger-full-access can still create." Answers are cached per distribution+user for 60 seconds; the batch has a 15-second budget, runner/NNP each race at 20 seconds, and the overall ceiling is 35 seconds. The fix command follows the `/etc/os-release` family (Debian/Ubuntu, Fedora/RHEL, Arch, Alpine, SUSE); an unrecognised family keeps the generic command instead of guessing.
 

@@ -639,6 +639,22 @@ function routeStub(handlers) {
     && error?.textContent.includes('the route is down') === false,
     error?.textContent?.slice(0, 160))
   check('the error is announced as an alert', error?.getAttribute('role') === 'alert')
+  let copied = null
+  Object.defineProperty(parts.dom.window.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (text) => { copied = text } },
+  })
+  const copyAll = error?.querySelector('[data-wsl-diagnostics]')
+  check('a failed browse offers the full diagnostic report', copyAll !== null,
+    error?.textContent?.slice(0, 160))
+  copyAll?.click()
+  await settle()
+  check('the report carries the code and params but not the host message',
+    copied !== null && copied.includes('"code": "transport"') && !copied.includes('the route is down'),
+    copied?.slice(0, 200))
+  check('the report carries the plugin version and capability state',
+    copied !== null && copied.includes('"pluginVersion"') && copied.includes('"capabilities"'),
+    copied?.slice(0, 200))
   live.dispose()
 }
 {

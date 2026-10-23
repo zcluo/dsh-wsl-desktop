@@ -12,7 +12,7 @@ import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
 import { CHECK_IDS, CHECK_REMEDIES } from '../lib/protocol.js'
 import { clearHealthCache, healthFor, parseDoctorOutput } from '../lib/wsl/doctor.js'
-import { defaultDistro } from '../lib/wsl/world.js'
+import { defaultDistro, parseWslVersionTable } from '../lib/wsl/world.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 400) })
 const { check } = checker
@@ -40,6 +40,7 @@ function harness(overrides = {}) {
     runner = 'helper',
     nnp = true,
     helper = 'dsh-wsl-confine v1.2',
+    wslVersion = '2',
     batchError = null,
   } = overrides
   let calls = 0
@@ -54,6 +55,7 @@ function harness(overrides = {}) {
     },
     runnerProbe: async () => runner,
     nnpProbe: async () => nnp,
+    wslVersionProbe: async () => wslVersion,
     helperProbe: async () => {
       helperCalls += 1
       return helper
@@ -74,6 +76,23 @@ console.log('\nparser')
   check('a line with no tab is ignored, not guessed at', parsed['broken line'] === undefined, Object.keys(parsed))
 }
 
+console.log('\nWSL version table')
+{
+  const table = [
+    '  NAME            STATE           VERSION',
+    '* debian-dev      Running         2',
+    '  arch            Stopped         1',
+  ].join('\n')
+  check('the active marker is optional and the last column is the version',
+    parseWslVersionTable(table, 'debian-dev') === '2', parseWslVersionTable(table, 'debian-dev'))
+  check('a WSL1 row is read as 1', parseWslVersionTable(table, 'arch') === '1')
+  check('an absent distribution is null', parseWslVersionTable(table, 'missing') === null)
+  check('a malformed version is null, not a guess',
+    parseWslVersionTable('  NAME  STATE  VERSION\n  d  Running  n/a', 'd') === null)
+  check('a tab-separated row parses',
+    parseWslVersionTable('d\tRunning\t2', 'd') === '2')
+}
+
 console.log('\nassembly')
 {
   clearHealthCache()
@@ -85,6 +104,9 @@ console.log('\nassembly')
     health.checks.every((entry) => entry.status === 'pass'),
     health.checks.filter((entry) => entry.status !== 'pass'))
   check('ok and restricted are both true', health.ok === true && health.restricted === true, health)
+  check('a WSL2 host passes the wsl2 row',
+    health.checks.find((entry) => entry.id === 'wsl2')?.status === 'pass',
+    health.checks.find((entry) => entry.id === 'wsl2'))
   check('no command path is returned to the browser',
     !JSON.stringify(health).includes('/usr/bin'), JSON.stringify(health).slice(0, 200))
   check('every check carries its protocol remedy',
@@ -127,6 +149,20 @@ console.log('\nassembly')
   const runner = health.checks.find((entry) => entry.id === 'runner')
   check('no runner warns and clears restricted',
     runner.status === 'warn' && health.restricted === false, { runner, restricted: health.restricted })
+}
+{
+  clearHealthCache()
+  const health = await healthFor({ distro: 'd', ...harness({ wslVersion: '1' }), now: () => 1_000 })
+  const row = health.checks.find((entry) => entry.id === 'wsl2')
+  check('a WSL1 distribution fails the wsl2 row and the whole answer',
+    row.status === 'fail' && health.ok === false, { row, ok: health.ok })
+}
+{
+  clearHealthCache()
+  const health = await healthFor({ distro: 'd', ...harness({ wslVersion: null }), now: () => 1_000 })
+  const row = health.checks.find((entry) => entry.id === 'wsl2')
+  check('an unreadable WSL version is unmeasured, not a failure',
+    row.status === 'unknown' && health.ok === true, { row, ok: health.ok })
 }
 {
   clearHealthCache()

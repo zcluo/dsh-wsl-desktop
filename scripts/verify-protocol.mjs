@@ -79,8 +79,8 @@ check('feature ids are the six known features',
   FEATURE_IDS)
 check('every feature has a zh and en label',
   FEATURE_IDS.every((id) => FEATURE_LABELS[id]?.zh && FEATURE_LABELS[id]?.en), FEATURE_LABELS)
-check('check ids are the seven known checks',
-  CHECK_IDS.join(',') === 'bash,python3,util-linux,getent,runner,helper,nnp', CHECK_IDS)
+check('check ids are the eight known checks',
+  CHECK_IDS.join(',') === 'bash,python3,util-linux,getent,runner,helper,nnp,wsl2', CHECK_IDS)
 check('every check has a zh and en label',
   CHECK_IDS.every((id) => CHECK_LABELS[id]?.zh && CHECK_LABELS[id]?.en), CHECK_LABELS)
 check('every check has exactly one remedy',
