@@ -6,11 +6,11 @@
   "status": "pass",
   "visualReview": "pending",
   "provenance": "current",
-  "deliveryReceiptId": "fe3c9c6d-7d3a-42a7-a03f-54ce0802e42f",
+  "deliveryReceiptId": "04c259ff-614c-434c-a4e4-a818615bea4c",
   "artifact": {
     "path": "E:\\projects\\dsh-wsl-desktop\\docs\\architecture.html",
-    "sha256": "c515aec2cbaf9ccf4e77f832d9f373f82ba5623613d145d3181bbcb8221095b6",
-    "bytes": 768655
+    "sha256": "de3216bd5e4ef2a37ba267789d8ad74211cf23d7353e1f5eb65756cf107df0df",
+    "bytes": 842896
   },
   "state": {
     "detail": "read",
@@ -905,23 +905,23 @@
         "file": "architecture.visual-check.html"
       },
       {
-        "sha256": "3806d48b5ea55deb21bcc46e1c0e7333c4df487d63231b982fc19278b03b16b1",
-        "bytes": 117845,
+        "sha256": "9d06995b7b761121c276a4d54dee9d1b3cb0781ddee1a83327b8b96a72cc5018",
+        "bytes": 140679,
         "file": "architecture.visual-check.1440x900.light.png"
       },
       {
-        "sha256": "7e31e0860ad54bd96a8a7a75bd95e0e648ec95c2ef12b57607569d8d5891713f",
-        "bytes": 129386,
+        "sha256": "ed3334f2c13ee11974a4b975bac758b2dfe705dae2115eb3ddc1e74810dc9a6d",
+        "bytes": 159653,
         "file": "architecture.visual-check.1440x900.dark.png"
       },
       {
-        "sha256": "a4e1c28998055edb7e1655f40acd394f8922c8bdba2013c6ff284b68f8c44aa6",
-        "bytes": 178358,
+        "sha256": "027eae6c3c4d23bbcfb08a600b9cb328ad4a99010d95ecc7ecda4851887f26d2",
+        "bytes": 211072,
         "file": "architecture.visual-check.2048x1320.light.png"
       },
       {
-        "sha256": "b6ed1ba10bf95d6ee4cc8490fa429ae302f5b760b96908efdcda48df7faa1a19",
-        "bytes": 196220,
+        "sha256": "c48a480c478142a09f73449e7f01691f32789dec72e269e3ae2916d569ef60f3",
+        "bytes": 240569,
         "file": "architecture.visual-check.2048x1320.dark.png"
       }
     ]
