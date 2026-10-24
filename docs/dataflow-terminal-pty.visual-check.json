@@ -5,7 +5,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "E:\\projects\\dsh-wsl-desktop\\docs\\dataflow-terminal-pty.html",
+    "path": "docs/dataflow-terminal-pty.html",
     "sha256": "07e04e59cf9e196c8aadc6e84c2a2e3b5c459b66d922909519e93faf5b60efaf",
     "bytes": 754909
   },
@@ -15,7 +15,7 @@
   },
   "chrome": {
     "status": "available",
-    "executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    "executable": "msedge"
   },
   "containment": {
     "status": "pass",

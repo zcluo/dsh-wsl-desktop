@@ -10,6 +10,7 @@
  */
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
+import { userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -92,6 +93,58 @@ const verdict = classifyPublish({
 const blockers = [...verdict.blockers]
 if (!facts.authenticated) blockers.push('npm is not authenticated (npm whoami failed)')
 if (facts.minimumReleaseAge === null) blockers.push('pnpm minimumReleaseAge could not be read from the profile')
+
+/**
+ * Privacy scan: the published artifact must not carry secrets or the operator's
+ * machine layout. Tracked files are grep-able offline; the package manifest is
+ * checked separately so test-only records cannot ship even if tracked.
+ */
+const privacy = { secretHits: [], pathHits: [], packageHits: [] }
+const tracked = await tryRun('git', ['ls-files'])
+// Patterns are assembled from fragments so this file does not match itself; a
+// literal credential prefix or registry-token field name in the scanner would
+// make every run red.
+const secretPatterns = [
+  new RegExp('npm' + '_' + '[A-Za-z0-9]{20,}', 'u'),
+  new RegExp('gh' + '[pousr]_[A-Za-z0-9]{20,}', 'u'),
+  new RegExp('github' + '_pat_[A-Za-z0-9_]{20,}', 'u'),
+  new RegExp('sk' + '-' + '[A-Za-z0-9]{20,}', 'u'),
+  /AKIA[0-9A-Z]{16}/u,
+  /BEGIN [A-Z ]*PRIVATE KEY/u,
+  new RegExp('_auth' + 'Token', 'u'),
+]
+const homeName = (() => {
+  try { return userInfo().username } catch { return '' }
+})()
+const pathPatterns = [
+  // A test fixture's `C:\\Users\\X\\PROJ` is a placeholder, not a machine path;
+  // real account names are longer than one character.
+  /\b[A-Za-z]:\\\\Users\\\\(?!X\\\\)/u,
+  /\b[A-Za-z]:\\\\projects\\\\/u,
+  ...(homeName === '' ? [] : [new RegExp(`/home/${homeName}(?:/|$)`, 'u')]),
+]
+for (const path of (tracked ?? '').split('\n').filter((line) => line !== '')) {
+  let text = ''
+  try { text = await readFile(join(pluginRoot, path), 'utf8') } catch { continue }
+  if (secretPatterns.some((pattern) => pattern.test(text))) privacy.secretHits.push(path)
+  if (pathPatterns.some((pattern) => pattern.test(text))) privacy.pathHits.push(path)
+}
+if (privacy.secretHits.length > 0) blockers.push(`tracked files look like they carry a secret: ${privacy.secretHits.join(', ')}`)
+if (privacy.pathHits.length > 0) blockers.push(`tracked files carry a machine-specific path: ${privacy.pathHits.join(', ')}`)
+const pack = await tryRun('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'])
+if (pack !== null && pack !== '') {
+  try {
+    const manifest = JSON.parse(pack.slice(pack.indexOf('[')))[0]
+    const files = (manifest.files ?? []).map((entry) => entry.path)
+    const forbidden = [/^\.superpowers\//u, /^\.archify\//u, /\.visual-check\.json$/u, /\.finalize.*\.json$/u, /(^|\/)\.env/u, /(^|\/)[^/]*token[^/]*$/iu, /\.pem$/u, /\.key$/u]
+    privacy.packageHits = files.filter((file) => forbidden.some((pattern) => pattern.test(file)))
+    if (privacy.packageHits.length > 0) blockers.push(`the npm package would ship test or secret material: ${privacy.packageHits.join(', ')}`)
+  } catch {
+    blockers.push('the npm package manifest could not be parsed (npm pack --dry-run --json)')
+  }
+} else {
+  blockers.push('the npm package manifest could not be produced (npm pack --dry-run failed)')
+}
 const window = facts.published === false && facts.publishedAt !== null && facts.minimumReleaseAge !== null
   ? installWindow({ publishedAt: facts.publishedAt, minimumReleaseAgeMinutes: facts.minimumReleaseAge, now: new Date() })
   : null
@@ -100,6 +153,7 @@ const report = {
   target,
   facts,
   window: window === null ? null : { ready: window.ready, readyAt: window.readyAt?.toISOString?.() ?? null, detail: window.detail },
+  privacy,
   ready: blockers.length === 0,
   blockers,
   steps: [

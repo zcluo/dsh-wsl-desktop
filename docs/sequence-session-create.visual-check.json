@@ -5,7 +5,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "E:\\projects\\dsh-wsl-desktop\\docs\\sequence-session-create.html",
+    "path": "docs/sequence-session-create.html",
     "sha256": "7164a743f804f715c61b934e2c4cbc1191e9bf8d08634d7ca6230d013aecb87c",
     "bytes": 759176
   },
@@ -15,7 +15,7 @@
   },
   "chrome": {
     "status": "available",
-    "executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    "executable": "msedge"
   },
   "containment": {
     "status": "pass",

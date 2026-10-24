@@ -5,7 +5,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "E:\\projects\\dsh-wsl-desktop\\docs\\lifecycle-pty.html",
+    "path": "docs/lifecycle-pty.html",
     "sha256": "76978f61e57a8418111cdff9150f95d287a2424aeb97192050288be9c2c01101",
     "bytes": 759467
   },
@@ -15,7 +15,7 @@
   },
   "chrome": {
     "status": "available",
-    "executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    "executable": "msedge"
   },
   "containment": {
     "status": "pass",

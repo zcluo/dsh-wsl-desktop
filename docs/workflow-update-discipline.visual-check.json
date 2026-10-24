@@ -5,7 +5,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "E:\\projects\\dsh-wsl-desktop\\docs\\workflow-update-discipline.html",
+    "path": "docs/workflow-update-discipline.html",
     "sha256": "18e82010b2ba56e4a172a044ac43c7fe77764b534f2564a79d4c2eb71a161770",
     "bytes": 751699
   },
@@ -15,7 +15,7 @@
   },
   "chrome": {
     "status": "available",
-    "executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    "executable": "msedge"
   },
   "containment": {
     "status": "pass",

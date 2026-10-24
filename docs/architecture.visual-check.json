@@ -8,7 +8,7 @@
   "provenance": "current",
   "deliveryReceiptId": "04c259ff-614c-434c-a4e4-a818615bea4c",
   "artifact": {
-    "path": "E:\\projects\\dsh-wsl-desktop\\docs\\architecture.html",
+    "path": "docs/architecture.html",
     "sha256": "de3216bd5e4ef2a37ba267789d8ad74211cf23d7353e1f5eb65756cf107df0df",
     "bytes": 842896
   },
@@ -18,7 +18,7 @@
   },
   "chrome": {
     "status": "available",
-    "executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    "executable": "msedge"
   },
   "diagnostics": [],
   "containment": {
