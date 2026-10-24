@@ -479,7 +479,16 @@ let failureC = null
 const spawnsBeforeC = fifoChildren.length
 try {
   terminalC = await allocateFifoTerminal((spec) => {
-    if (spec.argv.some((arg) => String(arg).includes('exec 3>'))) {
+    // Identify the CONTROL WRITER by what it does, not by one implementation's
+    // spelling. It is the only child that opens the session FIFO for writing: the
+    // original bash form did it with `exec 3>`, and the current python form with
+    // os.O_WRONLY. Matching only the old marker silently STOPPED injecting the
+    // failure when the writer changed, which turned three rows vacuous (measured:
+    // failureC=null, fifoC=null) while still printing them as checks.
+    if (spec.argv.some((arg) => {
+      const text = String(arg)
+      return text.includes('exec 3>') || text.includes('O_WRONLY')
+    })) {
       injected.push(spec.argv)
       throw new Error('the control writer could not be started (injected)')
     }

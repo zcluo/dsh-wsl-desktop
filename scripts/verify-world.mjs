@@ -860,6 +860,32 @@ try {
   threw = true
 }
 check('a traversal-shaped distro is rejected before any spawn', threw)
+// A distro name becomes the token AFTER `-d`, so a leading hyphen is not a
+// provably-safe option VALUE. Measured on wsl.exe: `-d --cd --cd /x` and
+// `-d -dfoo` fail with WSL_E_DISTRO_NOT_FOUND instead of re-reading the token as
+// an option, so the practical outcome was already a clean refusal — but the
+// invariant buildWslExecArgv states was unenforced for this value while the
+// sibling LINUX_USER grammar DID force a safe first character. One lookahead
+// makes the pair agree, and no real distribution name begins with `-`.
+for (const distro of ['-dfoo', '--cd', '-e', '-']) {
+  threw = false
+  try {
+    buildWslExecArgv({ distro, linuxCwd: '/' }, ['id'])
+  } catch {
+    threw = true
+  }
+  check(`a hyphen-leading distro is rejected as an option value (${distro})`, threw)
+}
+// The control: the real names this machine actually uses must keep working.
+for (const distro of ['debian', 'debian-dev', 'Ubuntu-22.04']) {
+  let ok = false
+  try {
+    ok = buildWslExecArgv({ distro, linuxCwd: '/' }, ['id']).includes(distro)
+  } catch {
+    ok = false
+  }
+  check(`a real distro name still reaches the argv (${distro})`, ok)
+}
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exitCode = failures === 0 ? 0 : 1

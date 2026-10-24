@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "docs/diagrams-src/architecture.json",
+    "sha256": "9e9b7651eb20f60fa76b177a9532d485a2adc19e7e758329d2a149712b700b60",
+    "bytes": 10460
+  },
+  "artifact": {
+    "path": "docs/architecture.html",
+    "sha256": "34c1dacc12b2c98a305a94e8d81cacf9c725f4b2c7c901fba0866c7673326c9b",
+    "bytes": 842896
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "docs/architecture.finalize.json",
+    "summaryReceipt": "docs/architecture.finalize-summary.json",
+    "browserCheckReceipt": "docs/architecture.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-23T12:31:07.901Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 7322,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 2,
+      "routesOverSuggestedBends": 3,
+      "routesOverSuggestedStretch": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "host-contract",
+            "from": "host",
+            "to": "contract",
+            "label": "启动探测",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "right": {
+            "id": "host-doctor",
+            "from": "host",
+            "to": "doctor",
+            "label": "health（按需）",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "point": [
+            302,
+            306
+          ],
+          "sharedNode": "host"
+        },
+        {
+          "left": {
+            "id": "host-contract",
+            "from": "host",
+            "to": "contract",
+            "label": "启动探测",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "right": {
+            "id": "doctor-protocol",
+            "from": "doctor",
+            "to": "protocol",
+            "label": "CHECK_IDS",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            406,
+            103
+          ]
+        }
+      ],
+      "detours": [
+        {
+          "relationship": {
+            "id": "host-protocol",
+            "from": "host",
+            "to": "protocol",
+            "label": "错误目录",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "bends": 4,
+          "stretch": 1.678,
+          "directCorridorBlockers": [
+            {
+              "id": "admission",
+              "label": "路由准入",
+              "box": [
+                220,
+                150,
+                150,
+                60
+              ]
+            }
+          ]
+        },
+        {
+          "relationship": {
+            "id": "host-contract",
+            "from": "host",
+            "to": "contract",
+            "label": "启动探测",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "bends": 5,
+          "stretch": 1
+        },
+        {
+          "relationship": {
+            "id": "doctor-protocol",
+            "from": "doctor",
+            "to": "protocol",
+            "label": "CHECK_IDS",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "bends": 4,
+          "stretch": 1.244,
+          "directCorridorBlockers": [
+            {
+              "id": "contract",
+              "label": "宿主契约",
+              "box": [
+                430,
+                40,
+                160,
+                60
+              ]
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "host → contract and host → doctor cross next to host: move node contract or doctor so the two reach host from different sides (for example one level with it, one directly above or below it).",
+      "host → contract crosses doctor → protocol: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "host → contract needs 5 bends: move node host or contract so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}
