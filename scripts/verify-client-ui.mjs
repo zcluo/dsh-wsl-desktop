@@ -152,6 +152,18 @@ try {
 } catch {
   iconSource = null
 }
+// Newer harness revisions moved the path data out of index.tsx into a glyph
+// table (icons/artwork.ts, keyed by `project-add-outline`). The icon did not
+// change; where it is written did, so the probe reads both generations instead
+// of treating the move as a red.
+let artworkSource = ''
+if (iconSource !== null) {
+  try {
+    artworkSource = await readFile(join(dirname(iconSourcePath), 'artwork.ts'), 'utf8')
+  } catch {
+    artworkSource = ''
+  }
+}
 if (iconSource === null) {
   // The three-piece SKIP rule: the named precondition (the path is not readable),
   // WHICH assertion did not run, and the remedy. The sibling suite's skip names
@@ -160,9 +172,11 @@ if (iconSource === null) {
   console.log(`  SKIP  trigger geometry matches the shipped icon (1 check not evaluated) — ${iconSourcePath} not readable`)
   console.log('        Remedy: pass --checkout=<dsh checkout> or set DSH_CHECKOUT to the harness checkout carrying packages/client/ui-primitives.')
 } else {
-  // Find the artwork's path data under either icon naming generation.
+  // Find the artwork's path data under every generation this repository has seen:
+  // inline artwork, the 16px icon component, and the newer glyph table.
   const artworkMatch = /ProjectAddOutlineArtwork[\s\S]*?<path d="(M[^"]+)"/.exec(iconSource)
     ?? /IconProjectAddOutline16[\s\S]*?<path[^>]*d="(M[^"]+)"/.exec(iconSource)
+    ?? /'project-add-outline':[\s\S]*?<path d="(M[^"]+)"/.exec(artworkSource)
   const iconPath = artworkMatch?.[1]
   const known = /TRIGGER_ICON_PATHS = \[([\s\S]*?)\]/.exec(source)?.[1] ?? ''
   const listed = [...known.matchAll(/'((?:M)[^']+)'/g)].map((m) => m[1])
