@@ -42,4 +42,14 @@ Also: `engines.node >= 22.19` is the host Node floor; `manifestVersion: 1` is th
 
 ## Release preflight
 
-`node scripts/release-check.mjs` at the repository root checks, before publishing: npm auth, the registry latest, whether the target version is already taken, local/remote tags, the working tree, and pnpm's `minimumReleaseAge` window. It is read-only and prints the next commands.
+`node scripts/release-check.mjs` at the repository root checks, before publishing: npm auth, the registry latest, whether the target version is already taken, local/remote tags, the working tree, pnpm's `minimumReleaseAge` window, and a privacy scan (secrets and machine paths in tracked files, test artifacts in the `npm pack` manifest). It is read-only and prints the next commands.
+
+### Reinstall order (do not uninstall outside the window)
+
+When switching the profile back to a registry build after a release, **confirm the registry copy is installable before removing the installed one**:
+
+1. Run `node scripts/release-check.mjs --version <target>`; it computes the `minimumReleaseAge` `readyAt`.
+2. If the window is closed (`ready === false`), do **not** run `remove_bundle` — that leaves the profile with no plugin for up to an hour.
+3. Once the window is open, do `remove_bundle` → `install_bundle <target>` → restart → `verify-post-restart`.
+
+The window is pnpm's supply-chain policy, not a bug; bypassing it means explicitly changing the profile's `minimumReleaseAge`, which lowers supply-chain protection and is a separate decision.

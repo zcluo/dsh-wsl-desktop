@@ -160,6 +160,12 @@ const report = {
     `npm publish --access public`,
     `git tag -a v${target} -m "dsh-wsl-desktop ${target}"`,
     `git push origin main v${target}`,
+    // ORDER RULE: confirm the registry copy is installable BEFORE removing the
+    // installed one. Reversing it leaves the profile with no plugin until pnpm's
+    // minimumReleaseAge window opens.
+    ...(window !== null && window.ready === false
+      ? [`# wait until ${window.readyAt.toISOString()} (minimumReleaseAge), then re-run this check`]
+      : ['# window open: the registry copy installs now']),
     `plugin_manager remove_bundle dsh-wsl-desktop`,
     `plugin_manager install_bundle dsh-wsl-desktop@${target}`,
     `node scripts/verify-post-restart.mjs`,

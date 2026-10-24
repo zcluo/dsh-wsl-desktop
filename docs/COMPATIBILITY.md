@@ -42,4 +42,14 @@
 
 ## 发布预检
 
-仓库根的 `node scripts/release-check.mjs` 会在发布前检查：npm 登录、registry 最新版、目标版本是否已占用、本地/远端 tag、工作树、以及 pnpm 的 `minimumReleaseAge` 窗口。它只读，不改任何东西；输出会直接给出下一步命令。
+仓库根的 `node scripts/release-check.mjs` 会在发布前检查：npm 登录、registry 最新版、目标版本是否已占用、本地/远端 tag、工作树、pnpm 的 `minimumReleaseAge` 窗口，以及隐私扫描（已跟踪文件里的密钥与本机路径、`npm pack` 清单里的测试产物）。它只读，不改任何东西；输出会直接给出下一步命令。
+
+### 回装顺序（别在窗口外卸载）
+
+发布后把 profile 切回 registry 版本时，**先确认 registry 副本可安装，再卸载已装的插件**：
+
+1. 跑 `node scripts/release-check.mjs --version <目标>`；它会把 `minimumReleaseAge` 的 `readyAt` 算出来。
+2. 窗口没开（`ready === false`）就**不要** `remove_bundle`——那样 profile 会在一小时内没有任何插件。
+3. 窗口开了再按 `remove_bundle` → `install_bundle <目标>` → 重启 → `verify-post-restart` 的顺序做。
+
+窗口是 pnpm 的供应链策略，不是 bug；绕开它需要显式修改 profile 的 `minimumReleaseAge`，那属于降低供应链保护，要单独决定。
