@@ -479,16 +479,23 @@ let failureC = null
 const spawnsBeforeC = fifoChildren.length
 try {
   terminalC = await allocateFifoTerminal((spec) => {
-    // Identify the CONTROL WRITER by what it does, not by one implementation's
-    // spelling. It is the only child that opens the session FIFO for writing: the
-    // original bash form did it with `exec 3>`, and the current python form with
-    // os.O_WRONLY. Matching only the old marker silently STOPPED injecting the
-    // failure when the writer changed, which turned three rows vacuous (measured:
-    // failureC=null, fifoC=null) while still printing them as checks.
-    if (spec.argv.some((arg) => {
-      const text = String(arg)
-      return text.includes('exec 3>') || text.includes('O_WRONLY')
-    })) {
+    // Identify the CONTROL WRITER structurally, not by a spelling inside its argv.
+    //
+    // Why not a substring match: spawnImpl intercepts EVERY spawn in this
+    // allocation, the bridge included, so a marker like `O_WRONLY` matches the
+    // bridge too if that word ever appears in the bridge's own source — measured
+    // by injecting such a comment into terminal-bridge.py, which made scenario C
+    // throw on the BRIDGE spawn and report "the bridge did not announce". The test
+    // still went red, but it pointed at the wrong process.
+    //
+    // The two children differ structurally, and that difference is the contract:
+    //   bridge          argv carries the session FIFO + stdout 'pipe' (it streams output)
+    //   control writer  argv carries the session FIFO + stdout 'ignore' (it only writes)
+    // This row also asserts the FIFO is the one this session allocated, so a child
+    // that merely mentions the path cannot satisfy it.
+    const carriesFifo = spec.argv.some((arg) => String(arg).startsWith('/tmp/dsh-pty-'))
+    const isWriterShape = spec.stdio?.stdout === 'ignore' && spec.stdio?.stdin === 'pipe'
+    if (carriesFifo && isWriterShape) {
       injected.push(spec.argv)
       throw new Error('the control writer could not be started (injected)')
     }
