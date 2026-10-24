@@ -8,10 +8,11 @@ The plugin decides whether a host is usable by probing capabilities at runtime, 
 
 | Plugin | Desktop | Status | Evidence |
 |---|---|---|---|
+| 0.7.2 | 0.2.1-rc.3 | measured | 0.2.1-rc3's icon-sprite refactor (`ui-primitives` `c3eead771d`) made the W button disappear; this version identifies the trigger by sprite glyph and restores it. `verify-client-dom` / `verify-client-ui` green |
 | 0.7.0 | 0.2.1-rc.2 | measured | this machine's live gate (`verify-all --live`) and `verify-post-restart`, all green |
 | 0.6.0 | 0.2.1-rc.2 | measured | the full live gate at the 0.6.0 release |
-| 0.7.0 / 0.6.0 | >= 0.1.7 | declared floor, not measured version by version here | 0.1.7 introduced runtime registration of the `wsl-*` presets; older hosts explicitly reject the plugin at activation (code behavior) |
-| 0.7.0 / 0.6.0 | < 0.1.7 | unsupported | same: no runtime registration |
+| 0.7.2 / 0.7.0 / 0.6.0 | >= 0.1.7 | declared floor, not measured version by version here | 0.1.7 introduced runtime registration of the `wsl-*` presets; older hosts explicitly reject the plugin at activation (code behavior) |
+| 0.7.2 / 0.7.0 / 0.6.0 | < 0.1.7 | unsupported | same: no runtime registration |
 
 Also: `engines.node >= 22.19` is the host Node floor; `manifestVersion: 1` is the plugin metadata version, not the desktop version.
 
@@ -39,6 +40,20 @@ Also: `engines.node >= 22.19` is the host Node floor; `manifestVersion: 1` is th
 ## Host-drift history
 
 0.1.6 → 0.1.7 broke four places in one go (preset registration, service access, module import, client injection); that is why this plugin requires `>= 0.1.7` and insists on runtime probing. Every later desktop-major adaptation raised the plugin minor: `0.5.1 → 0.6.0` (error catalog / health / contract) and `0.6.0 → 0.7.0` (full bilingual dialog, accessibility, release preflight). **When the desktop major changes, look for the matching plugin minor first**; do not upgrade the plugin blindly.
+
+0.2.1-rc.2 → 0.2.1-rc.3 was a **field-level** host drift, not a major: `ui-primitives` moved the product icons into a document sprite (`c3eead771d`), so the "add workspace" button went from inline geometry
+
+```html
+<svg><path d="M5.54492 2.06738…"/></svg>
+```
+
+to a reference with no `<path>` child at all:
+
+```html
+<svg data-icon="dsw-icon-project-add-outline-regular"><use href="#…"/></svg>
+```
+
+The plugin identified that button by a **path-data prefix**, so it found no anchor and the W button stood down entirely (the degraded entry only appeared five seconds later). The same change also cost the workspace rows their folder-icon weight, because row icons no longer carry an inline `path` either — a collapsed row painted the solid cloud. From 0.7.2 the client recognises **both generations**: the geometry prefix (old) and the sprite glyph name `project-add-outline` (new), and reads the row's weight off the **symbol artwork** the row icon references. The lesson: a second identity for a host control must not merely cover the generations seen so far — `verify-client-dom` now runs the inline and sprite fixtures side by side.
 
 ## Release preflight
 

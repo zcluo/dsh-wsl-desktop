@@ -186,6 +186,33 @@ if (iconSource === null) {
     && typeof iconPath === 'string' && iconPath.length >= 20
     && listed.some((geometry) => iconPath.startsWith(geometry)),
     `icon=${iconPath?.slice(0, 40)} known=[${listed.map((g) => g.slice(0, 18)).join('|')}]`)
+
+  // From 0.2.1-rc3 the client ALSO identifies the trigger by sprite glyph,
+  // because the icon renders as `<use href="#dsw-icon-project-add-…">` with no
+  // path child. The glyph name is therefore as load-bearing as the geometry
+  // was: if the shipped artwork table renames the glyph, the geometry row above
+  // still passes on the old path data while the sprite scan matches nothing —
+  // which is exactly the failure that removed the W button from 0.2.1-rc3.
+  // Every glyph the client claims must exist in the shipped table.
+  const glyphList = /TRIGGER_ICON_GLYPHS = \[([\s\S]*?)\]/.exec(source)?.[1] ?? ''
+  const glyphsListed = [...glyphList.matchAll(/'([^']+)'/g)].map((m) => m[1])
+  // The shipped glyph table keys every artwork by `<glyph>`; a theme may
+  // override the SVG, but not the key.
+  const shippedGlyphs = [...artworkSource.matchAll(/^\s*'([a-z0-9-]+)':/gm)].map((m) => m[1])
+  check('every trigger glyph the client scans for exists in the shipped icon table',
+    glyphsListed.length >= 1
+    && (shippedGlyphs.length === 0 || glyphsListed.every((glyph) => shippedGlyphs.includes(glyph))),
+    `client=[${glyphsListed.join(', ')}] shipped(${shippedGlyphs.length})=[${shippedGlyphs.slice(0, 6).join(', ')}${shippedGlyphs.length > 6 ? ', …' : ''}]`)
+
+  // The sprite branch must be reachable at all: a client that kept only the
+  // geometry scan is precisely the 0.2.1-rc3 regression this file pins.
+  // The selectors are STRING BODIES, which `blankLiterals` removes, so the
+  // literal halves read the raw source while the structural halves read `code`.
+  check('the client scans the sprite generation, not only inline geometry',
+    source.includes("'svg[data-icon], use'")
+    && source.includes("SPRITE_ICON_ID = /^#?dsw-icon-")
+    && code.includes('TRIGGER_ICON_GLYPHS')
+    && code.includes('function findTrigger()'))
 }
 
 const section = (start, end) => {

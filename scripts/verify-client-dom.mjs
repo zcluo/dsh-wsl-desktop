@@ -56,14 +56,39 @@ const source = await readFile(clientPath, 'utf8')
 /** The shipped trigger icon's first path command, mirrored from the plugin. */
 const TRIGGER_PATH = 'M3.55246 0L3.55246 2.44252L6 2.44252'
 
+/** The trigger as every desktop up to 0.2.1-rc2 rendered it: inline geometry. */
+const INLINE_TRIGGER_ICON = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path transform="translate(9.52 2.52)" d="${TRIGGER_PATH}" fill="currentColor"></path>
+              <path transform="translate(0.3496 2.35)" d="M4.76367 0C5.36861 0" fill="currentColor"></path>
+            </svg>`
+
+/**
+ * The trigger as 0.2.1-rc3 renders it: a sprite reference with NO path child.
+ *
+ * `ui-primitives` `c3eead771d` (0.2.1-rc3) moved every product icon into the
+ * document icon sprite, so the add-workspace button renders
+ * `<svg data-icon="dsw-icon-project-add-outline-regular"><use href="#…"/></svg>`.
+ * The suffix in the symbol id is the WEIGHT, so the glyph name is the identity
+ * that survives a weight change.
+ */
+const SPRITE_TRIGGER_ICON = '<svg width="16" height="16" data-icon="dsw-icon-project-add-outline-regular" aria-hidden="true"><use href="#dsw-icon-project-add-outline-regular"></use></svg>'
+
+/**
+ * The same sprite icon with no `data-icon`, which is how markup that a theme or
+ * an older bundler rewrote reaches the page: only the `<use>` reference names it.
+ */
+const SPRITE_TRIGGER_USE_ONLY = '<svg width="16" height="16" aria-hidden="true"><use href="#dsw-icon-project-add-outline-regular"></use></svg>'
+
 /**
  * Build the sidebar header fixture: the shipped action cluster holding the
  * view-options button and the add-workspace trigger, inside the section row.
  * @param {string} [extra] - extra markup appended inside the sidebar, for a case
  * that needs rows the header fixture does not carry.
+ * @param {string} [triggerIcon] - the trigger's icon markup; defaults to the
+ * inline-geometry generation, and the sprite cases pass their own.
  * @returns {{ dom: object, row: object, cluster: object, trigger: object }} the fixture.
  */
-function fixture(extra = '') {
+function fixture(extra = '', triggerIcon = INLINE_TRIGGER_ICON) {
   const dom = new JSDOM(`<!doctype html><html><body>
     <div id="sidebar">
       <div class="sectionHeader" id="row">
@@ -72,10 +97,7 @@ function fixture(extra = '') {
         <div class="headerActions" id="cluster">
           <button class="iconButton" id="view"></button>
           <button class="iconButton" id="trigger" aria-label="add workspace">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path transform="translate(9.52 2.52)" d="${TRIGGER_PATH}" fill="currentColor"></path>
-              <path transform="translate(0.3496 2.35)" d="M4.76367 0C5.36861 0" fill="currentColor"></path>
-            </svg>
+            ${triggerIcon}
           </button>
         </div>
       </div>
@@ -299,6 +321,49 @@ console.log('\na second control sharing the trigger geometry')
   live.dispose()
 }
 
+console.log('\nthe sprite-refactored trigger (0.2.1-rc3)')
+{
+  // The regression this section exists for: 0.2.1-rc3 rendered the same button
+  // through the document icon sprite, so it carried no `<path>` at all. A
+  // geometry-only scan found no anchor, the companion stood down, and the W
+  // button disappeared from every sidebar — while both suites stayed green,
+  // because the whole fixture tree was inline-geometry markup.
+  const parts = fixture('', SPRITE_TRIGGER_ICON)
+  layout(parts, 344, 60)
+  const live = apply(parts.dom)
+  await settle()
+  check('the companion attaches to a sprite-rendered trigger too',
+    live.button !== null && live.button.previousElementSibling === parts.cluster,
+    `button=${live.button === null ? 'absent' : 'present'}`)
+  check('and is rendered rather than hidden as a fallback',
+    live.button?.style.display === '', `display=${JSON.stringify(live.button?.style.display)}`)
+  live.dispose()
+}
+{
+  // A `<use>`-only icon carries the same identity, so a rewrite that drops
+  // `data-icon` must not take the button down again.
+  const parts = fixture('', SPRITE_TRIGGER_USE_ONLY)
+  layout(parts, 344, 60)
+  const live = apply(parts.dom)
+  await settle()
+  check('a <use>-only icon identifies the trigger by its symbol reference',
+    live.button?.isConnected === true,
+    `button=${live.button === null ? 'absent' : 'present'}`)
+  live.dispose()
+}
+{
+  // The inverse: an unrelated sprite icon must NOT be adopted as the anchor,
+  // or the companion would attach beside a stranger.
+  const parts = fixture('', '<svg width="16" height="16" data-icon="dsw-icon-settings-outline-regular" aria-hidden="true"><use href="#dsw-icon-settings-outline-regular"></use></svg>')
+  layout(parts, 344, 60)
+  const live = apply(parts.dom)
+  await settle()
+  check('an unrelated sprite glyph is not mistaken for the trigger',
+    live.button?.isConnected !== true,
+    `button=${live.button === null ? 'absent' : 'present'}`)
+  live.dispose()
+}
+
 console.log('\na duplicate with no recognisable cluster')
 {
   const parts = fixture()
@@ -316,8 +381,56 @@ console.log('\na duplicate with no recognisable cluster')
 }
 
 /**
- * One shipped workspace row: the leading folder slot React renders, the
- * chevron that shares its size, and the row key that carries the workspace id.
+ * One shipped workspace row in the 0.2.1-rc3 sprite generation.
+ *
+ * The folder icon is no longer inline artwork: it is a sprite reference with no
+ * `<path>` child, so the weight lives in the SYMBOL the row's `<svg>` names. A
+ * detector reading only inline paths saw no stroked path and called every such
+ * row fill-only, which painted the solid cloud on a collapsed row.
+ * @param {string} id - workspace id, as it appears in data-row-key.
+ * @param {string} label - the workspace name.
+ * @param {boolean} [expanded] - whether the row renders its open icon.
+ * @returns {string} the row markup.
+ */
+function spriteWorkspaceRow(id, label, expanded = false) {
+  const glyph = expanded ? 'folder-open' : 'folder-close'
+  const icon = `<svg width="16" height="16" data-icon="dsw-icon-${glyph}-regular" aria-hidden="true"><use href="#dsw-icon-${glyph}-regular"></use></svg>`
+  return `<div class="projectRow" data-row-key="workspace:${id}" role="treeitem">
+        <span class="slot folder">${icon}</span>
+        <span class="projectText"><span class="title">${label}</span></span>
+      </div>`
+}
+
+/**
+ * The document sprite the icon references resolve against.
+ *
+ * Only the two folder glyphs carry artwork here, with exactly the weights the
+ * shipped table gives them: `folder-close` is a 1px STROKED outline and
+ * `folder-open` is FILL-only. The plugin reads this, not a hardcoded list.
+ * @returns {string} the sprite markup.
+ */
+const FOLDER_SPRITE = `<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="dsw-icon-folder-close-regular" viewBox="0 0 16 16" fill="none" stroke-width="1"><path d="M1 3h5l1 1h8v9H1z" stroke="currentColor"></path></symbol>
+  <symbol id="dsw-icon-folder-open-regular" viewBox="0 0 16 16" fill="none"><path d="M1 3h5l1 1h8v9H1z" fill="currentColor"></path></symbol>
+</svg>`
+
+
+/**
+ * One shipped workspace row in the inline generation (before 0.2.1-rc3): the
+ * leading folder slot React renders, the chevron that shares its size, and the
+ * row key that carries the workspace id.
+ * The leading icon mirrors the shipped artwork per state: collapsed renders the
+ * STROKED outline (`IconFolderCloseRegular`), expanded the FILL-only one
+ * (`IconFolderOpenRegular`). The cloud is expected to follow that weight.
+ * @param {string} id - workspace id, as it appears in data-row-key.
+ * @param {string} label - the workspace name.
+ * @param {boolean} [expanded] - whether the row renders its open icon.
+ * @returns {string} the row markup.
+ */
+/**
+ * One shipped workspace row in the inline generation (before 0.2.1-rc3): the
+ * leading folder slot React renders, the chevron that shares its size, and the
+ * row key that carries the workspace id.
  * The leading icon mirrors the shipped artwork per state: collapsed renders the
  * STROKED outline (`IconFolderCloseRegular`), expanded the FILL-only one
  * (`IconFolderOpenRegular`). The cloud is expected to follow that weight.
@@ -440,6 +553,40 @@ console.log('\nWSL workspace rows')
   check('dispose restores every swapped row',
     doc.querySelector('svg[data-wsl-cloud]') === null && shipped('legacy')?.style.display === '',
     `clouds=${doc.querySelectorAll('svg[data-wsl-cloud]').length}`)
+}
+
+console.log('\nWSL workspace rows in the sprite generation (0.2.1-rc3)')
+{
+  // The second defect from the same refactor: the row's folder icon became a
+  // sprite reference, so there is no inline `<path>` to read a weight off. The
+  // old detector therefore called BOTH states fill-only and painted the solid
+  // cloud on a collapsed row.
+  const UNC = ['', '', 'wsl.localhost', 'debian', 'home', 'me', 'proj'].join('\\')
+  const state = {
+    items: [
+      { workspaceId: 'closed', path: UNC },
+      { workspaceId: 'open', path: UNC },
+    ],
+  }
+  const parts = fixture(
+    spriteWorkspaceRow('closed', 'closed') + spriteWorkspaceRow('open', 'open', true) + FOLDER_SPRITE,
+  )
+  layout(parts, 344, 60)
+  const live = apply(parts.dom, state)
+  await settle()
+  const doc = parts.dom.window.document
+  const cloud = (id) => doc.querySelector(`[data-row-key="workspace:${id}"] svg[data-wsl-cloud]`)
+  check('a sprite folder icon still gets a cloud',
+    cloud('closed') !== null && cloud('open') !== null,
+    `closed=${cloud('closed') !== null} open=${cloud('open') !== null}`)
+  // The weight is read from the SYMBOL the row references, not from an inline path.
+  check('a collapsed sprite row gets the STROKED cloud',
+    cloud('closed')?.getAttribute('data-wsl-cloud-weight') === 'outline',
+    `weight=${cloud('closed')?.getAttribute('data-wsl-cloud-weight')}`)
+  check('an expanded sprite row gets the SOLID cloud',
+    cloud('open')?.getAttribute('data-wsl-cloud-weight') === 'solid',
+    `weight=${cloud('open')?.getAttribute('data-wsl-cloud-weight')}`)
+  live.dispose()
 }
 
 console.log('\ncatalog rendering and the degraded gate')
