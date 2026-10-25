@@ -16,6 +16,23 @@ The plugin decides whether a host is usable by probing capabilities at runtime, 
 
 Also: `engines.node >= 22.19` is the host Node floor; `manifestVersion: 1` is the plugin metadata version, not the desktop version.
 
+## 9P workspaces on Windows
+
+On a Windows host a session workspace can be spelled as the UNC path `\\wsl.localhost\<distro>\…`. That is a **9P** mount, and 9P **provides no Windows security descriptor** (measured: `Get-Acl` succeeds on local NTFS and on an SMB UNC `\\localhost\C$`, but returns Win32 1 for both local distros' 9P paths; reading and writing file contents in the same directory works normally).
+
+The host-side Windows ACL sandbox therefore cannot run on such a workspace. The handling:
+
+| Case | Behavior |
+|---|---|
+| `workspace-write` + 9P | Commands run, the tool result carries `enforcement: unconfined`, and it says plainly that this workspace has no fence and writes are ungoverned |
+| `read-only` + 9P | Unaffected (read-only adds no capability ACE, so it never needs a descriptor) |
+| `danger-full-access` | Unaffected (it does not go through the sandbox's `confine()` at all) |
+| Non-9P local paths | Unchanged |
+
+This is **not** a silent pass: the sandbox seam's contract forbids silent unconfined passthrough, so the downgrade must be declared as `unconfined`, visible to both the model and the user.
+
+For a real fence, open the session with the WSL preset — there the fence runs **inside the distribution** and does not depend on Windows ACLs. If the host-side ACL runner is pointed at a 9P workspace directly, it refuses with an error that names the cause (exit 127) instead of a bare Win32 code.
+
 ## Upgrade order
 
 **Desktop first, plugin second.** Reversing this produces a "plugin newer than host" intermediate: the host's module graph may lack a service the plugin injects, `bootstrap` lists the missing symbol under `capabilities.missing`, and the UI drops to the degraded card.

@@ -157,6 +157,7 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
 - [Distro support matrix](docs/DISTRO-SUPPORT.md) — which distros were verified, and what each one needs
 - [Compatibility and upgrades](docs/COMPATIBILITY.md) — plugin/desktop version relation, upgrade order, rollback steps
 - [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) — the two proposals to the harness upstream
+- [Upstream defect reports](issues/README.md) — the harness issues filed, their measured evidence, and how the local workarounds relate
 - [Architecture and flow diagrams](docs/diagrams.md) — interactive architecture, sequence and lifecycle diagrams
 
 Three of the linked documents — the distro support matrix, the upstream proposals and the diagram

@@ -125,6 +125,23 @@ function namedArtifacts(text) {
 
 const suffixOf = (one, other) => one === other || one.endsWith(`/${other}`) || other.endsWith(`/${one}`)
 
+/**
+ * The second-level headings of a document, in order.
+ * @param {string} text - the document text.
+ * @returns {string[]} the heading texts.
+ */
+function sections(text) {
+  const found = []
+  let inFence = false
+  for (const line of text.split('\n')) {
+    if (/^\s*\x60\x60\x60/.test(line)) { inFence = !inFence; continue }
+    if (inFence) continue
+    const match = /^##\s+(.+?)\s*$/u.exec(line)
+    if (match !== null) found.push(match[1])
+  }
+  return found
+}
+
 for (const [left, right] of DOC_PAIRS) {
   let leftText
   let rightText
@@ -156,6 +173,16 @@ for (const [left, right] of DOC_PAIRS) {
     undecidable.length === 0 && onlyLeft.length === 0 && onlyRight.length === 0,
     `${left} only: [${onlyLeft.join(', ')}] ${right} only: [${onlyRight.join(', ')}]`
     + (undecidable.length === 0 ? '' : ` — undecidable basename(s): ${undecidable.join('; ')}`))
+
+  // Structure parity: a section added to one edition and not the other leaves the
+  // other language silent about a fact the first one documents. Headings are
+  // translated, so the two lists are compared by COUNT (and reported side by side
+  // when they differ) — a byte comparison would fail on every translated title.
+  const leftSections = sections(leftText)
+  const rightSections = sections(rightText)
+  check(`${left} and ${right} carry the same number of sections`,
+    leftSections.length === rightSections.length,
+    { [left]: leftSections, [right]: rightSections })
 }
 
 console.log(`\n${checker.failures === 0 ? `${checker.checks} pair(s) in parity` : `${checker.failures} check(s) failed`}`)

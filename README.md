@@ -130,6 +130,7 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - [发行版支持矩阵](docs/DISTRO-SUPPORT.md) — 哪些发行版验证过，每种缺什么
 - [兼容性与升级](docs/COMPATIBILITY.md) — 插件与桌面的版本关系、升级顺序、回退步骤
 - [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) — 对 harness 上游的两项提案
+- [上游缺陷记录](issues/README.md) — 已上报 harness 的问题、实测证据与本地规避的关系
 - [架构与流程图](docs/diagrams.md) — 可交互的架构、时序与生命周期图
 
 其中三份——发行版支持矩阵、上游 API 提案、架构与流程图索引——**只有中文版**，因为目前没有对应的

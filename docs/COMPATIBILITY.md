@@ -16,6 +16,23 @@
 
 另外：`engines.node >= 22.19` 是宿主 Node 的下限；`manifestVersion: 1` 是插件元数据版本，不是桌面版本。
 
+## Windows 上的 9P 工作区
+
+在 Windows 宿主上，会话工作区可以用 UNC 拼写 `\\wsl.localhost\<发行版>\…`。那是一条 **9P** 挂载，而 9P **不提供 Windows 安全描述符**（实测：`Get-Acl` 对本地 NTFS 与 SMB UNC `\\localhost\C$` 都成功，对本机两个发行版的 9P 路径一律 Win32 1；同一目录的文件内容读写却完全正常）。
+
+宿主侧的 Windows ACL 沙箱因此无法在这种工作区上工作。处理方式：
+
+| 场景 | 行为 |
+|---|---|
+| `workspace-write` + 9P | 命令照常运行，工具结果带 `enforcement: unconfined`，并明确提示“本工作区无围栏，写入不受治理” |
+| `read-only` + 9P | 不受影响（只读不添加能力 ACE，从不需要安全描述符） |
+| `danger-full-access` | 不受影响（它根本不经过沙箱的 `confine()`） |
+| 非 9P 的本地路径 | 完全不变 |
+
+这**不是**静默放行：沙箱接缝的契约明确禁止 silent unconfined passthrough，所以降级必须以 `unconfined` 显式声明，模型和用户都能看到。
+
+想要真正的围栏，请用 WSL 预设开会话——那时围栏发生在**发行版内部**，不依赖 Windows ACL。宿主侧若直接用 ACL runner 处理 9P 工作区，会看到一句点名原因的拒绝（exit 127），而不是裸的 Win32 错误码。
+
 ## 升级顺序
 
 **桌面先升，插件后升。** 顺序反了会得到一个“插件比宿主新”的中间态：宿主的模块图里可能还没有插件要注入的服务，`bootstrap` 会把缺失的符号列进 `capabilities.missing`，界面进入降级卡。
