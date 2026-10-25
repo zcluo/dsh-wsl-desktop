@@ -12,7 +12,7 @@ import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
 import { CHECK_IDS, CHECK_REMEDIES } from '../lib/protocol.js'
 import { clearHealthCache, healthFor, parseDoctorOutput } from '../lib/wsl/doctor.js'
-import { defaultDistro, parseWslVersionTable } from '../lib/wsl/world.js'
+import { defaultDistro, parseWslVersionTable } from '../lib/wsl/distros.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 400) })
 const { check } = checker

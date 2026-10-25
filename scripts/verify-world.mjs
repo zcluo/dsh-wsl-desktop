@@ -15,7 +15,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
-import { LoginShellUnresolvedError, listDistros, defaultDistro, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, resolveLoginShell, defaultWorkspaceUnc, probeEvidence, hostExecutable, planWsl, buildWslExecArgv, decodeWslOutput } from '../lib/wsl/world.js'
+import { LoginShellUnresolvedError, runWslShell, listLinuxDir, checkLinuxPath, resolveDistroHome, resolveLoginShell, defaultWorkspaceUnc, probeEvidence, hostExecutable, planWsl, buildWslExecArgv } from '../lib/wsl/world.js'
+import { listDistros, defaultDistro } from '../lib/wsl/distros.js'
+import { decodeWslOutput } from '../lib/wsl/proc.js'
 import {
   parseWslUnc,
   joinWslUnc,

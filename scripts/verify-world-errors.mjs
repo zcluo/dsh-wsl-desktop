@@ -9,7 +9,8 @@
  */
 import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
-import { checkLinuxPath, listDistros, listLinuxDir, resolveDistroHome } from '../lib/wsl/world.js'
+import { checkLinuxPath, listLinuxDir, resolveDistroHome } from '../lib/wsl/world.js'
+import { listDistros } from '../lib/wsl/distros.js'
 import { WslDomainError } from '../lib/wsl/errors.js'
 import { browserFailure, routeErrorFor } from '../lib/route-errors.js'
 

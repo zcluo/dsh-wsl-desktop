@@ -137,6 +137,29 @@ for (const relative of ALL) {
   check(`${relative}: every base class is imported`, missing.length === 0, missing)
 }
 
+// C3 split `world.js` into three modules, and the split is only worth having while
+// the halves stay apart: if `world.js` starts exporting discovery again, the next
+// reader cannot tell which module owns it, and the circular import the split
+// avoided (distros -> world -> distros) comes back.
+{
+  const worldText = await readFile(join(pluginRoot, 'lib/wsl/world.js'), 'utf8')
+  const distrosText = await readFile(join(pluginRoot, 'lib/wsl/distros.js'), 'utf8')
+  const procText = await readFile(join(pluginRoot, 'lib/wsl/proc.js'), 'utf8')
+  check('the distribution-discovery half lives in its own module',
+    ALL.includes('lib/wsl/distros.js') && ALL.includes('lib/wsl/proc.js') && ALL.includes('lib/wsl/world.js'))
+  check('world.js no longer exports or re-exports the discovery half',
+    !/export\s+(?:async\s+)?function\s+(?:listDistros|defaultDistro|defaultDistroSync|wslMajorVersion|parseWslVersionTable)\b/u.test(worldText)
+      && !/export\s*\{[^}]*\b(?:listDistros|defaultDistro|wslMajorVersion|parseWslVersionTable)\b[^}]*\}/u.test(worldText))
+  check('world.js no longer exports or re-exports the shared base',
+    !/export\s+(?:const|function)\s+(?:WSL_CHILD_ENV|ENV_OVERRIDES|decodeWslOutput|assertDistroName)\b/u.test(worldText)
+      && !/export\s*\{[^}]*\b(?:WSL_CHILD_ENV|ENV_OVERRIDES|decodeWslOutput)\b[^}]*\}/u.test(worldText))
+  check('the discovery module does not import world.js (no cycle)',
+    !/from\s+['"]\.\/world\.js['"]/u.test(distrosText),
+    'distros.js importing world.js would rebuild the cycle the proc.js split removed')
+  check('the shared base is defined in proc.js',
+    /export const WSL_CHILD_ENV\b/u.test(procText) && /export function decodeWslOutput\b/u.test(procText))
+}
+
 // The fs fence is REQUIRED: `lib/wsl/fs.js` must advertise `sandboxMode` (the
 // capability fact that makes `tool-fs` resolve a per-call policy at all), route
 // both mutation entry points through `checkedTarget`, deny with the structured
@@ -318,34 +341,36 @@ for (const relative of ALL) {
   // from the harness, so the decoder can simply be called. The short-name
   // payload is the case a majority heuristic gets wrong.
   const worldModule = await import(pathToFileURL(join(pluginRoot, 'lib/wsl/world.js')).href)
+  // The decoder lives in proc.js since the C3 split; world.js no longer re-exports it.
+  const procModule = await import(pathToFileURL(join(pluginRoot, 'lib/wsl/proc.js')).href)
   check('wsl.exe UTF-16LE diagnostics decode',
-    worldModule.decodeWslOutput(Buffer.from('Wsl/Service/WSL_E_DISTRO_NOT_FOUND', 'utf16le')) === 'Wsl/Service/WSL_E_DISTRO_NOT_FOUND',
+    procModule.decodeWslOutput(Buffer.from('Wsl/Service/WSL_E_DISTRO_NOT_FOUND', 'utf16le')) === 'Wsl/Service/WSL_E_DISTRO_NOT_FOUND',
     'wsl.exe emits its own diagnostics as UTF-16LE while Linux-side output is UTF-8')
   check('plain UTF-8 passes through the decoder unchanged',
-    worldModule.decodeWslOutput(Buffer.from('hello world\n', 'utf8')) === 'hello world\n')
+    procModule.decodeWslOutput(Buffer.from('hello world\n', 'utf8')) === 'hello world\n')
   check('a VALID UTF-8 stream is never reinterpreted as UTF-16LE',
-    worldModule.decodeWslOutput(Buffer.from('a\uFFFDb\n', 'utf8')) === 'a\uFFFDb\n'
-      && worldModule.decodeWslOutput(Buffer.from('x\uFFFD\uFFFDy', 'utf8')) === 'x\uFFFD\uFFFDy'
-      && worldModule.decodeWslOutput(Buffer.from('a\u0000b', 'utf8')) === 'a\u0000b',
+    procModule.decodeWslOutput(Buffer.from('a\uFFFDb\n', 'utf8')) === 'a\uFFFDb\n'
+      && procModule.decodeWslOutput(Buffer.from('x\uFFFD\uFFFDy', 'utf8')) === 'x\uFFFD\uFFFDy'
+      && procModule.decodeWslOutput(Buffer.from('a\u0000b', 'utf8')) === 'a\u0000b',
     'a replacement-character count cannot tell a literal U+FFFD from a decoding failure, so counting them flipped valid buffers; the discriminator is that these buffers carry no NUL framing at all')
   // Both of these are regressions that a REVIEW found in a previous revision of
   // this function, so they are pinned rather than trusted.
   check('UTF-16LE whose bytes happen to be valid UTF-8 still decodes',
-    worldModule.decodeWslOutput(Buffer.from('abc不', 'utf16le')) === 'abc不',
+    procModule.decodeWslOutput(Buffer.from('abc不', 'utf16le')) === 'abc不',
     'a "partial interleave must also fail UTF-8 validity" band was tried and rejected this: Buffer.from("abc不","utf16le") IS valid UTF-8, so the band decoded it as UTF-8')
   check('an odd-length buffer is never treated as UTF-16LE',
-    worldModule.decodeWslOutput(Buffer.from([0x61, 0x00, 0x62, 0x00, 0x63, 0x00, 0x64])) === 'a\u0000b\u0000c\u0000d',
+    procModule.decodeWslOutput(Buffer.from([0x61, 0x00, 0x62, 0x00, 0x63, 0x00, 0x64])) === 'a\u0000b\u0000c\u0000d',
     'a UTF-16LE stream is always even-length, and toString("utf16le") silently DROPS the trailing byte — measured: printf a\\0b\\0c\\0d decoded to "abc"')
   check('a mostly-invalid buffer is not treated as UTF-16LE text',
-    worldModule.decodeWslOutput(Buffer.from([0xff, 0xff])) === '\uFFFD\uFFFD',
+    procModule.decodeWslOutput(Buffer.from([0xff, 0xff])) === '\uFFFD\uFFFD',
     "printf 0xff 0xff decoded to a single U+FFFF glyph before the ceiling clause existed")
   check('a NUL as DATA is not mistaken for UTF-16LE framing',
-    worldModule.decodeWslOutput(Buffer.from([0x61, 0x00, 0x62])) === 'a\u0000b',
+    procModule.decodeWslOutput(Buffer.from([0x61, 0x00, 0x62])) === 'a\u0000b',
     "'a\\0b' is one code unit and satisfies any interleave ratio, so the structural test needs a minimum length")
   check('a UTF-8 stream carrying a U+FFFD is NOT flipped to UTF-16LE',
     // A REAL assertion: this check previously passed its detail STRING where the
     // boolean goes, so it printed PASS unconditionally.
-    worldModule.decodeWslOutput(Buffer.from('中文测试'.repeat(100), 'utf8').subarray(0, 1199)).includes('中文测试'),
+    procModule.decodeWslOutput(Buffer.from('中文测试'.repeat(100), 'utf8').subarray(0, 1199)).includes('中文测试'),
     'the capture ceiling cuts a large CJK stream at a byte boundary, leaving ONE trailing U+FFFD; treating a replacement character as evidence flipped the WHOLE stream to UTF-16LE (measured end-to-end on a 1.1 MB CJK stream)')
   // The non-ASCII case is NOT solved by decoding: it is removed at the source.
   // Three decoding heuristics were written for it and each traded one failure
