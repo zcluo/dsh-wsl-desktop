@@ -322,6 +322,11 @@ function copySuiteTree(prefix) {
     // fails at MODULE LOAD, before the first SKIP line.
     ['scripts', 'suite-shell.mjs'],
     ['lib/wsl', 'world.js'],
+    // world.js imports these two since C3: the decoder and child env live in proc.js,
+    // and discovery lives in distros.js. A copy without them fails at MODULE LOAD, the
+    // same omission class as the modules named below.
+    ['lib/wsl', 'proc.js'],
+    ['lib/wsl', 'distros.js'],
     // world.js raises typed failures; a copy without the module fails at MODULE LOAD,
     // before the first SKIP line — the same omission class as confined-argv below.
     ['lib/wsl', 'errors.js'],
