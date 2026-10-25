@@ -24,9 +24,14 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { blankLiterals, citationResolves } from './source-text.mjs'
+import { CI_EXCLUDED, CI_SUITES } from './ci-suites.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const live = process.argv.includes('--live')
+// CI narrows the matrix to what a plain Linux runner can execute. The narrowing
+// is announced in the summary, because a green run must not be read as "the
+// Windows/WSL half passed".
+const ci = process.argv.includes('--ci')
 
 /**
  * The milliseconds one suite may run before this aggregate kills it.
@@ -240,7 +245,7 @@ const DECLARED_SKIPS = [
   },
 ]
 
-const suites = live ? [...STANDALONE, ...LIVE] : STANDALONE
+const suites = ci ? [...CI_SUITES] : live ? [...STANDALONE, ...LIVE] : STANDALONE
 const results = []
 /** The declaration of one suite, by name. */
 const declarations = new Map(DECLARED_SKIPS.map((entry) => [entry.suite, entry]))
@@ -450,6 +455,9 @@ function canExitTwo(source) {
   const stale = []
   for (const { suite, branch } of DECLARED_SKIPS) {
     if (!suites.includes(suite)) {
+      // Under --ci the subset is deliberately narrower: an excluded suite's
+      // declaration is out of scope for this run, not stale.
+      if (ci) continue
       stale.push(`${suite} is not in the suite list, so the declaration can never apply`)
       continue
     }
@@ -494,6 +502,10 @@ for (const suite of suites) {
 }
 
 console.log('\n=== summary ===')
+if (ci) {
+  console.log(`CI SUBSET: ${suites.length} suite(s) of the offline matrix; ${CI_EXCLUDED.length} excluded for this runner.`)
+  console.log('A green run here does NOT cover the Windows/WSL suites; run the full matrix on a Windows host with WSL2.')
+}
 // Exit code 2 is a suite's own SKIP (a check that could not run here, e.g.
 // `verify-client-ui` without the harness checkout). It is shown, it is never a pass,
 // and it is accepted ONLY from a suite DECLARED_SKIPS names together with the
