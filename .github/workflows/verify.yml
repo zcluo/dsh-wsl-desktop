@@ -1,0 +1,32 @@
+name: verify (linux subset)
+
+# This workflow runs the part of the matrix a plain Linux runner can execute.
+# The Windows/WSL suites are NOT covered here; they need a Windows host with
+# WSL2 and a running desktop, and running them as SKIPs would read as coverage.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  subset:
+    name: offline subset (no Windows/WSL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      # The package declares no runtime dependencies; `npm ci` would need a
+      # lockfile this repository does not carry.
+      - name: Run the CI subset
+        run: node scripts/verify-all.mjs --ci
+
+      - name: State the coverage boundary
+        if: always()
+        run: |
+          echo "This run covered the Linux-runnable subset only."
+          echo "The Windows/WSL suites (9P, confinement, PTY, sync, live host) did not run."
