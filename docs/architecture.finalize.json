@@ -5,15 +5,15 @@
   "status": "pass",
   "type": "architecture",
   "quality": "showcase",
-  "startedAt": "2026-10-24T07:00:04.306Z",
+  "startedAt": "2026-10-25T06:55:33.093Z",
   "specification": {
     "path": "docs/diagrams-src/architecture.json",
-    "sha256": "6050de9e957f3a221be69bd3e8a19ad945d29c9605f4a6ea7932ea4ec3832a72",
+    "sha256": "8d1b9a36d74060f67cfcf3ed812641a957e3e88130d4245c186a885c99d3fa4c",
     "bytes": 10460
   },
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "7433c09c89fdd5d8dcbc6a5a395562cdc8e139984783c7a7a86bb0282007eb56",
+    "sha256": "eb4e7824173f6f7b3fccd16bf9510613405b80e523883dc9f9c0a409d7400435",
     "bytes": 842896
   },
   "stages": {
@@ -23,7 +23,7 @@
       "durationMs": null,
       "execution": "embedded-in-deliver",
       "command": [
-        "node",
+        "C:/Program Files/nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
         "deliver",
         "architecture",
@@ -40,7 +40,7 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "6050de9e957f3a221be69bd3e8a19ad945d29c9605f4a6ea7932ea4ec3832a72",
+          "sha256": "8d1b9a36d74060f67cfcf3ed812641a957e3e88130d4245c186a885c99d3fa4c",
           "bytes": 10460
         },
         "validation": {
@@ -56,9 +56,9 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1011,
+      "durationMs": 845,
       "command": [
-        "node",
+        "C:/Program Files/nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
         "deliver",
         "architecture",
@@ -72,18 +72,18 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "d498841d-0627-4e61-bafa-ccbdd7fc6034",
+        "receiptId": "542271fe-7725-4d1e-8053-e7b93f49f953",
         "ok": true,
         "command": "deliver",
         "type": "architecture",
         "input": "docs/diagrams-src/architecture.json",
         "output": "docs/architecture.html",
         "specification": {
-          "sha256": "6050de9e957f3a221be69bd3e8a19ad945d29c9605f4a6ea7932ea4ec3832a72",
+          "sha256": "8d1b9a36d74060f67cfcf3ed812641a957e3e88130d4245c186a885c99d3fa4c",
           "bytes": 10460
         },
         "artifact": {
-          "sha256": "7433c09c89fdd5d8dcbc6a5a395562cdc8e139984783c7a7a86bb0282007eb56",
+          "sha256": "eb4e7824173f6f7b3fccd16bf9510613405b80e523883dc9f9c0a409d7400435",
           "bytes": 842896
         },
         "validation": {
@@ -97,7 +97,7 @@
         "evidence": {
           "verified": true,
           "repository": "https://github.com/zcluo/dsh-wsl-desktop",
-          "revision": "a981bab275a759666b3d77bf4f7c836485c943ce",
+          "revision": "96655da2a60948c748bb980d918826a1b0102151",
           "references": 13
         },
         "update": {
@@ -116,9 +116,9 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 304,
+      "durationMs": 200,
       "command": [
-        "node",
+        "C:/Program Files/nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
         "check",
         "docs/architecture.html",
@@ -128,7 +128,7 @@
         "ok": true,
         "file": "docs/architecture.html",
         "artifact": {
-          "sha256": "7433c09c89fdd5d8dcbc6a5a395562cdc8e139984783c7a7a86bb0282007eb56",
+          "sha256": "eb4e7824173f6f7b3fccd16bf9510613405b80e523883dc9f9c0a409d7400435",
           "bytes": 842896
         },
         "checks": [
@@ -359,15 +359,15 @@
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "d498841d-0627-4e61-bafa-ccbdd7fc6034"
+        "deliveryReceiptId": "542271fe-7725-4d1e-8053-e7b93f49f953"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 2938,
+      "durationMs": 2811,
       "command": [
-        "node",
+        "C:/Program Files/nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
         "browser-check",
         "docs/architecture.html",
@@ -383,10 +383,10 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "d498841d-0627-4e61-bafa-ccbdd7fc6034",
+        "deliveryReceiptId": "542271fe-7725-4d1e-8053-e7b93f49f953",
         "artifact": {
           "path": "docs/architecture.html",
-          "sha256": "7433c09c89fdd5d8dcbc6a5a395562cdc8e139984783c7a7a86bb0282007eb56",
+          "sha256": "eb4e7824173f6f7b3fccd16bf9510613405b80e523883dc9f9c0a409d7400435",
           "bytes": 842896
         },
         "state": {
@@ -1085,14 +1085,14 @@
     "browserCheckReceipt": "docs/architecture.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-10-24T07:00:09.190Z",
-  "durationMs": 4884,
+  "finishedAt": "2026-10-25T06:55:37.474Z",
+  "durationMs": 4381,
   "update": {
     "status": "current",
     "installedVersion": "3.2.0",
     "availableVersion": "3.2.0",
     "releaseNotes": null,
-    "checkedAt": "2026-10-23T12:31:07.901Z",
+    "checkedAt": "2026-10-25T06:55:01.505Z",
     "source": "cache",
     "noticeRequired": false,
     "noticeText": null

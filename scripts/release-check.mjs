@@ -131,6 +131,14 @@ for (const path of (tracked ?? '').split('\n').filter((line) => line !== '')) {
 }
 if (privacy.secretHits.length > 0) blockers.push(`tracked files look like they carry a secret: ${privacy.secretHits.join(', ')}`)
 if (privacy.pathHits.length > 0) blockers.push(`tracked files carry a machine-specific path: ${privacy.pathHits.join(', ')}`)
+// Archify writes absolute paths into its receipts on every finalize/visual-check,
+// so "remember to scrub" is not a rule a human keeps. This runs the scrubber in
+// check mode: any receipt that would still change is a blocker with its own name.
+const unscrubbed = await tryRun('node', ['scripts/scrub-receipts.mjs', '--check'])
+if (unscrubbed !== null && unscrubbed.includes('need scrubbing')) {
+  const names = unscrubbed.split('\n').filter((line) => line.startsWith('would scrub ')).map((line) => line.slice('would scrub '.length))
+  blockers.push(`delivery receipts still carry machine paths (run node scripts/scrub-receipts.mjs): ${names.join(', ')}`)
+}
 const pack = await tryRun('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'])
 if (pack !== null && pack !== '') {
   try {

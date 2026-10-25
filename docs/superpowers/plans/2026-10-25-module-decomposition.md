@@ -51,6 +51,12 @@ Run: `node scripts/verify-all.mjs > .superpowers/baseline-c3-t1.txt 2>&1; echo "
 
 Expected: exit 0; keep the file.
 
+**Do not expect a byte-identical aggregate diff.** The aggregate's output is not deterministic: `verify-9p` prints its probe's temp-directory spelling (which carries a process id), and a task that registers a new module adds its own `PASS  lib/… loads` rows by design. The correct comparison is: same exit code, same `N/M suites passed` summary line, and no *unexpected* difference once pid-bearing lines and the new module rows are filtered out.
+
+```bash
+node -e "const fs=require('node:fs');const d=(f)=>fs.readFileSync(f,'utf8').split('\n');const a=d('.superpowers/baseline-c3-t1.txt'),b=d('.superpowers/after-c3-t1.txt');const noise=(l)=>/dsh-wsl-9p-probe-\d+|FACT /.test(l)||/PASS  lib\/(host|wsl)\/.* loads|every base class is imported/.test(l);const real=b.filter((l)=>!a.includes(l)&&!noise(l)).concat(a.filter((l)=>!b.includes(l)&&!noise(l)));console.log(real.length?real.join('\n'):'no unexpected difference')"
+```
+
 - [ ] **Step 2: Read the exact current bodies**
 
 Run: `sed -n '1527,1620p' lib/index.js`
