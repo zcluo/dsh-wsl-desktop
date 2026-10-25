@@ -65,6 +65,7 @@ import { fileURLToPath } from 'node:url'
 import { windowsToMntPath } from '../lib/wsl/paths.js'
 import { resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 import { probeWithRetry } from './wsl-probe.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -78,18 +79,8 @@ const suitePath = givenSuite ?? join(here, 'verify-confinement.mjs')
 /** True when THIS process is the inner run the mutation section starts. */
 const isInnerRun = givenSuite !== undefined
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+const { check } = checker
 
 /**
  * The six assertions the drive-path family evaluates, under the labels the suite
@@ -327,6 +318,9 @@ function copySuiteTree(prefix) {
     ['scripts', 'wsl-probe.mjs'],
     ['scripts', 'detail.mjs'],
     ['scripts', 'source-text.mjs'],
+    // The suite now reports through the shared checker (C5); a copy without it
+    // fails at MODULE LOAD, before the first SKIP line.
+    ['scripts', 'suite-shell.mjs'],
     ['lib/wsl', 'world.js'],
     // world.js raises typed failures; a copy without the module fails at MODULE LOAD,
     // before the first SKIP line — the same omission class as confined-argv below.
@@ -408,7 +402,7 @@ const HELPER_PATH_LINE = "const helperPathFile = fileURLToPath(new URL('../lib/w
  * The line `skip()` counts with. `skipped += 0` is the mutation section B runs: it
  * leaves the SKIP print untouched and makes the suite exit 0.
  */
-const SKIP_COUNT_LINE = '  skipped += labels.length'
+const SKIP_COUNT_LINE = '  checker.skip(labels.length)'
 
 /**
  * A copy of the suite whose helper path is a UNC spelling, so `windowsToMntPath`
@@ -436,7 +430,7 @@ function buildMutantCopy(zeroCount = false) {
     .split('drivePathPrecondition(helperPathFile)').join('drivePathPrecondition(helperMntFile)')
   if (zeroCount) {
     mutated = mutated && next.includes(SKIP_COUNT_LINE)
-    next = next.replace(SKIP_COUNT_LINE, '  skipped += 0 // PIN MUTANT: the count is zeroed, the SKIP print is untouched')
+    next = next.replace(SKIP_COUNT_LINE, '  checker.skip(0) // PIN MUTANT: the count is zeroed, the SKIP print is untouched')
   }
   writeFileSync(suite, next, 'utf8')
   return { path: suite, tree, mutated }
@@ -681,5 +675,5 @@ if (!isInnerRun) {
     withoutPolicy.code === 1 && withoutPolicy.out.includes(`  FAIL  ${INSIDE_WRITE_LABEL}`) && strippedStub.length === 1,
     `exit ${withoutPolicy.code} (${withoutPolicy.how}); the stub's calls:\n${strippedStub.join('\n') || '(none)'}\nthe run's FAIL rows: ${failedRowNamesOf(withoutPolicy.out)}\n${tailOf(withoutPolicy.out)}`)
 }
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
+process.exitCode = checker.failures === 0 ? 0 : 1
