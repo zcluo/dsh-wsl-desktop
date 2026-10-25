@@ -9,6 +9,12 @@ node scripts/verify-all.mjs --live   # 追加需要已安装插件 + 运行中�
 
 **聚合器怎么读 SKIP（提交 `2d44dd6`）**：套件的退出码 2 是它自己的 SKIP（本机上评估不了某项检查），而聚合器只读退出码、看不见套件自己那段 `SKIP` 说明——所以一条跳过**只在** `scripts/verify-all.mjs` 的 `DECLARED_SKIPS` 点名了该套件、并给出允许它的**前提**时才算数。摘要行因此是 `N/M suites passed (K declared skip: <名称>)`，每条 `SKIP` 下面打印它声明的前提；**未声明**的跳过判红（`FAIL (undeclared skip) <套件>`，并打印「往 `DECLARED_SKIPS` 补一条，或去掉逼出这条跳过的前提」的修法），聚合以退出码 1 结束——退出码 0 从此不能与「有一条套件从未跑过」共存。声明的前提在本机不成立时该条**休眠**：套件照跑，只多打印一行 `NOTICE`，不判红。声明**失效**（套件改名 / 源码里已经没有 exit-2 分支 / 不在套件列表里）在**任何套件运行之前**判红，因为那是仓库自身的腐烂、操作者当场就能清掉。这套裁定由 `scripts/verify-all-skip.mjs` 钉住：它用夹具套件构建聚合器的副本（放在仓库外），读真进程的真退出码与真摘要。它还从真实的 `STANDALONE` 列表与各套件源码里的 exit-2 **形状**重新推导声明表的两个方向：能跳过却没声明的套件当场点名，声明了却没有该形状的条目同样点名。
 
+## 每个套件怎么报告
+
+每个套件都通过 `scripts/suite-shell.mjs` 的 `makeChecker` 报告结果，不再各自实现 `check()`。`verify-all.mjs` 会扫描套件源码，发现本地 `check()` 外壳就判红——七份复制的外壳曾各自漂移（其中一份的 PASS 记号都不一样），收敛后由这一行防回归。
+
+两句相关约束：套件自己的 **PASS 记号**要显式传进 `makeChecker`（默认是 `OK  `，多数套件是 `PASS`），这样输出不变；而复制式变异套件（`verify-fs-fence-skip`、`verify-9p-skip`、`verify-confinement-skip`）会**复制整棵套件树**去跑变体，所以它们必须把 `suite-shell.mjs` 也加进复制清单，否则副本在 import 阶段就崩，变异段落会读成一个假的“没有 FAIL 行”。
+
 单跑某一项：
 
 ```powershell

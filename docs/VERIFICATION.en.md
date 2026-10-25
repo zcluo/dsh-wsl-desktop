@@ -9,6 +9,12 @@ node scripts/verify-all.mjs --live   # additionally the suites needing the insta
 
 **How the aggregate reads a SKIP (commit `2d44dd6`)**: a suite's exit code 2 is its own SKIP (a check it could not evaluate on this machine), and the aggregate reads exit codes — it cannot see the suite's own `SKIP` block — so a skip counts **only** where `scripts/verify-all.mjs`'s `DECLARED_SKIPS` names the suite together with the **precondition** that allows it. The summary therefore reads `N/M suites passed (K declared skip: <name>)`, and each `SKIP` prints the precondition it declared; an **undeclared** skip fails the aggregate (`FAIL (undeclared skip) <suite>`, plus the block naming the fix — add an entry to `DECLARED_SKIPS`, or remove the precondition that forced the skip) and the run exits 1 — so exit 0 can no longer coexist with "one suite never ran". A declaration whose precondition does not hold here is **dormant**: the suite runs, one extra `NOTICE` line is printed, nothing reddens. A **dead** declaration (the suite was renamed / its source no longer has an exit-2 branch / it is not in the suite list) fails **before any suite runs**, because that rot is the repository's own and an operator can clear it on the spot. The whole ruling is pinned by `scripts/verify-all-skip.mjs`, which builds copies of the aggregate over fixture suites (outside the repository) and reads real processes' real exit codes and summaries. It also re-derives both directions of the table from the real `STANDALONE` list and the suites' own exit-2 **shape**: a suite that can skip without a declaration is named, and so is a declaration whose suite no longer carries that shape.
 
+## How a suite reports
+
+Every suite reports through `scripts/suite-shell.mjs`'s `makeChecker` instead of declaring its own `check()`. `verify-all.mjs` scans suite sources and reddens on a local shell — seven copied shells had drifted independently (one rendered a different PASS token), and this row is what keeps the convergence from regressing.
+
+Two related constraints: a suite passes its own **PASS token** into `makeChecker` explicitly (the default is `OK  `, most suites print `PASS`) so its output does not change; and the copy-based mutation suites (`verify-fs-fence-skip`, `verify-9p-skip`, `verify-confinement-skip`) copy the whole suite tree to run a variant, so they must add `suite-shell.mjs` to their copy lists — otherwise the copy cannot import, and the mutation section reads a false "the suite printed no FAIL line".
+
 Run a single item:
 
 ```powershell

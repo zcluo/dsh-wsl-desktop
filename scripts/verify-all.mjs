@@ -274,6 +274,19 @@ const declarations = new Map(DECLARED_SKIPS.map((entry) => [entry.suite, entry])
     console.log(`\nFAIL  a check() passes its detail string where the boolean belongs (always PASS): ${offenders.join(', ')}`)
     process.exit(1)
   }
+  // The convergence pin (C5): suites report through suite-shell.mjs, and a local
+  // check() shell is how seven copies drifted independently before. This scan is
+  // the reason the refactor cannot be undone one file at a time; it names every
+  // offender instead of the first, so a revert is visible in one run.
+  const localShells = []
+  for (const suite of suites) {
+    const source = readFileSync(join(here, suite), 'utf8')
+    if (/^\s*function check\s*\(/mu.test(source)) localShells.push(suite)
+  }
+  if (localShells.length > 0) {
+    console.log(`\nFAIL  a suite declares its own check() shell instead of using suite-shell.mjs: ${localShells.join(', ')}`)
+    process.exit(1)
+  }
   console.log(`check() contract clean across ${suites.length} suites`)
 }
 
