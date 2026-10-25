@@ -26,23 +26,10 @@ import {
 } from '../lib/wsl/paths.js'
 import { detailText } from './detail.mjs'
 import { blankLiterals } from './source-text.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  if (ok) {
-    console.log(`  PASS  ${label}`)
-    return
-  }
-  failures += 1
-  console.log(`  FAIL  ${label}${detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-}
+const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+const { check } = checker
 
 /**
  * Resolve a home without letting a probe failure abort the suite.
@@ -887,5 +874,5 @@ for (const distro of ['debian', 'debian-dev', 'Ubuntu-22.04']) {
   check(`a real distro name still reaches the argv (${distro})`, ok)
 }
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
+process.exitCode = checker.failures === 0 ? 0 : 1
