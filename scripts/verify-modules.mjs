@@ -41,7 +41,7 @@ const HOST_HALF_CHECKS = [
 
 
 /** Modules that import nothing from the harness, so the source tree can load them. */
-const PURE = ['lib/protocol.js', 'lib/route-errors.js', 'lib/release-preflight.js', 'lib/release-check.js', 'lib/wsl/errors.js', 'lib/host/contract.js', 'lib/host/http.js', 'lib/host/presets.js', 'lib/wsl/doctor.js', 'lib/wsl/paths.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/wsl/search.js', 'lib/http-admission.js']
+const PURE = ['lib/protocol.js', 'lib/route-errors.js', 'lib/release-preflight.js', 'lib/release-check.js', 'lib/wsl/errors.js', 'lib/host/contract.js', 'lib/host/http.js', 'lib/host/presets.js', 'lib/wsl/doctor.js', 'lib/wsl/paths.js', 'lib/wsl/proc.js', 'lib/wsl/distros.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/wsl/search.js', 'lib/http-admission.js']
 
 /** Every module the host half loads, including the ones that need the host's resolution. */
 const ALL = [
@@ -56,6 +56,8 @@ const ALL = [
   'lib/wsl/errors.js',
   'lib/wsl/doctor.js',
   'lib/wsl/paths.js',
+  'lib/wsl/proc.js',
+  'lib/wsl/distros.js',
   'lib/wsl/preset.js',
   'lib/wsl/fence.js',
   'lib/wsl/watch.js',
@@ -249,6 +251,10 @@ for (const relative of ALL) {
   const subprocess = await readFile(join(pluginRoot, 'lib/wsl/subprocess.js'), 'utf8')
   const pty = await readFile(join(pluginRoot, 'lib/wsl/pty.js'), 'utf8')
   const world = await readFile(join(pluginRoot, 'lib/wsl/world.js'), 'utf8')
+  // `listDistros` moved to distros.js in C3, and it is the spawn this pin reads the
+  // env option off; scanning both keeps the pin on the code that owns it instead of
+  // on the file it used to live in.
+  const distros = await readFile(join(pluginRoot, 'lib/wsl/distros.js'), 'utf8')
   const entry = await readFile(join(pluginRoot, 'lib/index.js'), 'utf8')
   // The bridge probe used to treat ANY answer other than 'yes' as "python3 is
   // missing", so a probe that could not run (cold VM, timeout, distro-level
@@ -374,7 +380,7 @@ for (const relative of ALL) {
     worldModule.withWslEnvFlags({}).WSL_UTF8 === '1'
       && worldModule.withWslEnvFlags({ WSL_UTF8: '' }).WSL_UTF8 === '1'
       && !String(worldModule.withWslEnvFlags({ TERM: 'xterm' }).WSLENV ?? '').includes('WSL_UTF8')
-      && (world.match(/env: \{ \.\.\.process\.env, \.\.\.WSL_CHILD_ENV \}/g) ?? []).length >= 1,
+      && ((world + distros).match(/env: \{ \.\.\.process\.env, \.\.\.WSL_CHILD_ENV \}/g) ?? []).length >= 1,
     'without WSL_UTF8 wsl.exe prints its own diagnostics as UTF-16LE (measured: 258 bytes for a missing distribution), which is what forced the decoder to guess between encodings')
   // The decoder's contract is TEXT (UTF-8 or UTF-16LE) and nothing more: a
   // stream that carries NUL bytes as DATA cannot be classified by any byte
