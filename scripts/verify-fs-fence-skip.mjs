@@ -43,6 +43,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listDistros, resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
@@ -51,18 +52,8 @@ const checkout = process.env.DSH_CHECKOUT ?? join(pluginRoot, '..', 'deepseek-ha
 const distro = resolveDistro()
 const suitePath = join(here, 'verify-fs-fence.mjs')
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+const { check } = checker
 
 /** The token every SKIP of the pinned family carries on its own line. */
 const CROSS_DISTRO_FAMILY = 'cross-distribution'
@@ -281,6 +272,10 @@ function copySuiteTree(prefix) {
     ['scripts', 'env.mjs'],
     ['scripts', 'detail.mjs'],
     ['scripts', 'source-text.mjs'],
+    // The suite reports through the shared checker (C5). A copy that omits it
+    // cannot import at all, so the mutant would produce no FAIL line and this
+    // family would report a false red about a suite it never ran.
+    ['scripts', 'suite-shell.mjs'],
     ['lib/wsl', 'fence.js'],
     ['lib/wsl', 'paths.js'],
   ]) copyFileSync(join(pluginRoot, dir, name), join(tree, dir, name))
@@ -458,5 +453,5 @@ if (machineSecond.hasSecond) {
   console.log('\nthis machine ALREADY is the one-distribution class, so section E has nothing to simulate')
 }
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
+process.exitCode = checker.failures === 0 ? 0 : 1

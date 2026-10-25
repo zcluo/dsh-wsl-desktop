@@ -44,6 +44,7 @@ import { blankLiterals } from './source-text.mjs'
 import { canonicalHostPath, isLexicallyUnderHost, isUnderHost, writableHostRootsFor } from '../lib/wsl/fence.js'
 import { resolveDistro, resolveLinuxUser, resolveOtherDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const distro = resolveDistro()
 const here = dirname(fileURLToPath(import.meta.url))
@@ -74,20 +75,8 @@ let outsideFixtureLinux = ''
 /** Ceiling for the distribution calls below — wsl.exe is the call a cold VM start can hang. */
 const WSL_TIMEOUT_MS = 30_000
 
-let failures = 0
-/** Checks that could not run here; the suite's exit code reports them (see the tail). */
-let skipped = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+const { check, skip } = checker
 
 /**
  * The target key a WRITE hands the fence: fs-local's own resolution walk, mirrored
@@ -227,7 +216,7 @@ if (!rootExists) {
     + `\n  A scratch directory under the distribution's /tmp needs that distribution`
     + ` reachable and writable. Wake it ("wsl.exe -d ${distro} -- true"), or point`
     + ' DSH_WSL_DISTRO at one that is.')
-  console.log(`\n${failures} CHECK(S) FAILED`)
+console.log(`\n${checker.failures} CHECK(S) FAILED`)
   process.exit(1)
 }
 
@@ -469,7 +458,7 @@ if (linkFixtureReady) {
     'control: a final-component DIRECTORY link is still authorized',
     'the fixture outside the root really exists (the escape link has a target)',
   ]
-  skipped += TRAVERSAL_CHECKS.length
+  skip(TRAVERSAL_CHECKS.length)
   console.log(`  SKIP  the blind-arm traversal assertions — the link fixture could not be built (${linkProblem})`)
   console.log(`        NOT EVALUATED (${TRAVERSAL_CHECKS.length} checks): ${TRAVERSAL_CHECKS.map((label) => `"${label}"`).join('; ')}`)
   console.log('        Of those, "the WRITE KEY the fence is actually handed is refused" is the assertion this fixture exists for.')
@@ -598,7 +587,7 @@ if (publicationCode === null) {
   // green aggregate must not hide a pin that never ran (see the tail). A FAIL would
   // be wrong the other way — the sibling suites treat this same missing artifact as
   // exit 2, not as a red machine.
-  skipped += PUBLICATION_CHECKS.length
+  skip(PUBLICATION_CHECKS.length)
   console.log(`  SKIP  the publication sequence is pinned structurally — ${publicationSource} not readable (set DSH_CHECKOUT, or place the harness checkout beside this repo)`)
   console.log(`        NOT EVALUATED (${PUBLICATION_CHECKS.length} checks): ${PUBLICATION_CHECKS.map((label) => `"${label}"`).join('; ')}`)
   console.log('        Remedy: set DSH_CHECKOUT to the harness checkout, or place it beside this repo, then re-run.')
@@ -733,7 +722,7 @@ if (!otherReachable) {
   console.log('        distribution binding (lib/wsl/fence.js) that closes the share-identity collision')
   console.log('        verify-9p.mjs records. No other check in this suite covers it.')
   console.log('        Remedy: install a second WSL distribution, or point DSH_WSL_OTHER_DISTRO at one this machine already has (wsl.exe -l -q).')
-  skipped += Object.keys(CROSS_DISTRO_CHECKS).length
+  skip(Object.keys(CROSS_DISTRO_CHECKS).length)
 } else {
   const crossDistro = joinWslUnc(otherDistro, `${fixtureLinux}/src/main.py`)
   check(CROSS_DISTRO_CHECKS.foreignLexical,
@@ -854,7 +843,7 @@ check('a drive root is not contained by a WSL workspace', await isUnderHost(mntC
 // ruling, applied here): it gets its own exit code (2), which `verify-all` shows as
 // SKIP — instead of a green suite with a pin silently absent, and instead of a red
 // machine that merely has no harness checkout.
-if (failures > 0) console.log(`\n${failures} CHECK(S) FAILED${skipped === 0 ? '' : `, ${skipped} CHECK(S) SKIPPED`}`)
-else if (skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+if (checker.failures > 0) console.log(`\n${checker.failures} CHECK(S) FAILED${checker.skipped === 0 ? '' : `, ${checker.skipped} CHECK(S) SKIPPED`}`)
+else if (checker.skipped > 0) console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
 else console.log('\nALL CHECKS PASSED')
-process.exitCode = failures > 0 ? 1 : skipped > 0 ? 2 : 0
+process.exitCode = checker.failures > 0 ? 1 : checker.skipped > 0 ? 2 : 0
