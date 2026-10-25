@@ -53,3 +53,13 @@ Distro and user are no longer hardcoded: `DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DS
 `.github/workflows/verify.yml` runs only `node scripts/verify-all.mjs --ci` — the suites a Linux runner can execute. The 9P, confinement, PTY, `sync.ps1` and every `--live` suite are not in CI; they need a Windows host with WSL2 and a running desktop. A green CI run **does not** mean those passed — the workflow name and the summary line (`CI SUBSET: N suite(s) … M excluded`) both state the boundary. The subset is defined in `scripts/ci-suites.mjs`, and every excluded suite carries its reason; `scripts/verify-ci-subset.mjs` pins it (a mistyped name, a live suite slipping in, or an exclusion without a reason all redden).
 
 The subset is **measured**, not guessed: a suite enters it only after passing on a Linux runner. The counter-example is `verify-client-ui` — it reads the harness checkout's icon source, so on a runner it can only SKIP, and the aggregate treats an undeclared skip as a failure; it is therefore excluded explicitly.
+
+## Re-pinning the diagram evidence after touching lib/
+
+`revision` in `docs/diagrams-src/*.json` names the last commit that changed `lib/**`, and `verify-diagrams` requires it to be an ancestor. So **every change under `lib/` needs a re-pin**, or the suite reddens. The whole sequence (re-pin → clear old receipts → finalize → visual-check → scrub → verify) is one command:
+
+```powershell
+node scripts/repin-diagram.mjs architecture
+```
+
+Doing it by hand went wrong three times (a filtered delete missed a file, a stale receipt blocked the rerun), which is why it is a script now. The absolute paths finalize writes into the receipts are removed by `scripts/scrub-receipts.mjs`, also invoked there; `release-check` runs it in `--check` mode so an unscrubbed receipt cannot reach a published artifact.
