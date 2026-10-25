@@ -34,24 +34,15 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { citationResolves } from './source-text.mjs'
 import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const aggregateSource = readFileSync(join(here, 'verify-all.mjs'), 'utf8')
 /** The aggregate's own relative import; a copy of it needs this file beside it. */
 const sourceTextSource = readFileSync(join(here, 'source-text.mjs'), 'utf8')
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+const { check } = checker
 
 // Scratch OUTSIDE the repository: the copies and the fixture suites are this pin's
 // own residue and must never appear in the tree it is measuring.
@@ -675,5 +666,4 @@ console.log('\n=== H. fixed machine-global scratch names in scripts/ ===')
     fixedScratchNames(spellingOnly).length === 0, JSON.stringify(fixedScratchNames(spellingOnly)))
 }
 
-console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
-process.exitCode = failures === 0 ? 0 : 1
+process.exitCode = checker.failures === 0 ? 0 : 1

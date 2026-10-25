@@ -41,23 +41,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listDistros, resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const distro = resolveDistro()
 const probePath = join(here, 'verify-9p.mjs')
 
-let failures = 0
-
-/**
- * Record one assertion.
- * @param {string} label - what was checked.
- * @param {boolean} ok - the outcome.
- * @param {unknown} [detail] - evidence shown on failure.
- */
-function check(label, ok, detail) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${ok || detail === undefined ? '' : `\n        ${detailText(detail)}`}`)
-  if (!ok) failures += 1
-}
+const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+const { check } = checker
 
 /** The three fact labels the cross-share block records; the SKIP must name them. */
 const CROSS_SHARE_LABELS = [
@@ -357,6 +348,7 @@ function buildFixtureFailedCopy() {
   for (const [from, to] of [
     [join(here, 'env.mjs'), join(tree, 'scripts', 'env.mjs')],
     [join(here, 'detail.mjs'), join(tree, 'scripts', 'detail.mjs')],
+    [join(here, 'suite-shell.mjs'), join(tree, 'scripts', 'suite-shell.mjs')],
     [join(here, '..', 'lib', 'wsl', 'fence.js'), join(tree, 'lib', 'wsl', 'fence.js')],
     [join(here, '..', 'lib', 'wsl', 'paths.js'), join(tree, 'lib', 'wsl', 'paths.js')],
     [join(here, '..', 'lib', 'wsl', 'publish.js'), join(tree, 'lib', 'wsl', 'publish.js')],
@@ -504,7 +496,7 @@ function buildOneDistributionCopy() {
   const tree = mkdtempSync(join(tmpdir(), 'dsh-9p-skip-one-'))
   mkdirSync(join(tree, 'scripts'), { recursive: true })
   mkdirSync(join(tree, 'lib', 'wsl'), { recursive: true })
-  for (const name of ['env.mjs', 'detail.mjs', 'verify-9p.mjs', 'verify-9p-skip.mjs']) {
+  for (const name of ['env.mjs', 'detail.mjs', 'suite-shell.mjs', 'verify-9p.mjs', 'verify-9p-skip.mjs']) {
     copyFileSync(join(here, name), join(tree, 'scripts', name))
   }
   for (const name of ['fence.js', 'paths.js', 'publish.js']) {
@@ -541,5 +533,5 @@ if (machineSecond.hasSecond) {
   console.log('\nthis machine ALREADY is the one-distribution class, so section E has nothing to simulate')
 }
 
-console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
-process.exitCode = failures === 0 ? 0 : 1
+console.log(`\n${checker.failures === 0 ? 'ALL CHECKS PASSED' : `${checker.failures} CHECK(S) FAILED`}`)
+process.exitCode = checker.failures === 0 ? 0 : 1
