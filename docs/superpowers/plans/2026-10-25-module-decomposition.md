@@ -174,6 +174,9 @@ git commit -m "refactor(host): move preset materialisation into lib/host/presets
 
 ### Task 3: Extract session binding from `index.js`
 
+**Status: SUPERSEDED by Tasks 7–9 below** (same reason as Task 2: `bindingLog` is
+module-level state shared with the `METHODS` table).
+
 **Files:**
 - Create: `lib/host/binding.js`
 - Modify: `lib/index.js`
@@ -411,3 +414,245 @@ Expected: `no user-facing string changed` (the only allowed hits are the new com
 - Any behavioural change; this plan is a move.
 - CI (separate plan).
 - Retiring the `world.js` name or re-exporting differently for consumers: `exports` is unchanged.
+
+---
+
+# Tasks 7–9: the state half (added after Tasks 2–3 were superseded)
+
+Tasks 2 and 3 asked for the functions, but the blocker was the state they close over.
+`index.js` holds five module-level variables that `apply()`, the module-level `METHODS`
+table, and the preset lifecycle all reach:
+
+| Variable | Uses | What it is |
+|---|---|---|
+| `hostCtx` | 18 | the plugin context, read by every route method |
+| `routeWslPath` | 17 | the configured `wsl.exe`, read by every route method |
+| `hostReady` | 5 | whether the preset registry has been reached |
+| `presetState` | 6 | the last materialisation outcome, reported through the route |
+| `currentGeneration` / `refreshMutex` | 4 / 3 | the live registration generation and its serialiser |
+| `bindingLog` / `BINDING_LOG_LIMIT` | 6 / 2 | the bounded record of binding decisions |
+
+The route dispatcher calls `METHODS` without carrying the plugin's config, which is WHY
+these are module-level rather than parameters. Tasks 7–9 keep that shape and give the state
+an explicit owner instead of scattering it: one module, three named groups, no behaviour
+change.
+
+**Design (decided here, not deferred):**
+
+`lib/host/state.js` exports three objects and nothing else.
+
+- `hostSession` — `{ ctx, wslPath, ready }`, set by `apply()`, read by route methods.
+  Its setter is `bindHost(ctx, wslPath)`; `routeWslPath`'s default `'wsl.exe'` survives as
+  the field's initial value.
+- `presetRun` — `{ state, generation, mutex }`, owned by `refreshPresets`. `state` starts
+  as `{ status: 'pending' }`; `generation` starts `null`; `mutex` starts
+  `Promise.resolve()`.
+- `bindingTape` — `{ log }` with a `record(entry)` that applies the 50-entry cap, so the
+  cap cannot drift from the log it caps.
+
+**Why objects and not setters/getters on `index.js`:** a getter would keep the state where
+it already is and move nothing; a setter pair per variable triples the call sites. Three
+mutable objects let every existing `hostCtx.get(...)` become `hostSession.ctx.get(...)` —
+a mechanical rename a reader can verify by eye, with no new indirection at runtime.
+
+---
+
+### Task 7: Create `lib/host/state.js`
+
+**Files:**
+- Create: `lib/host/state.js`
+- Modify: `scripts/verify-modules.mjs` (`PURE` and `ALL` lists)
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `hostSession` (`{ ctx, wslPath, ready }`), `presetRun` (`{ state, generation, mutex }`), `bindingTape` (`{ log, record(entry) }`), `BINDING_LOG_LIMIT`.
+
+- [ ] **Step 1: Baseline**
+
+Run: `node scripts/verify-all.mjs > .superpowers/baseline-c3-t7.txt 2>&1; echo "exit=$?"`
+
+Expected: exit 0.
+
+- [ ] **Step 2: Write the module**
+
+```js
+/**
+ * The plugin's module-level state, named and grouped.
+ *
+ * The route dispatcher calls `METHODS` without carrying the plugin's config, so
+ * the context, the configured `wsl.exe` path and the preset lifecycle cannot be
+ * parameters. They were five loose `let`s in `lib/index.js`; this module gives
+ * each group one owner, so a reader can see what is shared and why.
+ *
+ * Nothing here is a getter/setter pair: the objects are mutable, and every call
+ * site reads a field. That keeps the move mechanical — `hostCtx.get(x)` became
+ * `hostSession.ctx.get(x)`.
+ * @module dsh-wsl-desktop/host/state
+ */
+
+/** The plugin context and the config it was applied with, as route methods see them. */
+export const hostSession = {
+  /** @type {import('@deepseek-ai/cordis').Context | undefined} */
+  ctx: undefined,
+  /** The configured `wsl.exe` path; the default a fresh install runs with. */
+  wslPath: 'wsl.exe',
+  /** Whether the preset registry has been reached; `bootstrap` waits briefly for it. */
+  ready: false,
+}
+
+/** The preset registration lifecycle. */
+export const presetRun = {
+  /** @type {{ status: string } & Record<string, unknown>} */
+  state: { status: 'pending' },
+  /** @type {{ disposed: boolean, disposers: Map<string, Function> } | null} */
+  generation: null,
+  /** Serialises refreshes so boot-time and developer-token calls cannot interleave. */
+  mutex: Promise.resolve(),
+}
+
+/** Most binding decisions kept for inspection. */
+export const BINDING_LOG_LIMIT = 50
+
+/** The bounded record of preset-binding decisions, reported through the route. */
+export const bindingTape = {
+  /** @type {object[]} */
+  log: [],
+  /**
+   * Record one decision, dropping the oldest past the cap.
+   * @param {object} entry - the decision to record.
+   */
+  record(entry) {
+    this.log.push(entry)
+    if (this.log.length > BINDING_LOG_LIMIT) this.log.splice(0, this.log.length - BINDING_LOG_LIMIT)
+  },
+}
+```
+
+- [ ] **Step 3: Register it**
+
+Add `'lib/host/state.js'` to `PURE` and `ALL` in `scripts/verify-modules.mjs`.
+
+- [ ] **Step 4: Run the gate — the module is inert until Task 8 uses it**
+
+Run: `node scripts/verify-all.mjs`
+
+Expected: exit 0. The module is dead code at this point; this step proves it at least loads.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add lib/host/state.js scripts/verify-modules.mjs
+git commit -m "feat(host): give the plugin's module-level state one module and three groups"
+```
+
+---
+
+### Task 8: Point `index.js` at the state module
+
+**Files:**
+- Modify: `lib/index.js`
+
+**Interfaces:**
+- Consumes: `hostSession`, `presetRun`, `bindingTape` from `./host/state.js`.
+- Produces: nothing new; every existing signature is unchanged.
+
+- [ ] **Step 1: Delete the five declarations**
+
+Remove `let presetState`, `const bindingLog`, `const BINDING_LOG_LIMIT`, `let hostCtx`,
+`let routeWslPath`, `let hostReady`, `let refreshMutex`, `let currentGeneration`, and add:
+
+```js
+import { BINDING_LOG_LIMIT, bindingTape, hostSession, presetRun } from './host/state.js'
+```
+
+- [ ] **Step 2: Rename mechanically**
+
+| Was | Becomes |
+|---|---|
+| `hostCtx` | `hostSession.ctx` |
+| `routeWslPath` | `hostSession.wslPath` |
+| `hostReady` | `hostSession.ready` |
+| `presetState` | `presetRun.state` |
+| `currentGeneration` | `presetRun.generation` |
+| `refreshMutex` | `presetRun.mutex` |
+| `bindingLog.push(...)` + cap logic | `bindingTape.record(...)` |
+
+`apply()` assigns `hostSession.ctx = ctx`, `hostSession.wslPath = config.wslPath ?? 'wsl.exe'`,
+`hostSession.ready = false`.
+
+- [ ] **Step 3: Prove the rename is complete**
+
+```bash
+node -e "const s=require('node:fs').readFileSync('lib/index.js','utf8');const left=['hostCtx','routeWslPath','hostReady','presetState','currentGeneration','refreshMutex','bindingLog'].filter((n)=>new RegExp('\\\\b'+n+'\\\\b').test(s.replace(/^\s*(\*|\/\/).*$/gm,'')));console.log(left.length?'STILL NAMED: '+left.join(','):'rename complete')"
+```
+
+Expected: `rename complete`.
+
+- [ ] **Step 4: Run the gate**
+
+Run: `node scripts/verify-all.mjs`
+
+Expected: `24/26 suites passed (2 declared skip: …)`, exit 0.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add lib/index.js
+git commit -m "refactor(host): read the plugin's shared state from one module"
+```
+
+---
+
+### Task 9: Pin the state's single owner
+
+**Files:**
+- Modify: `scripts/verify-modules.mjs`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: assertions that name the module and the groups.
+
+- [ ] **Step 1: Add the pins**
+
+```js
+{
+  const entry = await readFile(join(pluginRoot, 'lib/index.js'), 'utf8')
+  const state = await readFile(join(pluginRoot, 'lib/host/state.js'), 'utf8')
+  check('the shared state has one owner',
+    ALL.includes('lib/host/state.js'))
+  check('index.js declares no module-level mutable state of its own',
+    !/^let\s+(?:presetState|hostCtx|routeWslPath|hostReady|currentGeneration|refreshMutex)\b/mu.test(entry),
+    'a second home for any of these is how the two presets used to drift')
+  check('the state module names all three groups',
+    /export const hostSession\b/u.test(state) && /export const presetRun\b/u.test(state) && /export const bindingTape\b/u.test(state))
+  check('the binding cap lives with the log it caps',
+    /record\(entry\)/u.test(state) && /BINDING_LOG_LIMIT/u.test(state))
+}
+```
+
+- [ ] **Step 2: Prove the pins have teeth**
+
+Temporarily add `let hostCtx` back to `lib/index.js`, run `node scripts/verify-modules.mjs`,
+and confirm the second assertion fails; then remove it.
+
+- [ ] **Step 3: Run the gate**
+
+Run: `node scripts/verify-all.mjs` → exit 0.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add scripts/verify-modules.mjs
+git commit -m "test(host): pin the shared state to its single module"
+```
+
+## Acceptance Criteria (Tasks 7–9)
+
+1. `lib/index.js` declares no `let` for the seven names in the table above.
+2. `lib/host/state.js` owns all of them and exports exactly the three groups plus the cap
+   constant.
+3. `node scripts/verify-all.mjs` exits 0 with 24/26 suites and the same two declared skips.
+4. Re-introducing `let hostCtx` in `index.js` reddens `verify-modules.mjs`.
+5. No route method's observable behaviour changes: the same request gets the same answer.
+6. `lib/index.js` shrinks by at least the size of the removed declarations (a small win —
+   the point is ownership, not line count).

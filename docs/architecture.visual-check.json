@@ -6,10 +6,10 @@
   "status": "pass",
   "visualReview": "pending",
   "provenance": "current",
-  "deliveryReceiptId": "eeab9897-b090-40d8-b91b-fee617e987e7",
+  "deliveryReceiptId": "5153ceb2-e9ff-463d-a18e-c42a87ebff21",
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "0daa0e462b9efc16f24500bccaa514b47803701602a2ed87356341facb67601f",
+    "sha256": "22ff9dc65eace10208ac73d6c2a9bc272ea52f484113a5d19919b7854abf0f0d",
     "bytes": 842896
   },
   "state": {

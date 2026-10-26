@@ -138,6 +138,25 @@ for (const relative of ALL) {
   check(`${relative}: every base class is imported`, missing.length === 0, missing)
 }
 
+// The plugin's shared state has one owner. Before C3's Tasks 7-9 it was seven loose
+// module-level variables in `index.js`, which is how the preset lifecycle and the
+// route table could drift apart without either file looking wrong.
+{
+  const entryText = await readFile(join(pluginRoot, 'lib/index.js'), 'utf8')
+  const stateText = await readFile(join(pluginRoot, 'lib/host/state.js'), 'utf8')
+  check('the shared state has one owner', ALL.includes('lib/host/state.js'))
+  check('index.js declares no module-level mutable state of its own',
+    !/^let\s+(?:presetState|hostCtx|routeWslPath|hostReady|currentGeneration|refreshMutex)\b/mu.test(entryText)
+      && !/^const\s+bindingLog\b/mu.test(entryText),
+    'a second home for any of these is how the two halves of the route drifted')
+  check('the state module names all three groups',
+    /export const hostSession\b/u.test(stateText)
+      && /export const presetRun\b/u.test(stateText)
+      && /export const bindingTape\b/u.test(stateText))
+  check('the binding cap lives with the log it caps',
+    /record\(entry\)/u.test(stateText) && /BINDING_LOG_LIMIT/u.test(stateText))
+}
+
 // C3 split `world.js` into three modules, and the split is only worth having while
 // the halves stay apart: if `world.js` starts exporting discovery again, the next
 // reader cannot tell which module owns it, and the circular import the split
