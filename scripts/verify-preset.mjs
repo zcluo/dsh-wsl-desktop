@@ -7,6 +7,9 @@
  * Run: node scripts/verify-preset.mjs
  */
 import { makeChecker } from './suite-shell.mjs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { detailText } from './detail.mjs'
 import { buildVariantPlugins, buildWorldGroup, hasClassifierVerdict, isHostWorldModule, isToolFamilyModule, VERDICTED_KEPT_MODULES, WORLD_MODULE_NAMES, WORLD_ROWS, WSL_PERSONA_SENTENCE } from '../lib/wsl/preset.js'
 
@@ -391,11 +394,26 @@ check('group child was cloned, not shared', carried.config[0] !== withGroup[1].c
 check('group row passes the entry-list shape rules', carried.group === true && Array.isArray(carried.config))
 
 console.log('\nrelative name rewrite')
+// `sourceDir` is a PLATFORM-NATIVE absolute path, built from tmpdir(), so that the
+// implementation's platform `join` and `pathToFileURL` agree on every runner.
+//
+// A hardcoded Windows spelling (`E:/src/preset`) tested the runner instead of the
+// behaviour: on Windows `join` keeps it absolute and the URL is
+// `file:///E:/src/preset/...`, while on Linux `E:` is just a relative segment and
+// the same code produces `file:///mnt/.../E:/src/preset/...`. The plugin only ever
+// runs on a Windows host, so that difference is not a product defect — but a test
+// that pins it would fail CI for a platform it was never about.
+const RELATIVE_SOURCE_DIR = tmpdir()
+const EXPECTED_RELATIVE_URL = pathToFileURL(join(RELATIVE_SOURCE_DIR, 'tool-bootstrap.mjs')).href
 const rel = buildVariantPlugins(
   [{ id: 'persona', name: '@deepseek-ai/dsh-persona', config: {} }, { id: 'custom', name: './tool-bootstrap.mjs' }],
-  { ...MODULES, distro: undefined, sourceDir: 'E:/src/preset' },
+  { ...MODULES, distro: undefined, sourceDir: RELATIVE_SOURCE_DIR },
 )
-check('relative row name rewritten to a file URL under sourceDir', rel.plugins.some((row) => row.name === 'file:///E:/src/preset/tool-bootstrap.mjs'), rel.plugins.map((row) => row.name))
+check('relative row name rewritten to a file URL under sourceDir',
+  rel.plugins.some((row) => row.name === EXPECTED_RELATIVE_URL), {
+    expected: EXPECTED_RELATIVE_URL,
+    got: rel.plugins.map((row) => row.name),
+  })
 check('distro omitted when unpinned', rel.plugins.at(-1).config.every((row) => row.distro === undefined))
 
 console.log('\nbuildWorldGroup direct')
