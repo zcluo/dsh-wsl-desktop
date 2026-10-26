@@ -722,8 +722,10 @@ check('index.js configures a wsl.exe path',
   /wslPath: z\.string\(\)\.default\(''\)/.test(indexCode) && /wslPath: z\.string\(\)\.default\('wsl\.exe'\)/.test(indexRaw),
   indexCode.slice(Math.max(0, indexCode.indexOf('wslPath:') - 80), indexCode.indexOf('wslPath:') + 120))
 check('index.js keeps the configured path where the route methods read it',
-  /routeWslPath = config\.wslPath/.test(indexCode),
-  indexCode.slice(Math.max(0, indexCode.indexOf('routeWslPath') - 80), indexCode.indexOf('routeWslPath') + 200))
+  // The default lives in a STRING literal, so this is asserted against the raw text:
+  // `blankLiterals` erases it, and asserting on the blanked form can never match.
+  /hostSession\.wslPath = config\.wslPath \?\? 'wsl\.exe'/.test(indexRaw),
+  indexRaw.slice(Math.max(0, indexRaw.indexOf('hostSession.wslPath') - 80), indexRaw.indexOf('hostSession.wslPath') + 200))
 // Per SITE, not a total: a total cannot tell which site lost the option, and a
 // threshold lets one site drop out while the number stays high. The price is stated
 // rather than hidden: ADDING a probe site has to add its row here, or this check
@@ -731,15 +733,15 @@ check('index.js keeps the configured path where the route methods read it',
 // the defect this pins.
 const countOf = (pattern) => (indexCode.match(pattern) ?? []).length
 const indexSites = [
-  ['listDistros', /listDistros\(\{ wslPath: routeWslPath \}\)/g, 1],
-  ['listLinuxDir', /listLinuxDir\([^)]*\{ wslPath: routeWslPath \}\)/g, 2],
-  ['checkLinuxPath', /checkLinuxPath\([^)]*\{ wslPath: routeWslPath \}\)/g, 3],
-  ['resolveDistroHome', /resolveDistroHome\([^)]*\{ wslPath: routeWslPath \}\)/g, 1],
+  ['listDistros', /listDistros\(\{ wslPath: hostSession.wslPath \}\)/g, 1],
+  ['listLinuxDir', /listLinuxDir\([^)]*\{ wslPath: hostSession.wslPath \}\)/g, 2],
+  ['checkLinuxPath', /checkLinuxPath\([^)]*\{ wslPath: hostSession.wslPath \}\)/g, 3],
+  ['resolveDistroHome', /resolveDistroHome\([^)]*\{ wslPath: hostSession.wslPath \}\)/g, 1],
   // 2, not 1: workspaceFlow now defaults its location the same way the selftest
   // does (the distribution home via defaultWorkspaceUnc), so the configured path
   // travels to that site too — the second site this option legitimately serves.
-  ['defaultWorkspaceUnc', /defaultWorkspaceUnc\(\{ wslPath: routeWslPath \}\)/g, 2],
-  ['execInWsl runWslShell', /wslPath: routeWslPath,\s*\n\s*\}\)/g, 1],
+  ['defaultWorkspaceUnc', /defaultWorkspaceUnc\(\{ wslPath: hostSession.wslPath \}\)/g, 2],
+  ['execInWsl runWslShell', /wslPath: hostSession.wslPath,\s*\n\s*\}\)/g, 1],
   // The selftest's clock-domain probe (R50). NOT redundant with the structural row below: this
   // row keeps the per-site COUNT honest (a second `...sweepSelect` — say, a second runner — is
   // a new site and has to be added here), while the row below asserts the FORM. Measured: the
@@ -751,22 +753,22 @@ check('index.js passes the configured path at every probe site',
   { sites: indexSites.map(([name, pattern, want]) => `${name}=${countOf(pattern)}/${want}`) })
 // STRUCTURAL, and it is the half the row above cannot see (R50). The sweep runner hands
 // `runWslShell` the configured path through a spread rather than a `wslPath:` property:
-//   const sweepSelect = { wslPath: routeWslPath }
+//   const sweepSelect = { wslPath: hostSession.wslPath }
 //   const sweepShell = (c) => runWslShell({ …, ...sweepSelect })
 // Two separate facts, each with its own reading, because they fail differently:
 //   - `insideCall`: the spread is INSIDE the runWslShell options object. Delete `...sweepSelect`
 //     and this runner silently falls back to the default `wsl.exe` while every other row in
 //     this suite stays green — that was exactly the case before this row existed.
-//   - `carrier`: the spread is an object that actually carries `routeWslPath`. A `sweepSelect`
+//   - `carrier`: the spread is an object that actually carries `hostSession.wslPath`. A `sweepSelect`
 //     that lost its `wslPath` line spreads an empty object, which reads as present above.
 const sweepInsideCall = /runWslShell\(\{[^}]*\.\.\.sweepSelect\s*\}\)/g
-const sweepCarrier = /const sweepSelect = \{ wslPath: routeWslPath \}/g
+const sweepCarrier = /const sweepSelect = \{ wslPath: hostSession.wslPath \}/g
 check('the selftest’s sweep runner receives the configured path through its select spread',
   countOf(sweepInsideCall) === 1 && countOf(sweepCarrier) === 1,
   {
     insideCall: countOf(sweepInsideCall),
     carrier: countOf(sweepCarrier),
-    note: 'both must be exactly 1: the spread must sit inside the runWslShell options object, and sweepSelect must carry wslPath: routeWslPath',
+    note: 'both must be exactly 1: the spread must sit inside the runWslShell options object, and sweepSelect must carry wslPath: hostSession.wslPath',
   })
 const subprocessCode = await readBlanked('lib/wsl/subprocess.js')
 // Anchored on the LOOKUP's own request literal and the call that consumes it, not on "the
