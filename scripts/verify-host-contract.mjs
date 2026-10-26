@@ -281,7 +281,13 @@ console.log('\nhost package exports (needs the installed host)')
 const deps = process.env.DSH_WSL_DEPS ?? join(pluginRoot, 'node_modules')
 if (!existsSync(deps)) {
   checker.skip(HOST_IMPORTS.length)
-  console.log(`  SKIP  ${HOST_IMPORTS.length} import check(s) not evaluated, no dependencies at ${deps}; link the host node_modules there, or set DSH_WSL_DEPS`)
+  // Measured: setting DSH_WSL_DEPS at a directory whose packages resolve DOES run all of
+  // these rows (48/48 against a pnpm store's hoisted directory). Point it at a directory
+  // that can resolve the host packages, or link the host node_modules at the plugin root.
+  console.log(`  SKIP  ${HOST_IMPORTS.length} import check(s) not evaluated, no dependencies at ${deps}.`)
+  console.log('        Set DSH_WSL_DEPS to a node_modules directory that can resolve the host packages')
+  console.log('        (for example a pnpm store\'s node_modules/.pnpm/node_modules), or link the host')
+  console.log('        node_modules at the plugin root.')
 } else {
   const modules = [...new Set(HOST_IMPORTS.map((entry) => entry.module))]
   // Resolve through the directory the caller named, not through the plugin root:

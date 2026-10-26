@@ -103,7 +103,25 @@ for (const relative of PURE) {
   const deps = process.env.DSH_WSL_DEPS ?? join(pluginRoot, 'node_modules')
   if (!existsSync(deps)) {
     checker.skip(HOST_HALF_CHECKS.length)
-    console.log(`  SKIP  the host-half import — ${HOST_HALF_CHECKS.length} check(s) not evaluated, no dependencies at ${deps}; link the host node_modules there, or set DSH_WSL_DEPS`)
+    // The remedy names what actually works, which was measured:
+    //
+    //   - `DSH_WSL_DEPS` alone does NOT help this suite. It reports which directory to
+    //     look at, but the import below is a bare ESM `import` of `lib/index.js`, and
+    //     ESM resolution walks up from THAT file to the plugin root — it never consults
+    //     this variable, and it ignores NODE_PATH. Measured: pointing the variable at a
+    //     directory holding `@deepseek-ai/schemastery` still failed with
+    //     `ERR_MODULE_NOT_FOUND`, as did a junction at the plugin root (pnpm's packages
+    //     are RELATIVE symlinks into the store, which a junction re-roots wrongly).
+    //   - what works is a `node_modules` at the plugin root whose packages are REAL
+    //     directories (a plain `npm install @deepseek-ai/…` beside the checkout).
+    //
+    // `verify-host-contract.mjs` CAN use the variable, because it resolves each package
+    // with `createRequire` and imports the resolved absolute path; this suite cannot,
+    // because its subject IS the whole entry module.
+    console.log(`  SKIP  the host-half import — ${HOST_HALF_CHECKS.length} check(s) not evaluated, no dependencies at ${deps}.`)
+    console.log('        This suite imports lib/index.js as ESM, so the packages must be resolvable from the plugin root:')
+    console.log('        install them there (npm install @deepseek-ai/cordis @deepseek-ai/schemastery … beside this checkout).')
+    console.log('        DSH_WSL_DEPS does not help here — it names a directory, it does not change ESM resolution.')
   } else {
     try {
       const host = await import(pathToFileURL(join(pluginRoot, 'lib/index.js')).href)
