@@ -243,6 +243,71 @@ const DECLARED_SKIPS = [
     branch: ['live === undefined'],
     precondition: 'no default distribution is resolvable for the live health row (DSH_WSL_DISTRO is unset and the machine reports no default distribution), so only the offline assembly runs',
   },
+  {
+    // verify-world.mjs — the discovery call at the top of the suite cannot spawn wsl.exe.
+    // `listDistros()` throws ENOENT exactly when the executable is absent from PATH; any
+    // other error is rethrown, so this declaration covers only the absent-tool case.
+    suite: 'verify-world.mjs',
+    branch: ["error?.code !== 'ENOENT'"],
+    precondition: 'wsl.exe is not on PATH, so no distribution can be discovered and every world assertion is unevaluated',
+  },
+  {
+    // verify-terminal.mjs / verify-pty-handle.mjs / verify-confinement.mjs — each drives
+    // every assertion through wsl.exe, so an absent executable leaves nothing to assert.
+    suite: 'verify-terminal.mjs',
+    branch: ['!wsl.available'],
+    precondition: 'wsl.exe cannot be spawned here (not installed, or not on PATH), so the terminal bridge cannot be exercised',
+  },
+  {
+    suite: 'verify-pty-handle.mjs',
+    branch: ['!wsl.available'],
+    precondition: 'wsl.exe cannot be spawned here, so the PTY handle lifecycle cannot be exercised',
+  },
+  {
+    suite: 'verify-confinement.mjs',
+    branch: ['!wsl.available'],
+    precondition: 'wsl.exe cannot be spawned here, so the in-distribution confinement runner cannot be reached',
+  },
+  {
+    // verify-9p.mjs profiles the primitives THROUGH wsl.exe; without it there is no 9P
+    // share to profile, and measuring local paths instead yields a verdict about a
+    // filesystem this suite is not about.
+    suite: 'verify-9p.mjs',
+    branch: ['wslAvailable()'],
+    precondition: 'wsl.exe cannot be spawned here, so there is no 9P share to profile',
+  },
+  {
+    // The three SKIP-text pins copy a sibling suite's tree and run it to produce the SKIP
+    // text they pin. Without wsl.exe the pinned suite cannot reach its own skip branch, so
+    // there is nothing for them to pin.
+    suite: 'verify-9p-skip.mjs',
+    branch: ['!wsl.available'],
+    precondition: 'wsl.exe cannot be spawned here, so verify-9p cannot reach the fixture SKIP its text pins describe',
+  },
+  {
+    suite: 'verify-confinement-skip.mjs',
+    branch: ['!wsl.available'],
+    precondition: 'wsl.exe cannot be spawned here, so verify-confinement cannot reach the drive-path SKIP its text pins describe',
+  },
+  {
+    suite: 'verify-fs-fence-skip.mjs',
+    branch: ['!wsl.available'],
+    precondition: 'wsl.exe cannot be spawned here, so verify-fs-fence cannot reach the cross-distribution SKIP its text pins describe',
+  },
+  {
+    // verify-fs-fence.mjs — the link fixture is built inside a distribution, and its
+    // existence row turns into a SKIP when wsl.exe itself is missing (ENOENT at spawn).
+    suite: 'verify-fs-fence.mjs',
+    branch: ["wslAbsent"],
+    precondition: 'wsl.exe cannot be spawned here, so the containment fixtures cannot be built inside a distribution',
+  },
+  {
+    // verify-sync.mjs — the staging script is a `.ps1`, and the suite skips when no
+    // PowerShell host could be found.
+    suite: 'verify-sync.mjs',
+    branch: ['shell === null'],
+    precondition: 'no PowerShell host is available to run scripts/sync.ps1',
+  },
 ]
 
 const suites = ci ? [...CI_SUITES] : live ? [...STANDALONE, ...LIVE] : STANDALONE

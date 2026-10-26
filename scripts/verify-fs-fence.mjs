@@ -175,7 +175,11 @@ function removeFixtureRoot() {
     try {
       execFileSync('wsl.exe', ['-d', distro, '-e', 'rm', '-rf', linkFixtureLinux, outsideFixtureLinux], { timeout: WSL_TIMEOUT_MS })
     } catch (error) {
-      console.error(`verify-fs-fence: the link fixture could not be removed: ${linkFixtureLinux} (${error?.code ?? error?.status ?? String(error)})`)
+      // Nothing was built when wsl.exe is absent, so there is nothing to remove:
+      // printing a cleanup failure there is noise about a fixture that never existed.
+      if (error?.code !== 'ENOENT') {
+        console.error(`verify-fs-fence: the link fixture could not be removed: ${linkFixtureLinux} (${error?.code ?? error?.status ?? String(error)})`)
+      }
     }
   }
   try {
@@ -321,6 +325,8 @@ outsideFixtureLinux = `${fixtureLinux}-outside`
 const linkNames = ['escape', 'inside-link', 'dangling', 'file-link']
 const outsideHost = joinWslUnc(distro, outsideFixtureLinux)
 let linkProblem = ''
+/** The errno of the failed fixture build; `ENOENT` means this machine has no wsl.exe. */
+let linkProblemCode = ''
 try {
   // One distribution call for the whole fixture: a cold VM start costs the same
   // whether it runs one command or five.
@@ -336,16 +342,31 @@ try {
   execFileSync('wsl.exe', ['-d', distro, '-e', 'bash', '-c', script], { timeout: WSL_TIMEOUT_MS })
 } catch (error) {
   linkProblem = `${error?.code ?? error?.status ?? 'error'}: ${String(error?.message ?? error).slice(0, 120)}`
+  linkProblemCode = error?.code ?? ''
 }
 const listed = linkProblem === '' ? readdirSync(root) : []
 const missingLinks = linkNames.filter((name) => !listed.includes(name))
 const linkFixtureReady = linkProblem === '' && missingLinks.length === 0
-// The precondition is a FAIL, not a skip: a link that was never created answers
-// ENOENT to every call below, so the traversal assertions would pass while testing
-// nothing — the vacuous-pin class (D2) this suite exists to remove.
-check('the link fixture exists, so the traversal pins are about a real link',
-  linkFixtureReady,
-  linkProblem || `readdir(${root}) did not list ${missingLinks.join(', ')}`)
+// Two different failures, reported differently on purpose:
+//
+//   - `ENOENT` spawning wsl.exe means THIS MACHINE has no wsl.exe. Nothing about
+//     the fence can be observed here, so the fixture-existence row is skipped and
+//     the traversal assertions below are counted as skipped with it. Reporting an
+//     absent tool as a red check would tell an operator on Linux that the code is
+//     broken when they simply cannot run this suite.
+//   - anything else (wsl.exe present, the fixture would not build, the links are
+//     missing) is a FAIL. A link that was never created answers ENOENT to every
+//     call below, so those assertions would pass while testing nothing — the
+//     vacuous-pin class (D2) this suite exists to remove.
+const wslAbsent = linkProblemCode === 'ENOENT'
+if (wslAbsent) {
+  skip(1)
+  console.log(`  SKIP  the link fixture needs wsl.exe, which this machine does not have (${linkProblem})`)
+} else {
+  check('the link fixture exists, so the traversal pins are about a real link',
+    linkFixtureReady,
+    linkProblem || `readdir(${root}) did not list ${missingLinks.join(', ')}`)
+}
 
 if (linkFixtureReady) {
   const canonicalRoot = canonicalHostPath(root)
@@ -500,12 +521,15 @@ function removeJunctionFixture() {
 }
 process.on('exit', removeJunctionFixture)
 let junctionProblem = ''
+/** The errno of the failed build; `ENOENT` means this platform has no cmd.exe. */
+let junctionProblemCode = ''
 try {
   mkdirSync(junctionRoot, { recursive: true })
   mkdirSync(junctionOutside, { recursive: true })
   execFileSync('cmd.exe', ['/c', 'mklink', '/J', junctionEntry, junctionOutside], { timeout: WSL_TIMEOUT_MS, stdio: 'pipe' })
 } catch (error) {
   junctionProblem = `${error?.code ?? error?.status ?? 'error'}: ${String(error?.message ?? error).slice(0, 120)}`
+  junctionProblemCode = error?.code ?? ''
 }
 const junctionResolves = (() => {
   try {
@@ -516,11 +540,19 @@ const junctionResolves = (() => {
   }
 })()
 const junctionReady = junctionProblem === '' && junctionResolves
-// A FAIL, not a skip: the arm's whole point is that the expectations above are not
-// constants, so a fixture that was never built would assert nothing.
-check('the junction fixture exists and the canonicalizer RESOLVES it (the arm the pins above must not redden)',
-  junctionReady,
-  junctionProblem || `realpath(${junctionEntry}) did not resolve — an NTFS junction needs no privilege, so a machine this arm cannot run on is not a machine it may pass silently`)
+// Same two-way split as the link fixture: a junction is a WINDOWS construct created
+// through cmd.exe, so on a machine without it there is nothing to assert and the row
+// is skipped. With cmd.exe present but the junction unbuildable, it stays a FAIL —
+// the arm's whole point is that the expectations above are not constants, so a
+// fixture that was never built would assert nothing.
+if (junctionProblemCode === 'ENOENT') {
+  skip(1)
+  console.log(`  SKIP  the junction fixture needs cmd.exe, which this platform does not have (${junctionProblem})`)
+} else {
+  check('the junction fixture exists and the canonicalizer RESOLVES it (the arm the pins above must not redden)',
+    junctionReady,
+    junctionProblem || `realpath(${junctionEntry}) did not resolve — an NTFS junction needs no privilege, so a machine this arm cannot run on is not a machine it may pass silently`)
+}
 
 if (junctionReady) {
   const junctionRaw = join(junctionEntry, 'missing', 'file.txt')
@@ -805,9 +837,18 @@ check('an existing real root does not contain an unrelated path',
 // the identity walk.
 const aliasTmp = `\\\\wsl$\\${distro}\\tmp`
 const realTmp = canonicalHostPath(joinWslUnc(distro, '/tmp'))
-check('the identity walk contains the same object under its wsl$ alias',
-  isLexicallyUnderHost(aliasTmp, realTmp) === false && await isUnderHost(aliasTmp, realTmp) === true,
-  `${aliasTmp} vs ${realTmp}`)
+// The alias arm needs BOTH spellings to reach the same real object, which only
+// happens on a host where `\\wsl$\<distro>` resolves — i.e. Windows with that
+// distribution running. Elsewhere there is nothing to compare, so the row is
+// skipped rather than reported as a defect in the walk.
+if (!existsSync(realTmp)) {
+  skip(1)
+  console.log(`  SKIP  the wsl$ alias arm needs a resolvable \\\\wsl$\\${distro} share, which this host does not expose (${realTmp})`)
+} else {
+  check('the identity walk contains the same object under its wsl$ alias',
+    isLexicallyUnderHost(aliasTmp, realTmp) === false && await isUnderHost(aliasTmp, realTmp) === true,
+    `${aliasTmp} vs ${realTmp}`)
+}
 
 console.log('\nwritable-root derivation')
 // The workspace root is the fixture root, and it EXISTS: an uncreated spelling

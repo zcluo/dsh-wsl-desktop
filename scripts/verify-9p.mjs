@@ -29,8 +29,23 @@ import { canonicalHostPath, isUnderHost } from '../lib/wsl/fence.js'
 import { PUBLICATION_CEILING_MS, PUBLICATION_POLL_MS, PUBLICATION_TAIL_MS, publishReplace } from '../lib/wsl/publish.js'
 import { resolveDistro, resolveOtherDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
+import { wslAvailable } from './wsl-available.mjs'
 
 const distro = resolveDistro(process.argv[2])
+// The suite profiles 9P primitives by driving them through wsl.exe. Without it there
+// is nothing to measure, and profiling local Linux paths instead produced a verdict
+// about a filesystem this suite was never about ("2 primitives differ from the assumed
+// profile"). Report the three SKIP parts and exit 2 — a machine fact, not a defect.
+{
+  const probe = wslAvailable()
+  if (!probe.available) {
+    console.log('  SKIP  9P primitive profile — no check(s) evaluated, wsl.exe cannot run here;')
+    console.log(`        ${probe.detail}`)
+    console.log('        install WSL2 with a distribution, or run this suite on a Windows host with WSL2')
+    console.log('\nEVERY CHECK THAT COULD RUN PASSED, THE 9P PROFILE WAS NOT MEASURED — exit 2, so verify-all reports this suite as SKIP')
+    process.exit(2)
+  }
+}
 // Both scratch trees this suite owns are made UNIQUE TO THIS PROCESS. They used to be
 // machine-global (`/tmp/dsh-wsl-9p-probe`, `/tmp/dsh-wsl-9p-probe-link`), so two runs
 // overlapping in time destroyed each other: one run's opening `rm -rf` deletes the

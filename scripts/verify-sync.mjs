@@ -194,12 +194,21 @@ const shell = await resolveShell()
 // Without a host there is nothing to exercise, and the per-scenario checks would
 // blame the script for not having run — two of them would even PASS, because
 // nothing happened to delete anything. Say so once and stop.
+//
+// A missing PowerShell is a MACHINE fact, so it is a SKIP, not a failed check: the
+// staging script is a `.ps1`, and no assertion below can run without a host for it.
+// Asserting `shell !== null` as a check made an absent tool look like a defect, and
+// the block below it used to print a bare `failures` (gone since the suite moved to
+// the shared checker), which threw ReferenceError instead of reporting anything.
+if (shell === null) {
+  checker.skip(1)
+  console.log(`  SKIP  a PowerShell host is available to run the staging script — 1 check(s) not evaluated, tried ${SHELL_CANDIDATES.join(', ')};`)
+  console.log('        install PowerShell, or run this suite on Windows')
+  console.log('\nEVERY CHECK THAT COULD RUN PASSED, the staging script was not exercised — exit 2, so verify-all reports this suite as SKIP')
+  process.exit(2)
+}
 check('a PowerShell host is available to run the staging script', shell !== null,
   `tried ${SHELL_CANDIDATES.join(', ')} — install PowerShell and re-run`)
-if (shell === null) {
-  console.log(`\n${failures} check(s) failed`)
-  process.exit(1)
-}
 
 console.log('a profile link that resolves')
 {

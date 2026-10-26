@@ -18,6 +18,7 @@ import { planWsl, runWslShell } from '../lib/wsl/world.js'
 import { shellQuote } from '../lib/wsl/paths.js'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { makeChecker } from './suite-shell.mjs'
+import { wslAvailable } from './wsl-available.mjs'
 // Still needed: the probe loop's catch reports `probe failed: ${detailText(error)}`. The
 // suite-wide check() no longer renders detail itself (the factory owns that), but this
 // one call site does, and losing this import would turn a reported probe failure into a
@@ -25,12 +26,24 @@ import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
 import { blankLiterals } from './source-text.mjs'
 
-const distro = resolveDistro(process.argv[2])
 const here = dirname(fileURLToPath(import.meta.url))
 const bridgeSource = await readFile(join(here, '..', 'lib', 'wsl', 'terminal-bridge.py'), 'utf8')
 
 const checker = makeChecker({ pass: 'PASS' })
 const { check } = checker
+
+// Every assertion below drives the bridge through wsl.exe, so a host without it
+// cannot evaluate any of them. That is a machine fact, reported as the suite's SKIP
+// (exit 2) rather than an uncaught ENOENT that blames the bridge.
+const wsl = wslAvailable()
+if (!wsl.available) {
+  checker.skip(1)
+  console.log(`  SKIP  the PTY-handle assertions — 1 check(s) not evaluated, wsl.exe cannot run here (${wsl.detail});`)
+  console.log('        install WSL2 with a distribution, or run this suite on a Windows host with WSL2')
+  console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+  process.exit(2)
+}
+const distro = resolveDistro(process.argv[2])
 
 /**
  * A minimal stand-in for the host subprocess provider, shaped like the seam.

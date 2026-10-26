@@ -83,7 +83,23 @@ check('isWindowsPathShaped sees drive and UNC', isWindowsPathShaped('C:\\x') && 
 check('shellQuote escapes an apostrophe', shellQuote("a'b") === `'a'\\''b'`)
 
 console.log('\ndistribution discovery')
-const distros = await listDistros()
+// `wsl.exe` absent is a MACHINE fact, not a defect in this code: on such a host no
+// assertion in this suite can be evaluated. Report the three SKIP parts (which
+// precondition, what could not run, the remedy) and exit 2, which the aggregate
+// renders as SKIP. Crashing with an uncaught ENOENT instead would tell an operator
+// on Linux that the world core is broken.
+let distros
+try {
+  distros = await listDistros()
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error
+  const labels = ['at least one distribution is installed', 'the selected distribution is installed']
+  checker.skip(labels.length + 1)
+  console.log(`  SKIP  ${labels.join('; ')} — ${labels.length + 1} check(s) not evaluated, wsl.exe is not on PATH;`)
+  console.log('        install WSL2 and a distribution (`wsl.exe --install -d <distro>`), or run this suite on a Windows host')
+  console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+  process.exit(2)
+}
 check('at least one distribution is installed', distros.length > 0, distros)
 console.log(`        distros: ${distros.join(', ')}`)
 const fallback = await defaultDistro()

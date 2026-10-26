@@ -59,8 +59,26 @@ import { blankLiterals } from './source-text.mjs'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { detailText } from './detail.mjs'
 import { makeChecker } from './suite-shell.mjs'
+import { wslAvailable } from './wsl-available.mjs'
 import { probeWithRetry } from './wsl-probe.mjs'
 
+// The distribution and its user are resolved BEFORE any assertion, because every
+// later command needs both. A host without wsl.exe cannot evaluate any of it; that is
+// a machine fact, so it becomes the suite's SKIP (exit 2) instead of an uncaught
+// throw that tells an operator their confinement code is broken.
+//
+// The checker is created FIRST: the SKIP path needs it, and it was declared further
+// down until this became a `Cannot access 'checker' before initialization` throw on
+// exactly the hosts the SKIP is for.
+const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+const wsl = wslAvailable()
+if (!wsl.available) {
+  checker.skip(1)
+  console.log(`  SKIP  the confinement assertions — 1 check(s) not evaluated, wsl.exe cannot run here (${wsl.detail});`)
+  console.log('        install WSL2 with a distribution, or run this suite on a Windows host with WSL2')
+  console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+  process.exit(2)
+}
 const distro = resolveDistro(process.argv[2])
 const home = resolveLinuxHome(distro)
 // The runner LIB's probes get. `resolveIdentity` and `detectRunner` implement the probe policy
@@ -121,7 +139,7 @@ const probe = (request) => probeWithRetry(run, request, {
 // only which name each run gives its own copy of the fixture.
 const runSuffix = process.pid
 
-const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+
 const { check } = checker
 
 /**

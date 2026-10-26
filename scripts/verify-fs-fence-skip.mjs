@@ -44,6 +44,7 @@ import { fileURLToPath } from 'node:url'
 import { listDistros, resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 import { makeChecker } from './suite-shell.mjs'
+import { wslAvailable } from './wsl-available.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = join(here, '..')
@@ -53,6 +54,19 @@ const distro = resolveDistro()
 const suitePath = join(here, 'verify-fs-fence.mjs')
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+// This suite pins the SKIP TEXT another suite emits for a precondition (one
+// distribution, no second share, an unbuildable fixture). Producing that text needs
+// wsl.exe: without it the pinned suite cannot reach its own skip branch, so there is
+// nothing to pin. Report the SKIP and exit 2 rather than failing assertions that
+// were never about this machine.
+const wsl = wslAvailable()
+if (!wsl.available) {
+  checker.skip(1)
+  console.log(`  SKIP  the SKIP-text pins — 1 check(s) not evaluated, wsl.exe cannot run here (${wsl.detail});`)
+  console.log('        install WSL2 with a distribution, or run this suite on a Windows host with WSL2')
+  console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+  process.exit(2)
+}
 const { check } = checker
 
 /** The token every SKIP of the pinned family carries on its own line. */
@@ -271,6 +285,8 @@ function copySuiteTree(prefix) {
     ['scripts', 'verify-fs-fence.mjs'],
     ['scripts', 'env.mjs'],
     ['scripts', 'detail.mjs'],
+    // The guarded suite imports the wsl probe; a copy without it fails at load.
+    ['scripts', 'wsl-available.mjs'],
     ['scripts', 'source-text.mjs'],
     // The suite reports through the shared checker (C5). A copy that omits it
     // cannot import at all, so the mutant would produce no FAIL line and this

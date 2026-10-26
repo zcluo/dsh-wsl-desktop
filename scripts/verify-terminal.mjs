@@ -17,13 +17,26 @@ import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { resolveDistro } from './env.mjs'
 import { makeChecker } from './suite-shell.mjs'
+import { wslAvailable } from './wsl-available.mjs'
 
-const distro = resolveDistro(process.argv[2])
 const here = dirname(fileURLToPath(import.meta.url))
 const bridgeSource = await readFile(join(here, '..', 'lib', 'wsl', 'terminal-bridge.py'), 'utf8')
 
 const checker = makeChecker({ pass: 'PASS' })
 const { check } = checker
+
+// Every assertion below drives the bridge through wsl.exe, so a host without it
+// cannot evaluate any of them. That is a machine fact, reported as the suite's SKIP
+// (exit 2) rather than an uncaught ENOENT that blames the bridge.
+const wsl = wslAvailable()
+if (!wsl.available) {
+  checker.skip(1)
+  console.log(`  SKIP  the terminal assertions — 1 check(s) not evaluated, wsl.exe cannot run here (${wsl.detail});`)
+  console.log('        install WSL2 with a distribution, or run this suite on a Windows host with WSL2')
+  console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+  process.exit(2)
+}
+const distro = resolveDistro(process.argv[2])
 
 /** Wait until a predicate holds or the deadline passes. */
 async function until(predicate, timeoutMs = 15_000) {

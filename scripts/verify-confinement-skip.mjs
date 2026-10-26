@@ -66,6 +66,7 @@ import { windowsToMntPath } from '../lib/wsl/paths.js'
 import { resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 import { makeChecker } from './suite-shell.mjs'
+import { wslAvailable } from './wsl-available.mjs'
 import { probeWithRetry } from './wsl-probe.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -80,6 +81,19 @@ const suitePath = givenSuite ?? join(here, 'verify-confinement.mjs')
 const isInnerRun = givenSuite !== undefined
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+// This suite pins the SKIP TEXT another suite emits for a precondition (one
+// distribution, no second share, an unbuildable fixture). Producing that text needs
+// wsl.exe: without it the pinned suite cannot reach its own skip branch, so there is
+// nothing to pin. Report the SKIP and exit 2 rather than failing assertions that
+// were never about this machine.
+const wsl = wslAvailable()
+if (!wsl.available) {
+  checker.skip(1)
+  console.log(`  SKIP  the SKIP-text pins — 1 check(s) not evaluated, wsl.exe cannot run here (${wsl.detail});`)
+  console.log('        install WSL2 with a distribution, or run this suite on a Windows host with WSL2')
+  console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+  process.exit(2)
+}
 const { check } = checker
 
 /**
@@ -317,6 +331,8 @@ function copySuiteTree(prefix) {
     // The suite's probes run through scripts/wsl-probe.mjs; a copy without it fails to load.
     ['scripts', 'wsl-probe.mjs'],
     ['scripts', 'detail.mjs'],
+    // The guarded suite imports the wsl probe; a copy without it fails at load.
+    ['scripts', 'wsl-available.mjs'],
     ['scripts', 'source-text.mjs'],
     // The suite now reports through the shared checker (C5); a copy without it
     // fails at MODULE LOAD, before the first SKIP line.

@@ -42,12 +42,26 @@ import { fileURLToPath } from 'node:url'
 import { listDistros, resolveDistro } from './env.mjs'
 import { detailText } from './detail.mjs'
 import { makeChecker } from './suite-shell.mjs'
+import { wslAvailable } from './wsl-available.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const distro = resolveDistro()
 const probePath = join(here, 'verify-9p.mjs')
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
+// This suite pins the SKIP TEXT another suite emits for a precondition (one
+// distribution, no second share, an unbuildable fixture). Producing that text needs
+// wsl.exe: without it the pinned suite cannot reach its own skip branch, so there is
+// nothing to pin. Report the SKIP and exit 2 rather than failing assertions that
+// were never about this machine.
+const wsl = wslAvailable()
+if (!wsl.available) {
+  checker.skip(1)
+  console.log(`  SKIP  the SKIP-text pins — 1 check(s) not evaluated, wsl.exe cannot run here (${wsl.detail});`)
+  console.log('        install WSL2 with a distribution, or run this suite on a Windows host with WSL2')
+  console.log(`\nEVERY CHECK THAT COULD RUN PASSED, ${checker.skipped} CHECK(S) SKIPPED — exit 2, so verify-all reports this suite as SKIP`)
+  process.exit(2)
+}
 const { check } = checker
 
 /** The three fact labels the cross-share block records; the SKIP must name them. */
@@ -348,6 +362,8 @@ function buildFixtureFailedCopy() {
   for (const [from, to] of [
     [join(here, 'env.mjs'), join(tree, 'scripts', 'env.mjs')],
     [join(here, 'detail.mjs'), join(tree, 'scripts', 'detail.mjs')],
+    // The guarded suite imports the wsl probe; a copy without it fails at load.
+    [join(here, 'wsl-available.mjs'), join(tree, 'scripts', 'wsl-available.mjs')],
     [join(here, 'suite-shell.mjs'), join(tree, 'scripts', 'suite-shell.mjs')],
     [join(here, '..', 'lib', 'wsl', 'fence.js'), join(tree, 'lib', 'wsl', 'fence.js')],
     [join(here, '..', 'lib', 'wsl', 'paths.js'), join(tree, 'lib', 'wsl', 'paths.js')],
@@ -496,7 +512,7 @@ function buildOneDistributionCopy() {
   const tree = mkdtempSync(join(tmpdir(), 'dsh-9p-skip-one-'))
   mkdirSync(join(tree, 'scripts'), { recursive: true })
   mkdirSync(join(tree, 'lib', 'wsl'), { recursive: true })
-  for (const name of ['env.mjs', 'detail.mjs', 'suite-shell.mjs', 'verify-9p.mjs', 'verify-9p-skip.mjs']) {
+  for (const name of ['env.mjs', 'detail.mjs', 'suite-shell.mjs', 'wsl-available.mjs', 'verify-9p.mjs', 'verify-9p-skip.mjs']) {
     copyFileSync(join(here, name), join(tree, 'scripts', name))
   }
   for (const name of ['fence.js', 'paths.js', 'publish.js']) {
