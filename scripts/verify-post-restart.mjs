@@ -321,7 +321,15 @@ try {
   check('the bash tool runs inside the distribution',
     step('tools.bash')?.ok === true && bashText.includes('Linux'), bashText.slice(0, 200))
   const readText = step('tools.read')?.text ?? ''
-  check('the read tool addresses a Linux path', readText.includes('"isError":false') && readText.includes(`${wslScratch}/dsh-wsl-selftest.txt`), readText.slice(0, 200))
+  // The judgement is the step's own `ok` plus the fact that it read a LINUX path. The
+  // old text matched `"isError":false` — a field of the previous tools wrapper, gone
+  // since the host moved `tools.execute` to its batch contract; asserting on it made a
+  // working tool look broken.
+  check('the read tool addresses a Linux path',
+    step('tools.read')?.ok === true
+      && readText.includes(`${wslScratch}/dsh-wsl-selftest.txt`)
+      && readText.includes('hello from the wsl world'),
+    readText.slice(0, 200))
   const pwshText = step('tools.pwsh')?.text ?? ''
   check('the session exposes no PowerShell tool', pwshText.includes('UNKNOWN_TOOL'), pwshText.slice(0, 200))
   // The realm's own search tools. A WSL realm REMOVES the host's grep/glob rows on
@@ -591,7 +599,11 @@ try {
   // session's shell.service IS found — the assertion is that it is NOT the WSL
   // realm's confining executor (whose prototype carries confinementFor).
   check('no realm-scoped shell is mounted', !(winStep('shell.service')?.proto ?? '').includes('confinementFor'), winStep('shell.service'))
-  check('the host PowerShell tool works', (winStep('tools.pwsh')?.text ?? '').includes('"isError":false'), winStep('tools.pwsh')?.text?.slice(0, 160))
+  // Same correction as the read row above: the step's `ok` and its own output are the
+  // evidence. `"isError":false` belonged to the pre-batch tools wrapper.
+  check('the host PowerShell tool works',
+    winStep('tools.pwsh')?.ok === true && (winStep('tools.pwsh')?.text ?? '').length > 0,
+    winStep('tools.pwsh')?.text?.slice(0, 160))
   check('no bash tool exists in the host world', (winStep('tools.bash')?.text ?? '').includes('UNKNOWN_TOOL'), winStep('tools.bash')?.text?.slice(0, 160))
   // Criterion 3 for the NEW capability: the host world must not have gained a persistent
   // shell either. The probe rows run in this selftest too, so the host session answers them
