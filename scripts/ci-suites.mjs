@@ -30,6 +30,7 @@ export const CI_SUITES = Object.freeze([
 /** Suites CI does not run, each with the reason. */
 export const CI_EXCLUDED = Object.freeze([
   { suite: 'verify-9p.mjs', why: 'spawns wsl.exe and reads a 9P share; needs a Windows host with WSL2' },
+  { suite: 'verify-world.mjs', why: 'spawns wsl.exe and runs commands inside a distribution; needs a Windows host with WSL2' },
   { suite: 'verify-9p-skip.mjs', why: 'pins the SKIP text of verify-9p, which only occurs on a Windows host' },
   { suite: 'verify-confinement.mjs', why: 'runs unshare/setpriv inside a distribution; needs a Linux distro and user namespaces' },
   { suite: 'verify-confinement-skip.mjs', why: 'pins the SKIP text of verify-confinement' },

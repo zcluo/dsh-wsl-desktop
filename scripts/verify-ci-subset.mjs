@@ -6,7 +6,7 @@
  *
  * Run: node scripts/verify-ci-subset.mjs
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { makeChecker } from './suite-shell.mjs'
@@ -32,6 +32,23 @@ check('every excluded suite carries a reason',
 check('included and excluded do not overlap',
   CI_SUITES.every((suite) => !CI_EXCLUDED.some((entry) => entry.suite === suite)),
   CI_SUITES.filter((suite) => CI_EXCLUDED.some((entry) => entry.suite === suite)))
+
+// COVERAGE, not just consistency. The two lists above can agree while both omit a
+// suite that exists on disk — a new suite would then run nowhere and every check
+// here would stay green. Compare against the files actually present: every
+// `verify-*.mjs` (and the live/inspection scripts the aggregate knows) must be
+// classified as included or excluded.
+const { CI_SUITES: included, CI_EXCLUDED: excluded } = await import('./ci-suites.mjs')
+const classified = new Set([...included, ...excluded.map((entry) => entry.suite)])
+const onDisk = readdirSync(here)
+  .filter((entry) => entry.endsWith('.mjs') && (entry.startsWith('verify-') || entry === 'inspect-live-client.mjs'))
+  // Two files are not matrix suites: this checker, and the aggregate that RUNS the
+  // matrix (`verify-all.mjs` is the runner, never a subject of itself).
+  .filter((entry) => entry !== 'verify-ci-subset.mjs' && entry !== 'verify-all.mjs')
+const unclassified = onDisk.filter((entry) => !classified.has(entry))
+check('every suite on disk is classified as included or excluded',
+  unclassified.length === 0,
+  { unclassified, hint: 'add it to CI_SUITES (if a Linux runner can run it) or CI_EXCLUDED with a reason' })
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
 process.exit(checker.failures === 0 ? 0 : 1)

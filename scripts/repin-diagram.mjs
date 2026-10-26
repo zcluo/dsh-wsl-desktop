@@ -50,6 +50,24 @@ if (repinned === source) {
 writeFileSync(sourcePath, repinned, 'utf8')
 console.log(`re-pinned ${name} to ${head}`)
 
+// The diagram TYPE comes from the source itself (`diagram_type`), not from the
+// filename: Archify validates the body against the type it is told, and handing it
+// `architecture` for a workflow yields a page that renders the wrong schema rather
+// than an error. A source without the field is refused here, because guessing it
+// is how that mismatch would ship.
+const declaredType = (() => {
+  try {
+    return JSON.parse(repinned).diagram_type
+  } catch (error) {
+    console.error(`docs/diagrams-src/${name}.json is not valid JSON: ${error.message}`)
+    process.exit(2)
+  }
+})()
+if (typeof declaredType !== 'string' || declaredType === '') {
+  console.error(`docs/diagrams-src/${name}.json declares no diagram_type; cannot pick a renderer`)
+  process.exit(2)
+}
+
 // 2. Clear the receipts this artifact owns. The browser-check sidecar blocks its
 //    own regeneration when it describes a different page, so it goes first.
 const prefix = `${name}.`
@@ -66,7 +84,7 @@ if (!existsSync(archify)) {
   console.error('the vendored archify 3.2.0 is not present; restore .superpowers/archify-3.2.0')
   process.exit(2)
 }
-const finalize = execFileSync('node', [archify, 'finalize', 'architecture', sourcePath, artifactPath, '--browser-check', '--repo-root', pluginRoot, '--json'], { encoding: 'utf8' })
+const finalize = execFileSync('node', [archify, 'finalize', declaredType, sourcePath, artifactPath, '--browser-check', '--repo-root', pluginRoot, '--json'], { encoding: 'utf8' })
 const finalizeReport = JSON.parse(finalize)
 if (finalizeReport.ok !== true) {
   console.error('finalize failed:', JSON.stringify(finalizeReport.gates), JSON.stringify(finalizeReport.diagnostics))

@@ -145,10 +145,19 @@ for (const relative of ALL) {
   const entryText = await readFile(join(pluginRoot, 'lib/index.js'), 'utf8')
   const stateText = await readFile(join(pluginRoot, 'lib/host/state.js'), 'utf8')
   check('the shared state has one owner', ALL.includes('lib/host/state.js'))
-  check('index.js declares no module-level mutable state of its own',
-    !/^let\s+(?:presetState|hostCtx|routeWslPath|hostReady|currentGeneration|refreshMutex)\b/mu.test(entryText)
-      && !/^const\s+bindingLog\b/mu.test(entryText),
-    'a second home for any of these is how the two halves of the route drifted')
+  // The rule is GENERAL, not a list of names: a hardcoded list only catches a
+  // reintroduction of something already moved, and misses the NEXT piece of state
+  // someone adds. Every module-level `let` in the entry file must be on the
+  // allowlist below, and each entry says why it is not shared state.
+  const ALLOWED_ENTRY_LETS = new Map([
+    // Lazily memoized once, read only by pluginVersion(), never reset on apply().
+    ['pluginVersionValue', 'a one-shot memo of the shipped package version'],
+  ])
+  const entryLets = [...entryText.matchAll(/^let\s+([A-Za-z_$][\w$]*)/gmu)].map((match) => match[1])
+  const unaccounted = entryLets.filter((name) => !ALLOWED_ENTRY_LETS.has(name))
+  check('index.js declares no shared mutable state of its own',
+    unaccounted.length === 0,
+    { unaccounted, hint: 'move it to lib/host/state.js, or add it to ALLOWED_ENTRY_LETS with the reason it is not shared' })
   check('the state module names all three groups',
     /export const hostSession\b/u.test(stateText)
       && /export const presetRun\b/u.test(stateText)

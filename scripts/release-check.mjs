@@ -134,8 +134,15 @@ if (privacy.pathHits.length > 0) blockers.push(`tracked files carry a machine-sp
 // Archify writes absolute paths into its receipts on every finalize/visual-check,
 // so "remember to scrub" is not a rule a human keeps. This runs the scrubber in
 // check mode: any receipt that would still change is a blocker with its own name.
+//
+// A `null` result is a FAILURE, not a pass: `tryRun` returns null when the child
+// could not be spawned or exited non-zero. Treating that as "nothing to scrub"
+// would turn a broken or deleted scrubber into a green preflight, which is the
+// exact silent pass this gate exists to prevent.
 const unscrubbed = await tryRun('node', ['scripts/scrub-receipts.mjs', '--check'])
-if (unscrubbed !== null && unscrubbed.includes('need scrubbing')) {
+if (unscrubbed === null) {
+  blockers.push('the receipt privacy check could not run (node scripts/scrub-receipts.mjs --check failed); fix it before publishing')
+} else if (unscrubbed.includes('need scrubbing')) {
   const names = unscrubbed.split('\n').filter((line) => line.startsWith('would scrub ')).map((line) => line.slice('would scrub '.length))
   blockers.push(`delivery receipts still carry machine paths (run node scripts/scrub-receipts.mjs): ${names.join(', ')}`)
 }
