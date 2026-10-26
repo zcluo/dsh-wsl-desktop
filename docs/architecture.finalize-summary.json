@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "docs/diagrams-src/architecture.json",
-    "sha256": "c1e2efec4c540e4c8bc88e984cede9c05c1b5b880dbb81a56610dac8735aecd8",
+    "sha256": "324276da374e5799a5ec8e5d08520a2a9414dfcaa31ea992c4b3596c11ac31ae",
     "bytes": 10460
   },
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "22ff9dc65eace10208ac73d6c2a9bc272ea52f484113a5d19919b7854abf0f0d",
+    "sha256": "964a8f95fbcaae39ede1f61078eaaea2f7838311756cf75c1c2bbd44ac1e0c13",
     "bytes": 842896
   },
   "gates": {
@@ -43,7 +43,7 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 4761,
+  "durationMs": 5081,
   "browserCheck": {
     "requested": true,
     "ran": true
