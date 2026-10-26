@@ -135,9 +135,6 @@ const FIXTURES = {
 for (const [name, source] of Object.entries(FIXTURES)) writeFileSync(join(scratch, name), source)
 // The copies import it by that name, from their own directory (the scratch one).
 writeFileSync(join(scratch, 'source-text.mjs'), sourceTextSource)
-// The aggregate imports the CI subset table (--ci); a copy without it fails at
-// MODULE LOAD, before any ruling this suite certifies is reachable.
-writeFileSync(join(scratch, 'ci-suites.mjs'), readFileSync(join(here, 'ci-suites.mjs'), 'utf8'))
 
 /** The aggregate's suite list, as one line-per-entry array literal. */
 const STANDALONE_ANCHOR = /const STANDALONE = \[[\s\S]*?\n\]/

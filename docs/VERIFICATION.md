@@ -48,12 +48,6 @@ node scripts/inspect-live-client.mjs # 读宿主真正投放的 client bundle（
 
 发行版与用户不再硬编码：`DSH_WSL_DISTRO` / `DSH_WSL_USER` / `DSH_WSL_HOME` 可覆盖，默认从 `wsl.exe` 现读。
 
-## CI 覆盖边界
-
-`.github/workflows/verify.yml` 只跑 `node scripts/verify-all.mjs --ci`，也就是 Linux runner 能执行的那部分套件。9P、围栏、PTY、`sync.ps1`、以及所有 `--live` 套件都不在 CI 里，它们需要一台装了 WSL2 的 Windows 主机和一个运行中的桌面。CI 变绿**不等于**这些通过了——工作流名称、汇总行（`CI SUBSET: N suite(s) … M excluded`）都会写出这条边界。子集定义在 `scripts/ci-suites.mjs`，每个被排除的套件都带理由；`scripts/verify-ci-subset.mjs` 钉住它（名字拼错、混进 live 套件、排除项缺理由都会红）。
-
-子集是**实测**出来的，不是猜的：一个套件只有在 Linux runner 上实际跑通后才进清单。反面例子是 `verify-client-ui`——它读 harness checkout 的图标源，在 runner 上只能 SKIP，而聚合器把未声明的跳过判红，所以它明确排除。
-
 ## 改过 lib/ 之后重钉图表证据
 
 `docs/diagrams-src/*.json` 里的 `revision` 钉住了"最后一次改动 `lib/**` 的提交"，`verify-diagrams` 会检查它是祖先。所以**每次改了 `lib/` 都要重钉**，否则套件变红。整条流程（重钉 → 清旧回执 → finalize → visual-check → 去路径 → 验证）用一条命令：
