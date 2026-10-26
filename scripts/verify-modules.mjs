@@ -41,7 +41,7 @@ const HOST_HALF_CHECKS = [
 
 
 /** Modules that import nothing from the harness, so the source tree can load them. */
-const PURE = ['lib/protocol.js', 'lib/route-errors.js', 'lib/release-preflight.js', 'lib/release-check.js', 'lib/wsl/errors.js', 'lib/host/contract.js', 'lib/host/http.js', 'lib/host/presets.js', 'lib/wsl/doctor.js', 'lib/wsl/paths.js', 'lib/wsl/proc.js', 'lib/wsl/distros.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/wsl/search.js', 'lib/http-admission.js']
+const PURE = ['lib/protocol.js', 'lib/route-errors.js', 'lib/release-preflight.js', 'lib/release-check.js', 'lib/wsl/errors.js', 'lib/host/contract.js', 'lib/host/http.js', 'lib/host/presets.js', 'lib/host/state.js', 'lib/wsl/doctor.js', 'lib/wsl/paths.js', 'lib/wsl/proc.js', 'lib/wsl/distros.js', 'lib/wsl/preset.js', 'lib/wsl/fence.js', 'lib/wsl/watch.js', 'lib/wsl/publish.js', 'lib/wsl/search.js', 'lib/http-admission.js']
 
 /** Every module the host half loads, including the ones that need the host's resolution. */
 const ALL = [
@@ -53,6 +53,7 @@ const ALL = [
   'lib/host/contract.js',
   'lib/host/http.js',
   'lib/host/presets.js',
+  'lib/host/state.js',
   'lib/wsl/errors.js',
   'lib/wsl/doctor.js',
   'lib/wsl/paths.js',
