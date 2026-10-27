@@ -252,6 +252,27 @@ check('the distro segment stays case-insensitive even when the path is not',
 // portion, so the share root itself stops being recognized as contained.
 check('a share root folds whole (the synthesized Linux path "/" is not in the string)',
   isLexicallyUnderHost(joinWslUnc(distro.toUpperCase(), '/'), joinWslUnc(distro, '/'), { caseSensitive: true }) === true)
+
+// The publication re-tests containment, so a component swapped AFTER `checkedTarget` is
+// still refused. Why it has to live in the primitive: a rename through such a component
+// lands the FILE at the link's target (docs/FS-FENCE.md, the rename FACT), so the window
+// is a content escape and not merely an out-of-bounds directory — which is what the
+// residue paragraph used to claim. The pin reads the shipped source rather than a copy,
+// because the property is structural: the check must sit inside the primitive that runs
+// the syscall, not one function earlier.
+const fsSource = readFileSync(join(here, '..', 'lib', 'wsl', 'fs.js'), 'utf8')
+const replaceBody = (() => {
+  const start = fsSource.indexOf('replaceFile: async (replaced, replacement) => {')
+  if (start < 0) return ''
+  const end = fsSource.indexOf('publishReplace(replaced, replacement)', start)
+  return end < 0 ? '' : fsSource.slice(start, end)
+})()
+check('the publication re-tests containment before it renames',
+  replaceBody.includes('isUnderHost') && replaceBody.includes('FS_SANDBOX_DENIED'),
+  'a component swapped between the entry check and the publication is invisible to the entry check; the rename then lands CONTENT at the link target (measured FACT), so the refusal has to happen here')
+check('the publication judges against the roots the write was authorized under',
+  replaceBody.includes('publicationRoots') && fsSource.includes('this.publicationRoots = roots'),
+  're-resolving the policy inside the primitive could judge the path against a different grant than the one the caller was allowed, turning the re-test into a second, unrelated decision')
 check('a Windows drive path folds whole (parseWslUnc returns null; the host is case-insensitive)',
   isLexicallyUnderHost('C:\\Users\\X\\PROJ\\a', 'C:\\users\\x\\proj', { caseSensitive: true }) === true)
 // The WIRING, not just the pure function: isUnderHost must ask for the

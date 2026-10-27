@@ -62,7 +62,14 @@ const BROWSER = /"(?:executable)"\s*:\s*"(?:[^"]*[\\/])?(?:msedge|chrome|chromiu
 function scrubPath(raw) {
   const plain = raw.replace(/\\\\/gu, '\\').replace(/\\\//gu, '/')
   const inside = relative(pluginRoot, plain)
-  if (inside !== '' && !inside.startsWith('..') && !inside.startsWith(sep)) {
+  // `relative()` returns the SECOND argument unchanged when the two paths sit on
+  // different Windows drives — and that string does not start with `..`, so treating it as
+  // repository-relative printed the whole machine path. Measured: with the repository on
+  // E:, both `C:\Users\…` and `D:\ci\…` came back whole while every in-repo path became
+  // relative. A result that is still absolute is therefore "outside", not "inside".
+  const escaped = inside.startsWith('..') || inside.startsWith(sep)
+  const stillAbsolute = /^[A-Za-z]:/u.test(inside) || inside.startsWith('/') || inside.startsWith('\\')
+  if (inside !== '' && !escaped && !stillAbsolute) {
     return inside.split(sep).join('/')
   }
   const segments = plain.split(/[\\/]+/u).filter((part) => part !== '')

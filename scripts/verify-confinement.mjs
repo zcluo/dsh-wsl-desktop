@@ -329,6 +329,32 @@ check('the exec tail passes env before the fence script',
   // The evidence, not `null`: a FAIL here has to show the tail it judged, or the
   // operator cannot tell a moved env from a moved script name.
   helperSource.split('\n').filter((line) => line.includes('env ') || line.includes('DROP_UID=') || line.includes('bash -c')).join('\n'))
+// The /proc fence. A PID namespace RE-PARENTS the tree but the inherited procfs still
+// lists the parent's pids (measured: 20 numeric entries with --mount-proc alone against 4
+// with --pid --fork --mount-proc), so /proc/<outer-pid>/root keeps naming the OUTER mount
+// namespace — where nothing was remounted read-only, because that remount is private to
+// this fence. Both halves are one control: --mount-proc without the namespace closes
+// nothing, and the namespace without a fresh procfs leaves the magic links pointing out.
+check('the fence mounts a private procfs, so /proc/<pid>/root cannot name the outer namespace',
+  helperSource.includes('PROC_FLAG=') && helperSource.includes('--mount-proc')
+    && /unshare --mount --propagation private \$PID_FLAG \$PROC_FLAG/.test(helperSource),
+  'without --mount-proc the fence inherits a procfs whose pid namespace is the parent\'s, so /proc/<outer-pid>/root resolves into the outer mount tree where / and /mnt/c were never made read-only — a content escape from a workspace-write command')
+check('the fresh procfs is tied to the pid namespace, not offered on its own',
+  /\$PID_FLAG \$PROC_FLAG/.test(helperSource) && helperSource.includes("PROC_FLAG='--mount-proc'"),
+  'the two are one control: measured, --mount-proc WITHOUT --pid still lists the outer pids (20 vs 4), so a lone procfs mount closes nothing')
+// Interop is a door out of the fence, and NO_NEW_PRIVS does not survive it: a confined
+// command can launch a Windows program, and that program can start a fresh
+// `wsl.exe -d <distro> -e bash` — a new Linux process in the INITIAL namespace with no
+// NNP, free to use the passwordless sudo grant this runner itself requires. The door is
+// opened by environment variables, so they must be removed on the one invocation every
+// root-phase descendant hangs off.
+check('the exec tail drops the WSL interop handles',
+  ['WSL_INTEROP', 'WSLENV', 'WSL_DISTRO_NAME'].every((name) => helperSource.includes(`-u ${name}`)),
+  'a surviving WSL_INTEROP lets a confined command run a Windows program, which can start an unfenced `wsl.exe ... bash` where NO_NEW_PRIVS does not apply — both the file fence and the NNP hardening are then void')
+check('the interop removals sit on the exec tail, before the fence body',
+  helperSource.indexOf('-u WSL_INTEROP') !== -1
+    && helperSource.indexOf('-u WSL_INTEROP') < helperSource.indexOf('bash -p -c "$FENCE"'),
+  'removing the handles from some other shell leaves them in the environment every root-phase descendant inherits')
 check('the helper escapes ERE metacharacters before building the exemption pattern',
   helperSource.includes('[][\\\\^$.*+?(){}|]') && helperSource.includes("]/\\\\&/g'"),
   'the allow-list is DATA: unescaped, a workspace path containing ( ) | or [ becomes regex syntax — the real workspace is swept read-only, or a `|` grants an exemption to a path that was never allowed')

@@ -194,8 +194,24 @@ command -v findmnt >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: fin
 # form is not portable and the refusal above is what the fence relies on.)
 KEEP_ENTRIES=(/tmp /dev /dev/pts /dev/mqueue /proc /sys)
 [[ -z "$workspace" ]] || KEEP_ENTRIES+=("$workspace")
+
+# Kernel virtual filesystems are exempt as SUBTREES, not as single mount points. A fresh
+# `--mount-proc` brings /proc's own nested mounts with it (measured: /proc/sys/fs/binfmt_misc
+# is a separate mount record), and a nested kernel mount cannot be made read-only — it is
+# not backing storage. Exact-entry matching left those children unexempt, so the
+# postcondition found the first one writable and the fence refused every command.
+#
+# The subtree list is deliberately NARROWER than KEEP_ENTRIES. /dev and /tmp stay exact so
+# their writable children keep being swept: /dev/shm is shared memory that must end up
+# READONLY (the post-condition asserts it), and a workspace under /tmp is already refused
+# outright. The subtree rule applies only to the two pseudo-filesystems whose children are
+# kernel state by construction, and the workspace is never one of them.
+KERNEL_SUBTREE=(/proc /sys)
 EXEMPT_PATTERN=$(printf '%s\n' "${KEEP_ENTRIES[@]}" | sed 's/[][\\^$.*+?(){}|]/\\&/g' | tr '\n' '|')
 EXEMPT_PATTERN="${EXEMPT_PATTERN%|}"
+for kernel in "${KERNEL_SUBTREE[@]}"; do
+  EXEMPT_PATTERN="${EXEMPT_PATTERN}|$(printf '%s' "$kernel" | sed 's/[][\\^$.*+?(){}|]/\\&/g')/.*"
+done
 
 # The fence script is built HERE from the validated parameters — the caller
 # never supplies script text. It is identical in effect to the in-process
@@ -228,12 +244,28 @@ exec setpriv --no-new-privs --reuid="$DROP_UID" --regid="$DROP_GID" --init-group
 PID_FLAG=''
 [[ "$pidns" = 1 ]] && PID_FLAG='--pid --fork'
 
+# A PID namespace alone does NOT hide the outer processes: it re-parents this tree, but
+# the procfs it inherits still lists the PARENT's pids, so /proc/<outer-pid>/root keeps
+# naming the outer mount namespace — where / and /mnt/c were never remounted read-only,
+# because that remount is private to this fence. `--mount-proc` mounts a FRESH procfs over
+# /proc, so a magic link can only ever name a process inside this namespace. The two
+# halves are one control, which is why the flag is tied to the pid namespace and not
+# offered separately: a fresh procfs without a pid namespace would still list outer pids.
+PROC_FLAG=''
+[[ "$pidns" = 1 ]] && PROC_FLAG='--mount-proc'
+
+# WSL interop is a door OUT of the fence, and NO_NEW_PRIVS does not survive it: a confined
+# command can launch a WINDOWS program, and that program can start a fresh
+# `wsl.exe -d <distro> -e bash` — a new Linux process in the INITIAL mount namespace
+# carrying no NNP, free to use the passwordless sudo grant this runner itself requires.
+# The door is opened by environment variables, so they are removed on the one invocation
+# every root-phase descendant hangs off. /mnt/c stays mounted read-only under the fence
+# and interop was the way around that write fence, not a way through it.
+#
 # -p stops OUR bash from processing BASH_ENV, but it does NOT remove the variable from
 # the environment, and every descendant inherits it. The drop-side `bash -lc
 # "$DROP_COMMAND"` is NOT privileged and does process it (measured: it sourced the
-# caller's file as the session user, inside the fence). Drop it HERE, on the one
-# invocation every root-phase descendant hangs off, so no descendant can be made to
-# source a caller's file.
+# caller's file as the session user, inside the fence). Drop it HERE.
 #
 # -p on THIS file's bash also stops the import of functions from the environment
 # into THIS shell only. The fence body is a separate `bash -c`, so without -p there a
@@ -243,7 +275,8 @@ PID_FLAG=''
 # therefore launched with -p as well: the same privileged-mode rule that skips
 # BASH_ENV skips the function import, so a coordinated override becomes a no-op
 # instead of a fence that lies.
-exec unshare --mount --propagation private $PID_FLAG env -u BASH_ENV \
+exec unshare --mount --propagation private $PID_FLAG $PROC_FLAG \
+  env -u BASH_ENV -u WSL_INTEROP -u WSLENV -u WSL_DISTRO_NAME \
   DROP_UID="$uid" DROP_GID="$gid" DROP_HOME="$home" DROP_USER="${SUDO_USER:-root}" \
   DROP_CWD="$cwd" DROP_WORKSPACE="$workspace" DROP_COMMAND="${ARGS[*]}" \
   DROP_EXEMPT="$EXEMPT_PATTERN" \

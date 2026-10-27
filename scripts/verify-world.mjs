@@ -644,6 +644,17 @@ check('resolveLocation refuses a non-string location (so the old default had two
     && resolveLocationRawAt >= 0
     && /缺少路径/.test(indexRaw.slice(resolveLocationRawAt, resolveLocationRawAt + 700)),
   { blanked: indexCode.slice(resolveLocationAt, resolveLocationAt + 200), raw: indexRaw.slice(resolveLocationRawAt, resolveLocationRawAt + 200) })
+
+// The selftest's watch commands build a shell word around a Linux path. The path grammar
+// refuses control characters and backslashes but NOT an apostrophe (measured), so
+// interpolating the value INSIDE hand-written single quotes ends the word early and the
+// remainder runs as shell syntax. Every other command in the file already goes through
+// shellQuote; these were the exception. Blanked literals would hide the very template
+// this pins, so the check reads the RAW source.
+const watchCommands = indexRaw.split('\n').filter((line) => line.includes('printf ') || line.includes('rm -f '))
+check('the watch commands hand the path to shellQuote instead of interpolating it inside quotes',
+  watchCommands.length > 0 && watchCommands.every((line) => !/'\$\{fs\.processPath/u.test(line)),
+  watchCommands.join('\n'))
 check('index.js no longer hands an undefined distribution to resolveDistroHome',
   /resolveDistroHome\(undefined/.test(indexCode) === false,
   indexCode.slice(Math.max(0, indexCode.indexOf('defaultWorkspaceUnc') - 200), indexCode.indexOf('defaultWorkspaceUnc') + 200))

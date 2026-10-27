@@ -294,6 +294,11 @@ function copySuiteTree(prefix) {
     ['scripts', 'suite-shell.mjs'],
     ['lib/wsl', 'fence.js'],
     ['lib/wsl', 'paths.js'],
+    // The suite also pins the publication's own containment re-test by reading this file's
+    // source. A copy without it throws inside the run, the child prints no FAIL line, and
+    // the family reports a false red about a suite it never ran — the same shape that bit
+    // this list before for suite-shell.mjs and wsl-available.mjs.
+    ['lib/wsl', 'fs.js'],
   ]) copyFileSync(join(pluginRoot, dir, name), join(tree, dir, name))
   return tree
 }
