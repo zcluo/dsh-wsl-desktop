@@ -270,9 +270,20 @@ const replaceBody = (() => {
 check('the publication re-tests containment before it renames',
   replaceBody.includes('isUnderHost') && replaceBody.includes('FS_SANDBOX_DENIED'),
   'a component swapped between the entry check and the publication is invisible to the entry check; the rename then lands CONTENT at the link target (measured FACT), so the refusal has to happen here')
-check('the publication judges against the roots the write was authorized under',
-  replaceBody.includes('publicationRoots') && fsSource.includes('this.publicationRoots = roots'),
-  're-resolving the policy inside the primitive could judge the path against a different grant than the one the caller was allowed, turning the re-test into a second, unrelated decision')
+// The primitive's signature is `(replaced: string, replacement: string)`, so no per-call
+// context can reach it — a snapshot would have to live on `this`, where every concurrent
+// write shares it and task B's roots would judge task A's publication. Resolving at the
+// syscall is also the sounder semantic: the re-test answers "is this inside a writable root
+// RIGHT NOW", so a policy narrowed since the entry check refuses the write instead of being
+// overridden by a stale grant.
+check('the publication resolves the policy itself instead of sharing instance state',
+  replaceBody.includes('sandboxPolicy.resolve()')
+    && !replaceBody.includes('publicationRoots')
+    && !fsSource.includes('this.publicationRoots'),
+  'an instance-level snapshot is shared by concurrent writes, so one call could judge another call\'s publication; and a policy that narrowed after the entry check must refuse, not be ignored')
+check('the publication lets danger-full-access through untouched',
+  replaceBody.includes("policy.mode !== 'danger-full-access'"),
+  'that mode is unfenced by contract at the entry check too; re-testing it here would refuse a write the caller was granted')
 check('a Windows drive path folds whole (parseWslUnc returns null; the host is case-insensitive)',
   isLexicallyUnderHost('C:\\Users\\X\\PROJ\\a', 'C:\\users\\x\\proj', { caseSensitive: true }) === true)
 // The WIRING, not just the pure function: isUnderHost must ask for the
