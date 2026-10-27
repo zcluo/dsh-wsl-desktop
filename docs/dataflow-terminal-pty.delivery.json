@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "0a0de0c0-72a3-40b3-b630-38363482017c",
+  "status": "current",
+  "command": "deliver",
+  "type": "dataflow",
+  "input": "docs/diagrams-src/dataflow-terminal-pty.json",
+  "output": "docs/dataflow-terminal-pty.html",
+  "specification": {
+    "sha256": "1112b735ba4dc250ffe7e1c61e565859c32c7ff7e96be31f272da206d9f25890",
+    "bytes": 4726
+  },
+  "artifact": {
+    "sha256": "7c7d3eb94bae59a3b8424c84b673f672ed7a2f64e557d9c83ca592f457a6190f",
+    "bytes": 814242
+  }
+}

@@ -6,10 +6,10 @@
   "status": "pass",
   "visualReview": "pending",
   "provenance": "current",
-  "deliveryReceiptId": "68ba1f2c-187c-49e7-b6e8-de0ca3b02298",
+  "deliveryReceiptId": "ff15df19-8402-489c-9910-290c910a735a",
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "964a8f95fbcaae39ede1f61078eaaea2f7838311756cf75c1c2bbd44ac1e0c13",
+    "sha256": "ab9ce432fc2121099afb661c052dc072a3f348879043b5e440b2e80a5b3c6d3c",
     "bytes": 842896
   },
   "state": {
@@ -910,18 +910,18 @@
         "file": "architecture.visual-check.1440x900.light.png"
       },
       {
-        "sha256": "ed3334f2c13ee11974a4b975bac758b2dfe705dae2115eb3ddc1e74810dc9a6d",
-        "bytes": 159653,
+        "sha256": "6b59f0109516248a9802eaf4410cb68f390caf34a49fe574e852f96d7d664448",
+        "bytes": 159725,
         "file": "architecture.visual-check.1440x900.dark.png"
       },
       {
-        "sha256": "027eae6c3c4d23bbcfb08a600b9cb328ad4a99010d95ecc7ecda4851887f26d2",
-        "bytes": 211072,
+        "sha256": "2bbb520c717924f478abc5aec18f462a309b1155c545ef842164b9ff056c085a",
+        "bytes": 211016,
         "file": "architecture.visual-check.2048x1320.light.png"
       },
       {
-        "sha256": "c48a480c478142a09f73449e7f01691f32789dec72e269e3ae2916d569ef60f3",
-        "bytes": 240569,
+        "sha256": "ac58bcf83321a34ef26e1cab0f6cef19556e96809bc939a0ca34912682d8b2c1",
+        "bytes": 240550,
         "file": "architecture.visual-check.2048x1320.dark.png"
       }
     ]

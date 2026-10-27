@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "receiptId": "68ba1f2c-187c-49e7-b6e8-de0ca3b02298",
+  "receiptId": "ff15df19-8402-489c-9910-290c910a735a",
   "status": "current",
   "command": "deliver",
   "type": "architecture",
   "input": "docs/diagrams-src/architecture.json",
   "output": "docs/architecture.html",
   "specification": {
-    "sha256": "324276da374e5799a5ec8e5d08520a2a9414dfcaa31ea992c4b3596c11ac31ae",
+    "sha256": "ad9f5a6d13b95068016058458c361c53eed5cd2108baebc4744aa6656de8a5a3",
     "bytes": 10460
   },
   "artifact": {
-    "sha256": "964a8f95fbcaae39ede1f61078eaaea2f7838311756cf75c1c2bbd44ac1e0c13",
+    "sha256": "ab9ce432fc2121099afb661c052dc072a3f348879043b5e440b2e80a5b3c6d3c",
     "bytes": 842896
   }
 }
