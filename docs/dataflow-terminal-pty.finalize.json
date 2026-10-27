@@ -5,7 +5,7 @@
   "status": "pass",
   "type": "dataflow",
   "quality": "showcase",
-  "startedAt": "2026-10-27T06:07:53.605Z",
+  "startedAt": "2026-10-27T07:13:36.429Z",
   "specification": {
     "path": "docs/diagrams-src/dataflow-terminal-pty.json",
     "sha256": "1112b735ba4dc250ffe7e1c61e565859c32c7ff7e96be31f272da206d9f25890",
@@ -56,7 +56,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1220,
+      "durationMs": 462,
       "command": [
         "nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
@@ -72,7 +72,7 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "0a0de0c0-72a3-40b3-b630-38363482017c",
+        "receiptId": "d1d2f9f3-8e24-457f-9259-dfb810b155ad",
         "ok": true,
         "command": "deliver",
         "type": "dataflow",
@@ -110,7 +110,7 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 451,
+      "durationMs": 209,
       "command": [
         "nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
@@ -240,13 +240,13 @@
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "0a0de0c0-72a3-40b3-b630-38363482017c"
+        "deliveryReceiptId": "d1d2f9f3-8e24-457f-9259-dfb810b155ad"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 4761,
+      "durationMs": 2090,
       "command": [
         "nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
@@ -264,7 +264,7 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "0a0de0c0-72a3-40b3-b630-38363482017c",
+        "deliveryReceiptId": "d1d2f9f3-8e24-457f-9259-dfb810b155ad",
         "artifact": {
           "path": "docs/dataflow-terminal-pty.html",
           "sha256": "7c7d3eb94bae59a3b8424c84b673f672ed7a2f64e557d9c83ca592f457a6190f",
@@ -966,8 +966,8 @@
     "browserCheckReceipt": "docs/dataflow-terminal-pty.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-10-27T06:08:00.922Z",
-  "durationMs": 7316,
+  "finishedAt": "2026-10-27T07:13:39.659Z",
+  "durationMs": 3230,
   "update": {
     "status": "current",
     "installedVersion": "3.2.0",
