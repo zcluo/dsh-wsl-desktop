@@ -35,12 +35,14 @@ import {
   DENIAL_SIGNATURES,
   HELPER_PATH,
   HELPER_VERSION,
+  KERNEL_SUBTREES,
   RUNNER_HELPER,
   RUNNER_SUDO_UNSHARE,
   SETUP_FAILURE_EXIT,
   SETUP_FAILURE_MARKER,
   assertWorkspaceSpelling,
   buildConfinedCommand,
+  buildNamespaceScript,
   detectRunner,
   helperOwnershipScript,
   helperSelectionScript,
@@ -404,6 +406,87 @@ check('the shipped helper reports the version the detector requires',
 check('the exemption grep consumes the pre-built pattern, anchored at both ends',
   helperSource.includes('grep -Ev "^(${DROP_EXEMPT})\\$"') && !helperSource.includes('sed "s/|$//"'),
   'the fence must not hand-build a pattern from a path; the shipped `/sys$")$"` tail was a bash parse error (closing paren outside the string plus a `$"` locale-quote)')
+
+// The writability post-condition reads the MOUNT FLAG, never `[ -w ]` alone.
+//
+// `[ -w ]` is access(W_OK), and the kernel gives its read-only answer only for
+// storage inodes: sb_permission() returns -EROFS for S_ISREG/S_ISDIR/S_ISLNK
+// alone (fs/namei.c), do_faccessat()'s own read-only re-check adds a
+// special_file() exclusion, and generic_permission() lets a MAY_WRITE-only mask
+// through CAP_DAC_OVERRIDE — and this fragment runs as root, BEFORE the setpriv
+// drop. A SOCKET therefore answered "writable" on a mount that WAS remounted
+// read-only: measured as exit 97 for the unix socket under /mnt/wsl/podman-sockets
+// with podman machine running, refusing every confined command including a bare
+// `true` (github issue #2).
+//
+// Both owners must carry it, so BOTH are pinned: a fix in one and not the other
+// is exactly the drift the two-fence design exists to prevent. The assertions are
+// BEHAVIOURAL, not textual: what matters is that the sweep enumerates
+// TARGET,OPTIONS, tests `ro` as a comma member, and gates the `[ -w ]` test on
+// the inode being storage. A rewrite that keeps those three properties passes.
+const helperFlagPostcondition = helperCode.includes('findmnt -rno TARGET,OPTIONS')
+  && /\*,ro,\*\)/.test(helperCode)
+  && /\[\[ -d "\$target" \|\| -f "\$target" \]\]/.test(helperCode)
+check('the shipped helper judges writability by the mount flag, and asks [ -w ] only for storage inodes',
+  helperFlagPostcondition,
+  'a socket/FIFO/device reports writable to [ -w ] on a read-only mount (kernel: sb_permission excludes special inodes), so a [ -w ]-only post-condition fails closed on EVERY confined command whenever such a mount exists — issue #2')
+{
+  // The same property in the in-process builder, read from its RENDERED output
+  // rather than its source: the builder is a template literal, and the rendering
+  // is what the direct runner actually executes.
+  const rendered = buildNamespaceScript({
+    command: 'true',
+    linuxCwd: '/home/u/proj',
+    mode: 'workspace-write',
+    workspaceLinuxRoot: '/home/u/proj',
+    identity: { uid: '1000', gid: '1000', home: '/home/u', name: 'u' },
+    noNewPrivs: true,
+  })
+  check('the in-process builder judges writability by the mount flag too (the two fences agree)',
+    rendered.includes('findmnt -rno TARGET,OPTIONS') && /\*,ro,\*\)/.test(rendered)
+      && rendered.includes('[ -d "$target" ] || [ -f "$target" ]'),
+    detailText(rendered.split('\n').filter((line) => line.includes('target')).slice(0, 8).join('\n')))
+  // The `set -e` trap the old shape walked into and the new one must not: a bare
+  // `&& continue` (or `[ -w ] && fail`) returns 1 on the NORMAL path — every
+  // non-exempt target that IS read-only — and `set -e` then aborts the fence with
+  // status 1 instead of the classified 97. Both exemption and [ -w ] must be
+  // `if`/`then` forms in the rendered fragment.
+  check('the builder keeps both conditional tests in if/then form (a failing && list would exit 1, not 97)',
+    rendered.includes('then continue; fi;')
+      && /if \[ -w "\$target" \]; then fail/.test(rendered)
+      && !/\[ -w "\$target" \] && fail/.test(rendered),
+    detailText(rendered.split('\n').filter((line) => line.includes('continue') || line.includes('-w "$target"')).join('\n')))
+  // KERNEL SUBTREES. The helper has exempted /proc and /sys as SUBTREES since the
+  // two fences were split; the builder matched them EXACTLY, so a distribution with
+  // a nested kernel mount was fenced by one runner and refused outright by the
+  // other. Measured on WSL2: `findmnt` lists /proc/sys/fs/binfmt_misc AND
+  // /proc/sys/fs/binfmt_misc/status, `remount,ro,bind` on it answers exit 32 and
+  // `umount` answers EBUSY — so it can never be made read-only, and exact matching
+  // made the direct runner (what an operator gets with no helper, or a mismatched
+  // one) fail closed on EVERY command.
+  //
+  // Pinned as the AGREEMENT between the two owners, not as a spelling: the
+  // builder's rendered pattern and the helper's builder must both carry a
+  // `<path>/.*` entry for the same two paths. A fix in one and not the other is
+  // the drift this suite exists to catch.
+  const subtreePaths = [...KERNEL_SUBTREES]
+  // Both owners must carry the SAME set. The helper spells it as a bash array
+  // (KERNEL_SUBTREE=(/proc /sys)); the builder renders one `<path>/.*` entry per
+  // member. Build the helper's exact expected line from the exported set, so a
+  // third path added on one side reddens this instead of silently disagreeing.
+  const helperSubtreeLine = `KERNEL_SUBTREE=(${subtreePaths.join(' ')})`
+  check('both fences exempt the kernel subtrees, so the two runners agree on a nested kernel mount',
+    subtreePaths.length > 0
+      && helperSource.includes(helperSubtreeLine)
+      && subtreePaths.every((kernel) => rendered.includes(`${kernel}/.*`)),
+    `expected helper line ${JSON.stringify(helperSubtreeLine)} present=${helperSource.includes(helperSubtreeLine)}; builder subtrees=${JSON.stringify(subtreePaths.map((kernel) => rendered.includes(`${kernel}/.*`)))}`)
+  // ...and the subtree rule must NOT have widened /dev or /tmp: those two keep
+  // exact matching so their writable children are still swept (the suite's live
+  // rows assert /dev/shm ends up READONLY, and a workspace under /tmp is refused).
+  check('the subtree rule stays narrow: /dev and /tmp are still exact matches',
+    !rendered.includes('/dev/.*') && !rendered.includes('/tmp/.*'),
+    detailText(rendered.split('\n').find((line) => line.includes('grep -Ev')) ?? '(no pattern line)'))
+}
 check('the drop identity is checked against the invoking user',
   helperSource.includes('getent passwd') && helperSource.includes('identity mismatch'),
   'the sudoers grant is argument-wildcarded; an unchecked --uid lets the session user run the helper as uid 0, and root inside the fence is not a reader - it can remount the fence read-write (measured), so that is root WRITE')
@@ -1370,6 +1453,64 @@ try {
   // The abort path: reached by the cleanup above, by any throw, and made safe to repeat by the
   // same guard. It is the ONLY owner a throw has — the suite has no other top-level finally.
   await probe({ distro, linuxCwd: '/', timeoutMs: 60_000, command: removeMountTarget(spacedMount) })
+}
+
+console.log('\nnon-storage mount target (a real unix socket, issue #2)')
+// The regression for the reported failure, and it uses a REAL socket because the
+// defect is the kernel's inode-type dispatch: `[ -w ]` is access(W_OK), which
+// answers TRUE for a S_IFSOCK inode on a mount that WAS remounted read-only
+// (sb_permission narrows -EROFS to S_ISREG/S_ISDIR/S_ISLNK; do_faccessat adds the
+// special_file() exclusion; generic_permission lets root through
+// CAP_DAC_OVERRIDE). A synthetic predicate or a stub would prove nothing here —
+// the row has to make the kernel answer.
+//
+// Issue #2's own shape: a unix socket bind-mounted into the distribution (there
+// under /mnt/wsl/podman-sockets, created by podman machine). This suite cannot
+// start podman, so it makes the equivalent mount itself: a socket created
+// unconfined, then bind-mounted onto a socket-shaped path. With the v1.2
+// post-condition the fence then refuses EVERY confined command with exit 97 —
+// including the first one; with the fix, the run succeeds and the mount is
+// reported read-only.
+const socketDir = `${home}/dsh-wsl-socket-${runSuffix}`
+const socketTarget = `${socketDir}/podman-root.sock`
+const socketMountPoint = `${socketDir}/mounted.sock`
+// The fixture is created UNCONFINED (like the spaced bind above) and removed in a
+// `finally`, so a throw cannot strand a bind of a socket-shaped path.
+try {
+  await probe({
+    distro,
+    linuxCwd: '/',
+    timeoutMs: 60_000,
+    command: `${removeMountTarget(socketDir)} && mkdir -p ${shellQuote(socketDir)}`
+      // python3 is the one interpreter the plugin already requires of a distro
+      // (lib/wsl/pty.js refuses a realm without it), so this needs no new
+      // dependency. AF_UNIX is what makes the inode S_IFSOCK.
+      + ' && python3 -c ' + shellQuote('import socket,sys; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.bind(sys.argv[1]); s.close()') + ` ${shellQuote(socketTarget)}`
+      + ` && touch ${shellQuote(socketMountPoint)}`
+      + ` && sudo -n mount --bind ${shellQuote(socketTarget)} ${shellQuote(socketMountPoint)}`,
+  })
+  const socketMounted = await probe({ distro, linuxCwd: '/', command: `findmnt -rno TARGET ${shellQuote(socketMountPoint)}` })
+  // Positively gated: without the bind the rows below would be asking about a
+  // path that is not a mount target at all, and could pass for the wrong reason.
+  check('the socket bind target is mounted',
+    socketMounted.stdout.trim() !== '',
+    `${JSON.stringify(socketMounted.stdout)} stderr=${JSON.stringify(socketMounted.stderr.slice(-200))}`)
+  // The run that used to be impossible. `true` is deliberate: issue #2 reports
+  // that even a bare `true` failed, because the post-condition runs before the
+  // command does.
+  const socketRun = await confined('echo SOCKET-RUN-OK', { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
+  check('a confined run succeeds while a unix socket is bind-mounted outside the workspace',
+    socketRun.result.exitCode === 0 && socketRun.result.stdout.includes('SOCKET-RUN-OK'),
+    `exit=${socketRun.result.exitCode} stderr=${JSON.stringify(socketRun.result.stderr.slice(-400))} — with the v1.2 post-condition this row fails closed with exit ${SETUP_FAILURE_EXIT} naming "is still writable"`)
+  // And the boundary is intact rather than merely permissive: the socket's mount
+  // is read-only, and a write outside the workspace is still denied.
+  const socketOptions = await confined(`findmnt -rno OPTIONS ${shellQuote(socketMountPoint)} | head -1`, { mode: 'workspace-write', workspaceLinuxRoot: probeRoot })
+  check('the socket mount target was remounted read-only inside the fence',
+    /^ro(,|$)/.test(socketOptions.result.stdout.trim()),
+    `options=${JSON.stringify(socketOptions.result.stdout.trim())}`)
+} finally {
+  // Same owner discipline as the spaced bind: idempotent removal on both paths.
+  await probe({ distro, linuxCwd: '/', timeoutMs: 60_000, command: `${removeMountTarget(socketDir)}` })
 }
 
 console.log('\nread-only')

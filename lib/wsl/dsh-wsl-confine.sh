@@ -2,7 +2,7 @@
 # Privileged mode (-p): this script runs as root via sudo, and without -p bash would
 # source a caller-supplied BASH_ENV file BEFORE our first line, as root. The
 # startup-defence note below carries the measurement (bash 5.2.37).
-# dsh-wsl-confine v1.2 — DSH WSL confinement helper.
+# dsh-wsl-confine v1.3 — DSH WSL confinement helper.
 #
 # Root-owned fence executor: the ONLY thing this helper does is apply the
 # mount-namespace fence (workspace bind, tmpfs /tmp, read-only /, read-only
@@ -88,7 +88,7 @@ export PATH
 # purpose: it must not depend on the deployment's sudoers either way.
 
 set -euo pipefail
-VERSION='dsh-wsl-confine v1.2'
+VERSION='dsh-wsl-confine v1.3'
 
 uid=; gid=; home=; cwd=; workspace=; pidns=1
 ARGS=()
@@ -234,8 +234,30 @@ findmnt -rno TARGET | while IFS= read -r raw; do printf "%b\n" "$raw"; done | { 
 done
 mountpoint -q /tmp || fail "/tmp is not a private tmpfs"
 findmnt -rno OPTIONS / | grep -q "^ro" || fail "/ is not read-only"
-findmnt -rno TARGET | while IFS= read -r raw; do printf "%b\n" "$raw"; done | { grep -Ev "^(${DROP_EXEMPT})\$" || fail "exemption grep failed"; } | while IFS= read -r target; do
-  [[ -w "$target" ]] && fail "$target is still writable"
+# The postcondition pairs two tests, and each is load-bearing where the other is
+# blind. A target can be STACKED — findmnt lists one record per mount — and
+# `remount,ro,bind` by path only ever reaches the TOPMOST one (measured: after
+# remounting /run/user, a covered record still reported rw while a write through
+# the path failed EROFS — unreachable storage, not a hole). So:
+#   * a REGULAR FILE or DIRECTORY is judged by `[ -w ]`: it answers about the
+#     mount a write would actually land on, covered record or not;
+#   * anything else (socket, FIFO, device) is judged by the MOUNT FLAG, because
+#     `[ -w ]` is meaningless there: access(W_OK) narrows the kernel's read-only
+#     answer to S_ISREG/S_ISDIR/S_ISLNK (sb_permission), do_faccessat() adds a
+#     special_file() exclusion, and this fragment runs as root (CAP_DAC_OVERRIDE)
+#     before the setpriv drop. A socket therefore reported "writable" on a mount
+#     that WAS remounted read-only: measured as exit 97 for the unix socket under
+#     /mnt/wsl/podman-sockets with podman machine running, refusing every
+#     confined command including a bare `true` (github issue #2).
+findmnt -rno TARGET,OPTIONS | while IFS=" " read -r raw opts; do
+  target=$(printf "%b" "$raw")
+  if printf "%s\n" "$target" | grep -Eq "^(${DROP_EXEMPT})\$"; then continue; fi
+  if [[ -d "$target" || -f "$target" ]]; then
+    if [[ -w "$target" ]]; then fail "$target is still writable"; fi
+  else
+    # Comma-delimited membership, not a ^ro prefix: ro is not pinned to a position.
+    case ",$opts," in *,ro,*) ;; *) fail "$target is not read-only (mount options: $opts)" ;; esac
+  fi
   true
 done
 cd "$DROP_CWD"

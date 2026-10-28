@@ -4,7 +4,7 @@ For operators on 0.6.0 and later. It explains the codes the browser sees, the en
 
 ## Copy language
 
-The W dialog selects its copy between Chinese (`zh*`) and English from `navigator.language`, covering the error catalog, the health details and the older dialog buttons. Dynamic version strings (`Python x.y`, `dsh-wsl-confine v1.2`) and distribution, user and path values stay verbatim. There is no runtime language switch.
+The W dialog selects its copy between Chinese (`zh*`) and English from `navigator.language`, covering the error catalog, the health details and the older dialog buttons. Dynamic version strings (`Python x.y`, `dsh-wsl-confine v1.3`) and distribution, user and path values stay verbatim. There is no runtime language switch.
 
 ## Error codes
 
@@ -58,7 +58,7 @@ After the operator confirms the distribution user, the browse phase shows an exp
 | `util-linux` | unshare/setpriv/findmnt/mount all present | advisory (restricted mode) |
 | `getent` | Present | advisory (falls back to the default shell) |
 | `runner` | helper or sudo-unshare available | advisory (restricted mode) |
-| `helper` | Installed and v1.2 | advisory (sudo is enough without it) |
+| `helper` | Installed and v1.3 | advisory (sudo is enough without it) |
 | `nnp` | setpriv supports `--no-new-privs` | advisory (restricted mode) |
 | `wsl2` | The distribution's WSL major version is 2 (read host-side from `wsl.exe -l -v`) | hard failure (WSL1 has no mount namespace) |
 

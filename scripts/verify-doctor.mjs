@@ -11,11 +11,24 @@
 import { makeChecker } from './suite-shell.mjs'
 import { detailText } from './detail.mjs'
 import { CHECK_IDS, CHECK_REMEDIES } from '../lib/protocol.js'
+import { HELPER_VERSION } from '../lib/wsl/confinement.js'
 import { clearHealthCache, healthFor, parseDoctorOutput } from '../lib/wsl/doctor.js'
 import { defaultDistro, parseWslVersionTable } from '../lib/wsl/distros.js'
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value).slice(0, 400) })
 const { check } = checker
+
+/**
+ * The version string an installed helper reports.
+ *
+ * Built from the EXPORTED constant, never spelled out. The doctor's `helper` row
+ * compares a probed version against `HELPER_VERSION` and warns when they differ,
+ * so a literal here would make these fixtures agree with a version the plugin no
+ * longer accepts — and the version has been raised twice for a real reason (v1.2:
+ * ERE-escaped exemption pattern; v1.3: the writability post-condition reads the
+ * mount flag instead of `[ -w ]`).
+ */
+const HELPER_VERSION_LINE = `dsh-wsl-confine ${HELPER_VERSION}`
 
 /** A batch print with every command present. */
 const BATCH_OK = [
@@ -39,7 +52,7 @@ function harness(overrides = {}) {
     batch = BATCH_OK,
     runner = 'helper',
     nnp = true,
-    helper = 'dsh-wsl-confine v1.2',
+    helper = HELPER_VERSION_LINE,
     wslVersion = '2',
     batchError = null,
   } = overrides
@@ -248,7 +261,7 @@ console.log('\ncache')
     },
     runnerProbe: async () => 'helper',
     nnpProbe: async () => true,
-    helperProbe: async () => 'dsh-wsl-confine v1.2',
+    helperProbe: async () => HELPER_VERSION_LINE,
     now: () => 30_000,
   })
   check('a timed-out batch is retried once',
@@ -269,7 +282,7 @@ console.log('\nconfigured wsl.exe path')
       return 'helper'
     },
     nnpProbe: async () => true,
-    helperProbe: async () => 'dsh-wsl-confine v1.2',
+    helperProbe: async () => HELPER_VERSION_LINE,
     now: () => 3_000,
   })
   check('every probe the doctor issues carries the configured wsl.exe path',
@@ -279,7 +292,7 @@ console.log('\nconfigured wsl.exe path')
 console.log('\nhelper probe gating')
 {
   clearHealthCache()
-  const h = harness({ runner: 'sudo-unshare', helper: 'dsh-wsl-confine v1.2' })
+  const h = harness({ runner: 'sudo-unshare', helper: HELPER_VERSION_LINE })
   const result = await healthFor({ distro: 'd', ...h, now: () => 4_000 })
   const helper = result.checks.find((check) => check.id === 'helper')
   check('a non-helper runner does not execute the helper probe', h.helperCalls() === 0, h.helperCalls())

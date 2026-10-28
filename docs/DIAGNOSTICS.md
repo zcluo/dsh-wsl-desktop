@@ -4,7 +4,7 @@
 
 ## 文案语言
 
-W 对话框按 `navigator.language` 在中文（`zh*`）与英文之间选择文案，覆盖错误目录、体检明细与旧对话框按钮。动态版本串（`Python x.y`、`dsh-wsl-confine v1.2`）以及发行版、用户、路径保持原样。没有运行时切换语言的开关。
+W 对话框按 `navigator.language` 在中文（`zh*`）与英文之间选择文案，覆盖错误目录、体检明细与旧对话框按钮。动态版本串（`Python x.y`、`dsh-wsl-confine v1.3`）以及发行版、用户、路径保持原样。没有运行时切换语言的开关。
 
 ## 错误码
 
@@ -58,7 +58,7 @@ W 对话框按 `navigator.language` 在中文（`zh*`）与英文之间选择文
 | `util-linux` | unshare/setpriv/findmnt/mount 都在 | 建议（受限模式依赖） |
 | `getent` | 存在 | 建议（缺失时回落到默认 shell） |
 | `runner` | helper 或 sudo-unshare 可用 | 建议（受限模式依赖） |
-| `helper` | 已安装且版本为 v1.2 | 建议（缺失但 sudo 可用时仍可运行） |
+| `helper` | 已安装且版本为 v1.3 | 建议（缺失但 sudo 可用时仍可运行） |
 | `nnp` | setpriv 支持 `--no-new-privs` | 建议（受限模式依赖） |
 | `wsl2` | 发行版的 WSL 主版本是 2（宿主侧 `wsl.exe -l -v` 读取） | 硬失败（WSL1 没有 mount namespace） |
 
