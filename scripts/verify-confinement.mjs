@@ -319,6 +319,43 @@ check('the root-phase fence body runs in privileged mode, so caller functions ca
   /bash -p -c "\$FENCE" dsh-wsl-confine/.test(helperCode),
   'the fence body is a separate bash; without -p on THIS invocation an environment-provided function overrides the mount/findmnt/mountpoint the fence is built from, and a coordinated override voids the fence silently')
 check('the helper has no missing-semicolon brace groups', !/exit 2 \}/.test(helperSource), 'found `exit 2 }` — the brace group stays open and bash aborts at EOF')
+// The fence body is ONE single-quoted bash string (`FENCE='...'`). Inside it a
+// BACKTICK is command substitution and a single QUOTE closes the string early —
+// measured: eight backticks introduced in a prose comment around the `[ -w ]`
+// mention made the shipped helper exit 127 with "read-only: command not found"
+// BEFORE any fence step ran, so every confined command failed with a message
+// unrelated to what went wrong. A comment is not exempt: bash does not know it
+// is prose. This pins the delimiter's integrity from the text itself, because
+// `bash -n` cannot see it — the helper still PARSES correctly with the stray
+// backticks; only its runtime behaviour is destroyed, which is precisely how
+// this shipped.
+{
+  const fenceStart = helperSource.indexOf("FENCE='")
+  // The body ends at the first line that closes the string: a line ending in a
+  // quote that is not a comment (the exec tail is the last body line).
+  const bodyStart = fenceStart + "FENCE='".length
+  const lines = helperSource.slice(bodyStart).split('\n')
+  let consumed = 0
+  let bodyEnd = -1
+  for (const line of lines) {
+    consumed += line.length + 1
+    // The closing delimiter is the LAST character of this line; the body stops
+    // one character before it.
+    if (line.endsWith("'") && !line.trimStart().startsWith('#')) { bodyEnd = bodyStart + consumed - 2; break }
+  }
+  // The BODY is what lies between the delimiters, so the closing quote that
+  // terminates the string is excluded — it is the delimiter, not content. An
+  // unbalanced quote inside the body would have ended the string EARLIER, and
+  // this scan would then find a short body; the check below therefore also
+  // requires the body to reach the exec tail (the last line of the fence).
+  const body = bodyEnd < 0 ? '' : helperSource.slice(bodyStart, bodyEnd)
+  const ticks = (body.match(/`/g) ?? []).length
+  const quotes = (body.match(/'/g) ?? []).length
+  const reachesTail = body.includes('exec setpriv')
+  check('the single-quoted fence body carries no backtick and no stray quote',
+    fenceStart >= 0 && bodyEnd >= 0 && reachesTail && ticks === 0 && quotes === 0,
+    { fenceStart, terminated: bodyEnd >= 0, reachesTail, backticks: ticks, quotes, offending: body.split('\n').filter((line) => line.includes('`') || line.includes("'")).slice(0, 3) })
+}
 check('the fence receives its parameters as environment variables',
   helperSource.includes('DROP_UID="$uid"') && helperSource.includes('--reuid="$DROP_UID"'),
   'params must cross into `bash -c` via env(1); bare KEY=VALUE words are positional parameters, and $UID is a bash built-in')
@@ -407,29 +444,36 @@ check('the exemption grep consumes the pre-built pattern, anchored at both ends'
   helperSource.includes('grep -Ev "^(${DROP_EXEMPT})\\$"') && !helperSource.includes('sed "s/|$//"'),
   'the fence must not hand-build a pattern from a path; the shipped `/sys$")$"` tail was a bash parse error (closing paren outside the string plus a `$"` locale-quote)')
 
-// The writability post-condition reads the MOUNT FLAG, never `[ -w ]` alone.
+// The writability post-condition pairs two tests, and picks between them by the
+// INODE TYPE from `stat -c %F` — never by `[ -w ]` alone, and never by `-f`/`-d`.
 //
-// `[ -w ]` is access(W_OK), and the kernel gives its read-only answer only for
-// storage inodes: sb_permission() returns -EROFS for S_ISREG/S_ISDIR/S_ISLNK
-// alone (fs/namei.c), do_faccessat()'s own read-only re-check adds a
-// special_file() exclusion, and generic_permission() lets a MAY_WRITE-only mask
-// through CAP_DAC_OVERRIDE — and this fragment runs as root, BEFORE the setpriv
-// drop. A SOCKET therefore answered "writable" on a mount that WAS remounted
-// read-only: measured as exit 97 for the unix socket under /mnt/wsl/podman-sockets
-// with podman machine running, refusing every confined command including a bare
-// `true` (github issue #2).
+// Two measured facts drive this, and each killed an earlier design:
 //
-// Both owners must carry it, so BOTH are pinned: a fix in one and not the other
-// is exactly the drift the two-fence design exists to prevent. The assertions are
-// BEHAVIOURAL, not textual: what matters is that the sweep enumerates
-// TARGET,OPTIONS, tests `ro` as a comma member, and gates the `[ -w ]` test on
-// the inode being storage. A rewrite that keeps those three properties passes.
+// 1. `[ -w ]` is access(W_OK), and the kernel gives its read-only answer only
+//    for storage inodes: sb_permission() returns -EROFS for S_ISREG/S_ISDIR/
+//    S_ISLNK alone (fs/namei.c), do_faccessat()'s own read-only re-check adds a
+//    special_file() exclusion, and generic_permission() lets a MAY_WRITE-only
+//    mask through CAP_DAC_OVERRIDE — and this fragment runs as root, BEFORE the
+//    setpriv drop. So a SOCKET answered "writable" on a mount that WAS remounted
+//    read-only: exit 97 for the unix socket under /mnt/wsl/podman-sockets with
+//    podman machine running, refusing every confined command (issue #2).
+// 2. `-f`/`-d` cannot stand in for the type either. Measured: after the fence
+//    binds the workspace onto itself, a unix socket UNDER the workspace answers
+//    `-f` TRUE (and `stat -c %F` reports "regular empty file"), while the same
+//    socket answers `-f` FALSE before that bind. The bind shadows the nested
+//    mount, so the path resolves to the underlying file.
+//
+// Both owners must carry the pairing, so BOTH are pinned: a fix in one and not
+// the other is the drift the two-fence design exists to prevent. The assertions
+// are BEHAVIOURAL — enumerate TARGET,OPTIONS, test `ro` as a comma member, and
+// route by `stat -c %F` — so a rewrite that keeps those properties passes.
 const helperFlagPostcondition = helperCode.includes('findmnt -rno TARGET,OPTIONS')
   && /\*,ro,\*\)/.test(helperCode)
-  && /\[\[ -d "\$target" \|\| -f "\$target" \]\]/.test(helperCode)
-check('the shipped helper judges writability by the mount flag, and asks [ -w ] only for storage inodes',
+  && /kind=\$\(stat -c %F "\$target"/.test(helperCode)
+  && !/\[\[ -[df] "\$target" \|\|/.test(helperCode)
+check('the shipped helper routes the writability test by inode type from stat, not by -f/-d',
   helperFlagPostcondition,
-  'a socket/FIFO/device reports writable to [ -w ] on a read-only mount (kernel: sb_permission excludes special inodes), so a [ -w ]-only post-condition fails closed on EVERY confined command whenever such a mount exists — issue #2')
+  'a socket/FIFO/device reports writable to [ -w ] on a read-only mount (sb_permission excludes special inodes), and -f/-d cannot classify it because the workspace bind shadows nested mounts — issue #2')
 {
   // The same property in the in-process builder, read from its RENDERED output
   // rather than its source: the builder is a template literal, and the rendering
@@ -442,10 +486,11 @@ check('the shipped helper judges writability by the mount flag, and asks [ -w ] 
     identity: { uid: '1000', gid: '1000', home: '/home/u', name: 'u' },
     noNewPrivs: true,
   })
-  check('the in-process builder judges writability by the mount flag too (the two fences agree)',
+  check('the in-process builder routes by stat too (the two fences agree)',
     rendered.includes('findmnt -rno TARGET,OPTIONS') && /\*,ro,\*\)/.test(rendered)
-      && rendered.includes('[ -d "$target" ] || [ -f "$target" ]'),
-    detailText(rendered.split('\n').filter((line) => line.includes('target')).slice(0, 8).join('\n')))
+      && /kind=\$\(stat -c %F "\$target"/.test(rendered)
+      && !/\[ -[df] "\$target" \]/.test(rendered),
+    detailText(rendered.split('\n').filter((line) => line.includes('target') || line.includes('kind=')).slice(0, 10).join('\n')))
   // The `set -e` trap the old shape walked into and the new one must not: a bare
   // `&& continue` (or `[ -w ] && fail`) returns 1 on the NORMAL path — every
   // non-exempt target that IS read-only — and `set -e` then aborts the fence with

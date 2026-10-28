@@ -234,30 +234,52 @@ findmnt -rno TARGET | while IFS= read -r raw; do printf "%b\n" "$raw"; done | { 
 done
 mountpoint -q /tmp || fail "/tmp is not a private tmpfs"
 findmnt -rno OPTIONS / | grep -q "^ro" || fail "/ is not read-only"
+# NOTE: this block lives inside the single-quoted FENCE string. A BACKTICK here
+# would close the quoting and let bash run its contents as a command
+# substitution — measured: eight backticks around the test -w mention made the
+# helper exit 127 with "read-only: command not found" before the fence ran at
+# all. Keep this comment free of backticks and of single quotes.
 # The postcondition pairs two tests, and each is load-bearing where the other is
 # blind. A target can be STACKED — findmnt lists one record per mount — and
-# `remount,ro,bind` by path only ever reaches the TOPMOST one (measured: after
+# remount,ro,bind by path only ever reaches the TOPMOST one (measured: after
 # remounting /run/user, a covered record still reported rw while a write through
 # the path failed EROFS — unreachable storage, not a hole). So:
-#   * a REGULAR FILE or DIRECTORY is judged by `[ -w ]`: it answers about the
+#   * a REGULAR FILE or DIRECTORY is judged by test -w: it answers about the
 #     mount a write would actually land on, covered record or not;
 #   * anything else (socket, FIFO, device) is judged by the MOUNT FLAG, because
-#     `[ -w ]` is meaningless there: access(W_OK) narrows the kernel's read-only
+#     test -w is meaningless there: access(W_OK) narrows the kernel read-only
 #     answer to S_ISREG/S_ISDIR/S_ISLNK (sb_permission), do_faccessat() adds a
 #     special_file() exclusion, and this fragment runs as root (CAP_DAC_OVERRIDE)
 #     before the setpriv drop. A socket therefore reported "writable" on a mount
 #     that WAS remounted read-only: measured as exit 97 for the unix socket under
 #     /mnt/wsl/podman-sockets with podman machine running, refusing every
-#     confined command including a bare `true` (github issue #2).
+#     confined command including a bare true (github issue #2).
 findmnt -rno TARGET,OPTIONS | while IFS=" " read -r raw opts; do
   target=$(printf "%b" "$raw")
   if printf "%s\n" "$target" | grep -Eq "^(${DROP_EXEMPT})\$"; then continue; fi
-  if [[ -d "$target" || -f "$target" ]]; then
-    if [[ -w "$target" ]]; then fail "$target is still writable"; fi
-  else
-    # Comma-delimited membership, not a ^ro prefix: ro is not pinned to a position.
-    case ",$opts," in *,ro,*) ;; *) fail "$target is not read-only (mount options: $opts)" ;; esac
-  fi
+  # WHICH test applies is decided by the inode TYPE, read from stat, and NOT by
+  # the -f/-d shell tests. Measured: after the fence binds the workspace onto
+  # itself, a unix socket bind-mounted UNDER the workspace answers -f TRUE, while
+  # the same socket answers -f FALSE before that bind — the shell test follows the
+  # mount the path resolves to and the workspace bind changes what that is. So
+  # -f/-d cannot tell "storage" from "special file" here, and using them sent the
+  # socket down the -w branch, where it failed with "is still writable" exactly as
+  # issue #2 reported. stat -c %F reports the inode class directly.
+  kind=$(stat -c %F "$target" 2>/dev/null) || kind=""
+  # NOTE: double quotes, never single: this block is inside the single-quoted
+  # FENCE string, so a single quote would close it. The case PATTERNS below are
+  # matched literally, so their quoting form is part of the comparison.
+  case "$kind" in
+    "regular file"|"regular empty file"|directory|"symbolic link")
+      # Storage: test -w answers about the mount a write would actually land on.
+      if [[ -w "$target" ]]; then fail "$target is still writable"; fi
+      ;;
+    *)
+      # Not storage (socket, fifo, device, or unreadable): the mount FLAG decides.
+      # Comma-delimited membership, not a ^ro prefix: ro is not pinned to a position.
+      case ",$opts," in *,ro,*) ;; *) fail "$target is not read-only (mount options: $opts)" ;; esac
+      ;;
+  esac
   true
 done
 cd "$DROP_CWD"
