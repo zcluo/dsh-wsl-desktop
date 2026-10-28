@@ -66,6 +66,41 @@ readDefinition(agentPreset: string): Promise<Readonly<PresetDefinition>>
 
 ---
 
+## 提案 C：`terminal-bash` 启动失败时保留 PTY 输出的尾部
+
+### 问题（issue #2 实测）
+
+`dsh-wsl-desktop` 把围栏命令包进 PTY 的 argv，因此围栏自己的 stderr **就是 PTY 的输出**，而不是一个独立的诊断通道。当围栏 fail-closed（exit 97 + `dsh-wsl-sandbox: setup failed` 标记）时，`terminal-bash` 的 `initialize()` 只观察到 `waitReason === 'session_exit'`，于是抛出固定的：
+
+```
+PTY shell exited during startup
+```
+
+真正可操作的那句——`/mnt/wsl/podman-sockets/... is still writable`，带完整路径和原因——被丢掉了。README 与 `docs/CONFINEMENT.md` 都把 exit 97 当作一个**有分类意义**的结果（`runnerFailed`），但在这个路径上，用户只看到一句泛化报错，连"是围栏拒绝"还是"命令本身失败"都分不开。
+
+实测成本：issue #2 的报告者需要自建命名空间隔离实验，才能把这句话挖出来。
+
+### 提案
+
+启动失败时把已捕获输出的尾部带进错误信息，二选一（都很小）：
+
+```ts
+// 选项 1：错误信息里带视口尾部（对调用方零改动）
+throw new Error(`PTY shell exited during startup: ${tailOf(result.viewport, 400)}`)
+
+// 选项 2：把原始诊断交出来，由调用方决定怎么呈现
+interface TerminalSendResult { /* … */ stderrTail?: string }
+```
+
+- 选项 1 更省事，选项 2 更不容易丢信息（围栏标记可能不在视口最后 400 字符内，例如中间隔了 profile 输出）。
+- 两者都只影响**失败路径**，不动正常启动的契约。
+
+### 为什么不由插件侧兜底
+
+插件无法区分「围栏拒绝」与「命令失败」——它只拿到 `session_exit`。去猜一个原因，等于制造第二个错误来源；而真正的证据在 `terminal-bash` 手里。这也是 `docs/UPSTREAM-PROPOSALS.md` 与 `docs/CONFINEMENT.md` 都坚持"诊断归属在持有原始证据的那一层"的原因。
+
+---
+
 ## 迁移证据（0.1.6 → 0.1.7 实际断裂清单，作为上述提案的动机附录）
 
 | # | 断裂 | 插件被迫的权宜实现 | 对应提案 |
