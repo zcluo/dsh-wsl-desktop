@@ -36,8 +36,8 @@
 # fence to the forged uid: root WRITE on the distribution's filesystem and on
 # /mnt/c, with only the namespace and NO_NEW_PRIVS left standing.
 #
-# This script runs as root and calls twelve tools by bare name (getent, cut, sed,
-# tr, mount, findmnt, grep, mountpoint, setpriv, env, bash, unshare). sudo's
+# This script runs as root and calls thirteen tools by bare name (getent, cut, sed,
+# tr, mount, findmnt, grep, mountpoint, setpriv, env, bash, unshare, stat). sudo's
 # env_reset does not save it: an exported PATH is replaced when sudoers sets
 # secure_path, but a PATH handed over as a sudo command-line assignment still
 # reaches us (measured on debian, debian-dev and arch), and the NOPASSWD grant is
@@ -47,7 +47,7 @@
 # here, as the FIRST statement, rather than depending on a deployment option we
 # cannot verify.
 #
-# The pin is unconditional and has NO fallback: the twelve tools must be reachable
+# The pin is unconditional and has NO fallback: the thirteen tools must be reachable
 # in these six directories. A distribution where one is not fails CLOSED - nothing
 # runs: a missing getent leaves the caller record empty and the gate refuses it, a
 # missing cut fails the pipeline under pipefail (127) before the fence, and the
@@ -170,6 +170,11 @@ fi
 command -v unshare >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: unshare not found' >&2; exit 97; }
 command -v setpriv >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: setpriv not found' >&2; exit 97; }
 command -v findmnt >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: findmnt not found' >&2; exit 97; }
+# `stat` classifies the post-condition's target and is called INSIDE the fence,
+# where a bare-name lookup failure would leave kind empty — that routes to the
+# flag branch, which is fail-closed, but the report would then be a confusing
+# "not read-only" rather than the real cause. Preflight it like the others.
+command -v stat >/dev/null 2>&1 || { echo 'dsh-wsl-sandbox: setup failed: stat not found' >&2; exit 97; }
 
 # The allow-list pattern is built HERE, from the validated parameters, with every
 # entry escaped so a PATH stays data and never becomes regex syntax. Unescaped,
