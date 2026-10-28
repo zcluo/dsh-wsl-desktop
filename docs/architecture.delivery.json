@@ -7,11 +7,11 @@
   "input": "docs/diagrams-src/architecture.json",
   "output": "docs/architecture.html",
   "specification": {
-    "sha256": "8c9b793b3f018650c02e709122afa67d31f0da054583531e03fa1e70f0fa026d",
+    "sha256": "b5218ff0e1fbd35d446c2ed7da66aa57c8550ca197728d994350edab9d28fa15",
     "bytes": 10460
   },
   "artifact": {
-    "sha256": "113be26ca35d6248ca4938cfb7d18165f9256e2bd7dfe66c72ef2d7ed7519172",
+    "sha256": "d627ba3294e9da8017de7e0f192bf2c27707c5f6c5edacd16e2e46cbd9d1f2c4",
     "bytes": 842896
   }
 }
