@@ -145,7 +145,7 @@ node scripts/verify-9p.mjs
 ```
   FACT    realpath(/lib), a merged-/usr symlink — ENOENT -> the link is NOT followed (control /usr/lib resolves (\\wsl.localhost\debian\usr\lib))
   FACT    realpath / read of the link (the file behind it exists) — realpath ENOENT; read ENOENT -> the link is exposed but NOT followed
-  FACT    a rename whose destination traverses the link — rename accepted without error and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\renamed-dst.txt exists: true -> the file landed AT the link's target (the SHARE resolves the destination spelling; the fence refuses it — the assertion below — and the provider never reaches this primitive anyway: the mkdir below aborts first, fs-local/src/fsio.ts:598)
+  FACT    a rename whose destination traverses the link — rename accepted without error and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\renamed-dst.txt exists: true -> the file landed AT the link's target (the SHARE resolves the destination spelling; the fence refuses it — the assertion below — and the provider never reaches this primitive anyway: the mkdir in `writeFileAtomic` aborts first — `fs-local/src/fsio.ts`, the `mkdir(directory, { recursive: true })` call inside `writeFileAtomic`, cited by name rather than by line because the line moves between host releases)
   FACT    mkdir through the link, at a spelling the share resolves elsewhere — mkdir reported EINVAL and \\wsl.localhost\debian\tmp\dsh-wsl-9p-probe-link\outside\dsh-link-dir exists: true; isUnderHost(the raw spelling) === false
   OK    the fence refuses the target its own canonicalization produces for that spelling
   FACT    cross-share identity <share root> — debian (0,2) vs debian-dev (0,2) -> COLLIDES - the identity comparison cannot tell the two shares apart
@@ -168,9 +168,9 @@ THE 9P PROFILE MATCHES WHAT THE PROVIDER ASSUMES
 
 **规则（一句，可被证伪）**：一个目标的包含性判定为真，当且仅当「可写根」与「目标自身文件名」之间的**每一个路径组件**要么在共享上**不存在**（`lstat` 报 ENOENT/ENOTDIR），要么**能被规范化**（`realpathSync.native` 成功）；一个**存在却无法规范化**的组件（本机实测：`lstat` 报 EISDIR、`realpath` 与 `stat` 都报 ENOENT 的 Linux 符号链接）直接拒绝该目标。目标**自身的文件名不在规则内**。
 
-**这条 HAZARD 因此关闭**：原记录是「围栏授权一个共享会解析到别处的拼写，而发布的第一个动作 `mkdir(directory, {recursive:true})`（`fs-local/src/fsio.ts:598`）把缺失的那一级目录建在链接目标处——可写根之外」。规则落地后，同一个拼写在 `verify-9p.mjs` 里的实测从 `isUnderHost(...) === true` 变成 `false`，那行 HAZARD 换成真断言（「围栏拒绝它自己的规范化给出的目标」）。**FACT 行仍然为真**：共享侧的 mkdir 依旧把目录建在链接目标处（那是共享的行为），变的只是围栏对它的回答。
+**这条 HAZARD 因此关闭**：原记录是「围栏授权一个共享会解析到别处的拼写，而发布的第一个动作 `mkdir(directory, {recursive:true})`（`fs-local/src/fsio.ts` 的 `writeFileAtomic` 内，按调用名引用而不按行号：宿主换版时行号会漂）把缺失的那一级目录建在链接目标处——可写根之外」。规则落地后，同一个拼写在 `verify-9p.mjs` 里的实测从 `isUnderHost(...) === true` 变成 `false`，那行 HAZARD 换成真断言（「围栏拒绝它自己的规范化给出的目标」）。**FACT 行仍然为真**：共享侧的 mkdir 依旧把目录建在链接目标处（那是共享的行为），变的只是围栏对它的回答。
 
-**为什么选 (b) 而不是 (a)**：候选规则 (a)「拒绝路径**组件**存在却不解析的目标」字面上把**末级组件**也算进去，而末级是链接是**实测安全**的——发布的 rename 替换的是根内的链接项本身，链接目标文件内容不变（上面 F2 的第三条），并且**今天就能成功**（`verify-fs-fence.mjs` 的对照钉子「末级文件链接 / 末级目录链接仍被授权」）。拒绝它就是拒掉一条能工作的合法写入，而「拒掉合法同根写入的规则比缺口更糟」。另外 (a) 没有给规则划根边界，字面读下去会因为**根之上**的某个组件无法解析而拒绝一切。选定的 (b) 把范围钉死在「根与目标文件名之间」——这正是第 598 行那个 `mkdir` 会遍历、并会创建的组件集合。
+**为什么选 (b) 而不是 (a)**：候选规则 (a)「拒绝路径**组件**存在却不解析的目标」字面上把**末级组件**也算进去，而末级是链接是**实测安全**的——发布的 rename 替换的是根内的链接项本身，链接目标文件内容不变（上面 F2 的第三条），并且**今天就能成功**（`verify-fs-fence.mjs` 的对照钉子「末级文件链接 / 末级目录链接仍被授权」）。拒绝它就是拒掉一条能工作的合法写入，而「拒掉合法同根写入的规则比缺口更糟」。另外 (a) 没有给规则划根边界，字面读下去会因为**根之上**的某个组件无法解析而拒绝一切。选定的 (b) 把范围钉死在「根与目标文件名之间」——这正是 `writeFileAtomic` 里那个 `mkdir` 会遍历、并会创建的组件集合。
 
 **规则住在哪**：`lib/wsl/fence.js` 的 `isUnderHost`（新助手 `canonicalizationOf` / `componentsCanonicalize`），**不是** `checkedTarget`。理由有三：一，授权判定就是 `isUnderHost` 的答案（`checkedTarget` 只是对每个可写根调用它，并把它当作授权），把规则放在别处会让 `isUnderHost('<root>\<link>\...', root)` 继续返回 `true`——而那条表达式正是原 HAZARD 记录的实测对象，那样只能「注释掉」缺口，不能关闭它；二，规则需要根边界，而 `isUnderHost` 已经有（词法前缀 + 身份行走）；三，两条路（词法快路与身份回退）都必须过它，否则 `wsl$` 别名拼写会绕开规则——别名钉子就是为这一条存在的。`checkedTarget` 与两个变更入口一字未改。
 
@@ -178,13 +178,15 @@ THE 9P PROFILE MATCHES WHAT THE PROVIDER ASSUMES
 
 **残留**：**检查与发布之间的竞态**。规则只能拒绝**先已存在**的组件；在 `checkedTarget` 通过之后、发布之前由 bash 工具种下的链接仍然看不见（规范化对这类组件本来就是瞎的，任何检查都看不见它）。
 
-**这条残留的收益曾经被写小过，已更正**：本节此前说「收益仍只是越界建目录、无内容外泄」。那是从 `mkdir` 中止那条路径推出来的，与本文件上面的实测 FACT 冲突——L148 记的是「rename 穿过链接时**文件落在链接目标处**」。`mkdir`（`fsio.ts:598`）只在**父目录不存在**时才是发布的第一个动作并且会中止；父目录**已存在**时它是 no-op，rename 照常执行，于是**文件内容**落到界外。因为发布走的是 Windows/9P 一侧，它不受发行版挂载命名空间的只读重挂载约束，`/mnt/c` 的内容因此可写。
+**这条残留的收益曾经被写小过，已更正**：本节此前说「收益仍只是越界建目录、无内容外泄」。那是从 `mkdir` 中止那条路径推出来的，与本文件上面的实测 FACT 冲突——L148 记的是「rename 穿过链接时**文件落在链接目标处**」。`mkdir`（`fsio.ts` 的 `writeFileAtomic` 内）只在**父目录不存在**时才是发布的第一个动作并且会中止；父目录**已存在**时它是 no-op，rename 照常执行，于是**文件内容**落到界外。因为发布走的是 Windows/9P 一侧，它不受发行版挂载命名空间的只读重挂载约束，`/mnt/c` 的内容因此可写。
 
 **已经收窄**：`replaceFile`（`lib/wsl/fs.js`）现在在 rename **紧邻处**再跑一次包含性判定，用的是 `checkedTarget` 授权时交给它的同一组可写根。竞态窗口从「一次函数调用」缩到「两次系统调用之间」，且通过该窗口的写入会以 `FS_SANDBOX_DENIED` 被拒绝，而不是落到界外。窗口本身没有消失——彻底关闭需要发布原语与检查在同一把锁内，那是另一层设计。
 
 **钉子与变异体**：`verify-fs-fence.mjs` 自建链接夹具（`escape` 指向界外、`inside-link` 指向界内、`dangling` 指向不存在的目标、`file-link` 指向界外的文件；用发行版的 `ln -s` 建、`wsl.exe rm -rf` 删，因为 Windows 侧既建不了也删不了链接项），断言拒绝矩阵（界外祖先、**写入真正交给围栏的那个 key**、目标自己的父级、界内链接、悬空链接、`wsl$` 别名拼写）**加 5 条对照**（真实目录下的缺失组件、根下直接缺失组件、已存在目录、末级文件链接、末级目录链接——都必须仍然放行）；夹具建不起来时**先 FAIL 再跳过**，不允许「链接不存在所以断言空洞地通过」。
 
-**「写入的 key」不是 `canonicalHostPath`**：它是 fs-local 自己那套解析行走出来的 key（`resolveLocalTarget`，`fs-local/src/fsio.ts:161-210`），套件里镜像为 `writeTargetKey`。`canonicalHostPath` 是对**整条路径**做 `realpathSync.native` 加原样兜底，而本节的每个目标尾部都不存在——所以它在**任何**共享上都原样返回，「两个拼写是否相同」根本不是盲性的函数（R=1 曾据此写了一条**会误红**的钉子：把真命题写成了假失败）。换成 write key 之后这条关系才成立：**盲臂**下行走停在夹具根、key 就是原始拼写；**解析臂**下行走穿过链接、key 是链接目标；两臂都由包含性拒绝。
+**发布序列那条钉子跨两代宿主**：它钉的是 `writeFileAtomic` 里「先建目标目录、再建 staging」这个顺序，以及那次 `mkdir` 的失败**不会被任何 catch 吞掉**。宿主有两种写法都满足这一点，钉子两代都认：裸 `await mkdir(...)`（0.2.1-rc.5 及更早），以及 `try { await mkdir(...) } catch (error) { throw ... }`（0.2.2-rc.1，宿主 `8f798da97d`）——后者的 catch **整段只能是 throw**，一旦改成 `void error`、只打日志、先 throw 再 return 或空 catch，钉子立刻变红。变异实测：`swallow` / `log-and-continue` / `rethrow-then-return` / `bare-catch` / `catch-chain` / `promise-outside-guard` / `moved-into-staging-try` / `guard-before-call` 八个变异体**全部判红**，两代真实源码**都判绿**。这条钉子有意不按行号引用宿主源码：行号在宿主换版时会漂，而它的判据是调用名与形状。
+
+**「写入的 key」不是 `canonicalHostPath`**：它是 fs-local 自己那套解析行走出来的 key（`resolveLocalTarget`，`fs-local/src/fsio.ts` 内，按函数名引用），套件里镜像为 `writeTargetKey`。`canonicalHostPath` 是对**整条路径**做 `realpathSync.native` 加原样兜底，而本节的每个目标尾部都不存在——所以它在**任何**共享上都原样返回，「两个拼写是否相同」根本不是盲性的函数（R=1 曾据此写了一条**会误红**的钉子：把真命题写成了假失败）。换成 write key 之后这条关系才成立：**盲臂**下行走停在夹具根、key 就是原始拼写；**解析臂**下行走穿过链接、key 是链接目标；两臂都由包含性拒绝。
 
 **两条臂，两个都不许红**：围栏答什么取决于它的规范化能不能看穿链接，所以上面的期望**不是常量**——按实测的 `blindTo(链接)` 写成关系（`=== !blind`，与大小写那条 `=== foldsCase` 同一形状）。另一条臂（规范化**能**看穿链接）在本机也建得出来：NTFS 目录 junction 是 `realpathSync.native` **会解析**的 reparse point（实测）、不需要特权、`rmSync` 只删链接本身（实测目标不受影响），于是它被**钉住**而不是被论证——在该臂下围栏拒绝的是 write key（包含性，不是盲性），而原始拼写**确实在界内**：这正是「把盲臂期望写成常量」会在健康机器上变红的地方。
 

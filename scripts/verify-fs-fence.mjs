@@ -604,16 +604,35 @@ if (junctionReady) {
 }
 
 // ---------------------------------------------------------------------------
-// Why the refusal costs nothing: the publication's first step is UNGUARDED
+// Why the refusal costs nothing: the publication aborts before anything else
 //
 // The zero-cost half of the rule above — "a write through a component the
 // canonicalizer cannot resolve cannot publish, so refusing it costs nothing that
 // works" — is a claim about fs-local's publication sequence, and it used to live
 // only in a throwaway probe. It is STRUCTURAL, not incidental: the sequence calls
-// `mkdir(directory, {recursive:true})` FIRST and that call sits OUTSIDE every
-// try/catch that could catch it (fs-local/src/fsio.ts:597-649), so when it fails the
-// failure propagates before a staging directory, a temp file or a rename exists.
-// That is why the escape this rule closes left a stray directory and nothing else.
+// `mkdir(directory, {recursive:true})` FIRST (inside `writeFileAtomic`, before the
+// staging directory, the temp file or the rename), so when it fails the failure
+// propagates before anything else exists. That is why the escape this rule closes
+// left a stray directory and nothing else.
+//
+// WHAT THAT CALL SITS INSIDE CHANGED IN THE HOST, and the pin follows the BEHAVIOUR
+// rather than one spelling of it. Measured on the two checkouts, same suite, same
+// machine:
+//
+//   0.2.1-rc.5 and earlier   const directory = dirname(absolutePath)
+//                            await mkdir(directory, { recursive: true })
+//   0.2.2-rc.1 (host 8f798da97d, 2026-10-21)
+//                            const directory = dirname(absolutePath)
+//                            try { await mkdir(directory, { recursive: true }) } catch (error) { throw writeIoError(displayPath, error) }
+//
+// The second generation wraps the SAME call in a guard whose catch RETHROWS through
+// `writeIoError` (fsio.ts: a typed FsError, never a swallow), so the directory is
+// still created before a staging directory, a temp file or a rename exists and the
+// failure still aborts the publication there. What the guard changes is WHO gets to
+// observe the failure — it is still not caught, only wrapped. So the pin accepts
+// EITHER generation, and for the guarded one it additionally requires that the
+// catch's WHOLE body is a rethrow: a catch that returns, logs-and-continues, or
+// assigns a value is the mutation this arm exists to reject.
 //
 // Pinned STRUCTURALLY because the behavioural pin cannot run offline: nothing in
 // this checkout can invoke fs-local's own `writeFileAtomic` (it is not exported by
@@ -624,9 +643,12 @@ if (junctionReady) {
 // first, so a doc comment that names the call cannot satisfy the pin.
 //
 // The mutations that redden it, all run against COPIES so the checkout is never
-// touched: move that call inside the guarded try; wrap it in a try of its own; or
-// open a try BEFORE it (with the catch after it) — the last one is why the window
-// the pin inspects starts at the FUNCTION and not at the `const directory` line.
+// touched: move that call inside the STAGING try (so it aborts after the staging
+// directory exists); open a try BEFORE it whose catch swallows (the call is outside
+// that try, so no window measured from the call's line sees the catch); reorder it
+// after the staging mkdir; or — for the guarded generation — turn its catch into
+// anything but a rethrow. The last one is why the window the pin inspects starts at
+// the FUNCTION and not at the `const directory` line.
 // ---------------------------------------------------------------------------
 console.log('\nthe cost claim: the publication aborts before anything else')
 const publicationSource = join(checkout, 'packages', 'fs', 'fs-local', 'src', 'fsio.ts')
@@ -643,7 +665,7 @@ try {
  * reader could not size what went unmeasured and the tail under-reported it.
  */
 const PUBLICATION_CHECKS = [
-  'the publication creates the target directory as a bare awaited step no guard can catch',
+  'the publication creates the target directory before anything else, where no catch can swallow its failure',
   'the sequence that try guards is the staging one (staging dir, then a rename onto the target)',
 ]
 if (publicationCode === null) {
@@ -661,13 +683,21 @@ if (publicationCode === null) {
   const callText = 'mkdir(directory, { recursive: true })'
   const createDirectory = publicationCode.indexOf(callText, functionStart === -1 ? 0 : functionStart)
   const callEnd = createDirectory === -1 ? -1 : createDirectory + callText.length
-  // The call must be a BARE AWAITED STATEMENT, and four spans are checked for a guard
-  // that could swallow its failure:
+  // The call must be awaited and must NOT be reachable by any catch that could swallow
+  // its rejection. TWO generations of the same guarantee are accepted, because the host
+  // changed the spelling without changing the behaviour (see the header):
+  //   * BARE — `await mkdir(…)` with no try/catch in the enclosing window.
+  //   * GUARDED — `try { await mkdir(…) } catch (error) { throw … }`, where the catch
+  //     body is ONLY a throw. A guard that wraps AND rethrows still aborts the
+  //     publication at the same point; a guard whose catch returns, logs on, assigns a
+  //     value or falls through is a swallow and must redden this.
+  // Four spans reject a swallow in either generation:
   //   * `head` — the token immediately before the call must be `await`. A promise
   //     created OUTSIDE a guard and awaited INSIDE one (`const p = mkdir(…)` followed
   //     by `try { await p } catch {}`) is created by a call whose `head` is `=`, and
   //     no window measured from the call's own line can see the swallow.
-  //   * `tail` — nothing but blank (or a `;`) may follow the call on its line, so a
+  //   * `tail` — nothing but blank, a `;` — or, in the GUARDED generation, the guard's
+  //     own `}` followed by that catch — may follow the call on its line. A
   //     `.catch(() => {})` / `.then(undefined, …)` chain is rejected even though it
   //     contains no try/catch token at all. Comments and string bodies are blanked, so
   //     a trailing comment reads as blank and is allowed.
@@ -685,18 +715,92 @@ if (publicationCode === null) {
   const head = createDirectory === -1 ? '' : publicationCode.slice(Math.max(0, createDirectory - 8), createDirectory)
   const lineEnd = callEnd === -1 ? -1 : publicationCode.indexOf('\n', callEnd)
   const tail = lineEnd === -1 ? null : publicationCode.slice(callEnd, lineEnd)
-  const beforeCreate = functionStart === -1 || createDirectory === -1 ? '' : publicationCode.slice(functionStart, createDirectory)
+  /**
+   * The catch block that closes the call, and where it ends, or null.
+   *
+   * The call's own statement must be followed by nothing but blank, optional `;`s, and
+   * the brace that closes the enclosing block — then a catch. Blank INCLUDES newlines, so
+   * the one-line spelling the host uses today and the multi-line spelling a formatter
+   * would produce are the SAME shape here; anything else between the call and the catch
+   * (an assignment, a second statement) stops the match, which is what keeps an
+   * unrelated catch further down the function from being read as this call's guard.
+   * @param {string} text - the blanked source, starting at the call.
+   * @returns {{body: string, rethrows: boolean, length: number}|null} the catch body,
+   *   whether every one of its statements throws, and where the whole guard ends.
+   */
+  function catchOf(text) {
+    const match = /^[;\s]*\}\s*catch\s*(?:\([^)]*\))?\s*\{/u.exec(text)
+    if (match === null) return null
+    const bodyStart = match[0].length
+    let depth = 1
+    let index = bodyStart
+    while (index < text.length && depth > 0) {
+      if (text[index] === '{') depth += 1
+      else if (text[index] === '}') depth -= 1
+      index += 1
+    }
+    if (depth !== 0) return null
+    const body = text.slice(bodyStart, index - 1)
+    // EVERY statement in the body must be a throw. Splitting on ';' keeps a statement
+    // after a nested block visible, so `if (x) { throw e } return` is not a rethrow —
+    // it can fall through and the publication continues.
+    const statements = body.split(';').map((part) => part.trim()).filter((part) => part !== '')
+    const rethrows = statements.length > 0 && statements.every((part) => /^throw\b/u.test(part))
+    return { body, rethrows, length: index }
+  }
+  const afterCall = callEnd === -1 ? '' : publicationCode.slice(callEnd)
+  const catchBlock = callEnd === -1 ? null : catchOf(afterCall)
+  const guardedGeneration = catchBlock !== null && guardStartOf() !== -1
+  /**
+   * Where the `try {` that wraps ONLY this call opens, or -1.
+   *
+   * Nothing but blank and the call's own `await` may sit between the two, so a try that
+   * opened earlier with other statements in it is a different shape — the one
+   * `beforeCreate` rejects — and is not read as this call's guard.
+   * @returns {number} the offset of the wrapping `try {`, or -1.
+   */
+  function guardStartOf() {
+    if (createDirectory === -1) return -1
+    const opened = publicationCode.lastIndexOf('try {', createDirectory)
+    if (opened === -1) return -1
+    if (!/^\s*await\s*$/u.test(publicationCode.slice(opened + 'try {'.length, createDirectory))) return -1
+    return opened
+  }
+  const bareGeneration = catchBlock === null && tail !== null && /^[;\s]*$/u.test(tail)
+  /**
+   * The span the ACCEPTED guard occupies, or null when the call is not guarded.
+   *
+   * It must close ON the catch read above, not merely somewhere before it: the gap
+   * between the call and that catch's opening brace is blank by construction, so a
+   * guard accepted here is exactly `try { await mkdir(…) } catch (…) { <rethrow only> }`.
+   */
+  const guardOpen = guardedGeneration ? guardStartOf() : -1
+  const catchOpensAt = catchBlock === null ? -1 : afterCall.indexOf('} catch')
+  const guardSpan = guardOpen === -1 || catchBlock === null || catchOpensAt === -1
+    ? null
+    : { from: guardOpen, to: callEnd + catchOpensAt + catchBlock.length }
+  // The windows are read from a copy with the ACCEPTED guard blanked out: that guard is
+  // what this check accepts, and leaving it in would make the guarded generation fail
+  // the very scan that rejects an unrelated guard placed before the call. Offsets are
+  // preserved, so `guarded` and every other index still refer to the real source.
+  const scanCode = guardSpan === null
+    ? publicationCode
+    : publicationCode.slice(0, guardSpan.from)
+      + ' '.repeat(guardSpan.to - guardSpan.from)
+      + publicationCode.slice(guardSpan.to)
+  const beforeCreate = functionStart === -1 || createDirectory === -1 ? '' : scanCode.slice(functionStart, createDirectory)
   const guarded = publicationCode.indexOf('try {', callEnd === -1 ? 0 : callEnd)
-  const toNextTry = callEnd === -1 || guarded === -1 ? '' : publicationCode.slice(callEnd, guarded)
+  const toNextTry = callEnd === -1 || guarded === -1 ? '' : scanCode.slice(callEnd, guarded)
   check(PUBLICATION_CHECKS[0],
     functionStart !== -1 && anchor !== -1 && createDirectory !== -1 && callEnd !== -1 && guarded !== -1
       && anchor < createDirectory && callEnd < guarded
-      && /await\s+$/.test(head)
-      && tail !== null && /^[;\s]*$/.test(tail)
-      && !/\btry\b|\bcatch\b/.test(beforeCreate)
-      && !/\btry\b|\bcatch\b/.test(toNextTry),
+      && /await\s+$/u.test(head)
+      && (bareGeneration || (guardedGeneration && catchBlock.rethrows))
+      && !/\btry\b|\bcatch\b/u.test(beforeCreate)
+      && !/\btry\b|\bcatch\b/u.test(toNextTry),
     `function=${functionStart} anchor=${anchor} mkdir=${createDirectory} callEnd=${callEnd} try=${guarded}`
       + ` head=${JSON.stringify(head)} tail=${JSON.stringify(tail)}`
+      + ` generation=${bareGeneration ? 'bare' : guardedGeneration ? `guarded/rethrows=${catchBlock.rethrows}` : 'unrecognised'} guard=${guardSpan === null ? 'none' : `${guardSpan.from}-${guardSpan.to}`}`
       + ` before=${JSON.stringify(beforeCreate.slice(-60))} toNextTry=${JSON.stringify(toNextTry.slice(-60))}`
       + ` (${publicationSource})`)
   // Bounded to the guarded region itself — from that try to the function's closing

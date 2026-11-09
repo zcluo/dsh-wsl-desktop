@@ -8,6 +8,7 @@ The plugin decides whether a host is usable by probing capabilities at runtime, 
 
 | Plugin | Desktop | Status | Evidence |
 |---|---|---|---|
+| 0.7.6 | 0.2.2-rc.1 | measured | the contract surface is green: `verify-host-contract` 48/48 (all 10 `HOST_IMPORTS` exports resolve against the 0.2.2-rc.1 packages), `verify-modules` loads the entry against the real dependencies, `verify-client-ui` 48 + `verify-client-dom` 86, and the live host serves the client bundle with all 4 required markers (HTTP 200). Two host drifts are on record: `ui-primitives` moved its icons into `artwork.ts` (the `project-add-outline` and `folder-open(-outline)` symbol names are still there, and the trigger plus row icons accept both generations); and `fs-local`'s `writeFileAtomic` now wraps its first `mkdir` in a rethrow-only try (`8f798da97d`), for which the publication-sequence pin accepts both generations. The live gate did not run to completion: this profile has `developerTools: false`, `bootstrap` answers 401, so `verify-route` / `verify-post-restart` were not executed |
 | 0.7.2 | 0.2.1-rc.3 | measured | 0.2.1-rc3's icon-sprite refactor (`ui-primitives` `c3eead771d`) made the W button disappear; this version identifies the trigger by sprite glyph and restores it. `verify-client-dom` / `verify-client-ui` green |
 | 0.7.0 | 0.2.1-rc.2 | measured | this machine's live gate (`verify-all --live`) and `verify-post-restart`, all green |
 | 0.6.0 | 0.2.1-rc.2 | measured | the full live gate at the 0.6.0 release |

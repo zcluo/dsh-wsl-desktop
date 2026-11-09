@@ -8,6 +8,7 @@
 
 | 插件版本 | 桌面版本 | 状态 | 依据 |
 |---|---|---|---|
+| 0.7.6 | 0.2.2-rc.1 | 已实测 | 契约面全绿：`verify-host-contract` 48/48（10 个 `HOST_IMPORTS` 导出对 0.2.2-rc.1 的包逐一可解析）、`verify-modules` 入口对真实依赖加载通过、`verify-client-ui` 48 + `verify-client-dom` 86、活体投放的 client bundle 200 且 4 个必需标记齐全。两处宿主漂移已登记：`ui-primitives` 图标按 `artwork.ts` 重构（`project-add-outline` 与 `folder-open(-outline)` 符号名仍在，触发器与行图标两代都认）；`fs-local` `writeFileAtomic` 把首步 `mkdir` 包进「catch 只重抛」的 try（`8f798da97d`），发布序列钉已改为两代都认。live 门未跑满：该 profile 的 `developerTools` 为 false，`bootstrap` 回 401，`verify-route` / `verify-post-restart` 因此未执行 |
 | 0.7.2 | 0.2.1-rc.3 | 已实测 | 0.2.1-rc3 的图标 sprite 重构（`ui-primitives` `c3eead771d`）曾让 W 按钮消失，本版按 sprite 符号名识别触发器后恢复；`verify-client-dom` / `verify-client-ui` 全绿 |
 | 0.7.0 | 0.2.1-rc.2 | 已实测 | 本机 live 门（`verify-all --live`）与 `verify-post-restart` 全绿 |
 | 0.6.0 | 0.2.1-rc.2 | 已实测 | 0.6.0 发布时的完整 live 门 |
