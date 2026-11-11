@@ -62,6 +62,19 @@ function todo(label, how) {
 }
 
 /**
+ * Whether a tool probe reports the tool as absent.
+ *
+ * The host has spelled the absence two ways across releases: the structured
+ * code `UNKNOWN_TOOL`, and the prose `unknown tool "name"`. The assertion is
+ * that the tool is absent, not which spelling the host used.
+ * @param {string} [text] - the probe's output.
+ * @returns {boolean} whether the tool was reported absent.
+ */
+function toolAbsent(text) {
+  return /UNKNOWN_TOOL|unknown tool/i.test(text ?? '')
+}
+
+/**
  * Call one host method and return its value.
  * @param {string} method - host method name.
  * @param {object} [params] - method payload.
@@ -331,7 +344,7 @@ try {
       && readText.includes('hello from the wsl world'),
     readText.slice(0, 200))
   const pwshText = step('tools.pwsh')?.text ?? ''
-  check('the session exposes no PowerShell tool', pwshText.includes('UNKNOWN_TOOL'), pwshText.slice(0, 200))
+  check('the session exposes no PowerShell tool', toolAbsent(pwshText), pwshText.slice(0, 200))
   // The realm's own search tools. A WSL realm REMOVES the host's grep/glob rows on
   // purpose (their argv[0] is a packaged Windows ripgrep) and this plugin's two rows put
   // the two names back, running the distribution's own grep/find. They are the only tools
@@ -604,7 +617,7 @@ try {
   check('the host PowerShell tool works',
     winStep('tools.pwsh')?.ok === true && (winStep('tools.pwsh')?.text ?? '').length > 0,
     winStep('tools.pwsh')?.text?.slice(0, 160))
-  check('no bash tool exists in the host world', (winStep('tools.bash')?.text ?? '').includes('UNKNOWN_TOOL'), winStep('tools.bash')?.text?.slice(0, 160))
+  check('no bash tool exists in the host world', toolAbsent(winStep('tools.bash')?.text), winStep('tools.bash')?.text?.slice(0, 160))
   // Criterion 3 for the NEW capability: the host world must not have gained a persistent
   // shell either. The probe rows run in this selftest too, so the host session answers them
   // itself — `bash` does not exist in the host world (the shipped row is win32-disabled), and
@@ -626,8 +639,8 @@ try {
   // even while both bash texts still say UNKNOWN_TOOL.
   const winBridge = winStep('tools.persistBridge')
   check('no persistent bash tool leaked into the host world',
-    (winPersistA?.text ?? '').includes('UNKNOWN_TOOL')
-    && (winPersistB?.text ?? '').includes('UNKNOWN_TOOL')
+    toolAbsent(winPersistA?.text)
+    && toolAbsent(winPersistB?.text)
     && winBridge?.ok === false,
     {
       a: winPersistA?.text?.slice(0, 160) ?? 'no tools.bashPersist.a step was recorded',
