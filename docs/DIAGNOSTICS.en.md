@@ -6,6 +6,18 @@ For operators on 0.6.0 and later. It explains the codes the browser sees, the en
 
 The W dialog selects its copy between Chinese (`zh*`) and English from `navigator.language`, covering the error catalog, the health details and the older dialog buttons. Dynamic version strings (`Python x.y`, `dsh-wsl-confine v1.3`) and distribution, user and path values stay verbatim. There is no runtime language switch.
 
+## Keyboard shortcut
+
+The W button registers one command, `wsl.workspace.open`, through the host's shortcut service. The Windows desktop default is `Ctrl+Alt+W`; web and the other platforms declare none. Omitting the web default is deliberate: the sidebar page-close command (`page.close`) already uses `Ctrl+Alt+W` on the web profile, and registration validates every profile's defaults, so declaring it would refuse the command on the desktop too. The command appears in Settings → Keyboard shortcuts and can be rebound, cleared or restored; the tooltip keycaps and the button's `aria-keyshortcuts` both read the command's **effective binding**, so a rebind is visible immediately.
+
+The tooltip is a DOM recreation of the "+" button's tooltip: bottom placement, a 500 ms hover delay, portaled to `body`, on the same theme tokens — not a native `title`.
+
+Degradation and boundaries:
+
+- The plugin declares `shortcuts` as an injected dependency (the desktop has provided it since 0.1.7). When the service is absent the plugin does not activate; that is a host-version boundary, not a degradation path of this plugin.
+- When another command owns the default combination and registration is refused, the console records a warning, the W button keeps working, and the tooltip shows the action name alone.
+- The shortcut service passes `AltGraph` input through untouched; on a layout that maps Ctrl+Alt to AltGr the default combination does not fire, and it can be rebound in Keyboard shortcuts.
+
 ## Error codes
 
 Every failure the browser half sees carries a stable `code` and a whitelisted set of `params`. The host message, `wsl.exe` stderr, resolved Windows paths and stacks never cross the wire; an unclassified internal failure returns only a `ref`, and the matching stack stays in the host log. A development-token caller still receives the human message — that is the debugging surface, not the product surface.

@@ -27,8 +27,8 @@ node scripts/verify-9p-skip.mjs      # 9P 探针「机器只有一个发行版�
 node scripts/verify-confinement.mjs  # 约束围栏：工作区可写、外部被拒、属主正确、含空格路径
 node scripts/verify-terminal.mjs     # PTY 桥：resize / 前台进程组 / 信号 / 终止
 node scripts/verify-pty-handle.mjs   # JS 终端句柄（对着真实桥跑）
-node scripts/verify-client-ui.mjs    # 浏览器半边的静态检查（不注册槽位、定位几何、宿主调用）
-node scripts/verify-client-dom.mjs   # 浏览器半边的行为检查：在 jsdom 里跑真实 factory（挂载位置 / 放不下时的收敛 / 隐藏跟随 / 工作区行图标）
+node scripts/verify-client-ui.mjs    # 浏览器半边的静态检查（不注册槽位、定位几何、宿主调用、快捷键注册与清理）
+node scripts/verify-client-dom.mjs   # 浏览器半边的行为检查：在 jsdom 里跑真实 factory（挂载位置 / 放不下时的收敛 / 隐藏跟随 / 工作区行图标 / 快捷键提示与打开对话框）
 node scripts/verify-modules.mjs      # 宿主半边的结构性钉子：发行版接缝 + `exports` 清单（`./client` 是硬契约）
 node scripts/verify-docs.mjs         # 文档对一致性：声明过的双语文档必须命名同一组产物（语言后缀规范化 + 全角标点分词）
 node scripts/verify-sync.mjs         # 对一次性 profile 跑真 sync.ps1：代次保留四场景（链接可用 / 悬空 / 无链接 / 从未 stage 过）

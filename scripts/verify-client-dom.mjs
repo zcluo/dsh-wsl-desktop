@@ -240,6 +240,106 @@ function matchingPaths(dom) {
     .filter((path) => path.getAttribute('d').startsWith(TRIGGER_PATH)).length
 }
 
+/**
+ * Present one physical binding the way the live shortcut service does on a
+ * Windows device: plus-separated modifiers and one ARIA string. Mirrored here
+ * rather than imported so the fixture asserts the contract the browser half
+ * actually receives, including the `primary` expansion that makes Ctrl+Alt+W.
+ * @param {{ code: string, modifiers: string[] } | null} binding - the binding.
+ * @returns {{ keys: string[], aria: string | undefined }} the presented labels.
+ */
+function presentBinding(binding) {
+  if (binding === null) return { keys: [], aria: undefined }
+  const modifiers = binding.modifiers.map((value) => (value === 'primary' ? 'control' : value))
+  const key = binding.code.startsWith('Key') ? binding.code.slice(3) : binding.code
+  const symbols = { control: 'Ctrl', alt: 'Alt', shift: 'Shift', meta: 'Meta' }
+  const ariaNames = { control: 'Control', alt: 'Alt', shift: 'Shift', meta: 'Meta' }
+  const labels = modifiers.map((value) => symbols[value])
+  return {
+    keys: [...labels, key].flatMap((label, index) => (index === 0 ? [label] : ['+', label])),
+    aria: [...modifiers.map((value) => ariaNames[value]), key].join('+'),
+  }
+}
+
+/**
+ * Mirror the shell's shortcut service: command registration plus the effective
+ * catalog the W hint reads. The catalog row is DERIVED from the registered
+ * command's Windows default, so a wrong default cannot hide behind a stub; the
+ * rebind handle below stands in for a user edit in the shortcut settings.
+ * @returns {{ service: object, commands: Map<string, object>, rebind: Function,
+ *   subscribeCount: () => number }} the stub and its inspection handles.
+ */
+function shortcutService() {
+  const listeners = new Set()
+  const commands = new Map()
+  const overrides = new Map()
+  let rows = []
+  let disposeCalls = 0
+  const rowOf = (command) => {
+    const binding = overrides.has(command.id)
+      ? overrides.get(command.id)
+      : command.defaults['desktop:windows'] ?? null
+    const presented = presentBinding(binding)
+    // A cleared binding keeps the row (the live catalog does) with no keys and
+    // no ARIA, which is exactly what a hint must stop claiming.
+    return {
+      id: command.id, label: command.label(), aliases: command.aliases,
+      keys: presented.keys, aria: presented.aria, binding,
+      modified: overrides.has(command.id), conflicts: [], issue: null,
+    }
+  }
+  const publish = () => {
+    rows = [...commands.values()].map(rowOf)
+    for (const listener of [...listeners]) listener()
+  }
+  const service = {
+    platform: 'windows',
+    runtime: 'desktop',
+    catalog: {
+      getSnapshot: () => rows,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    },
+    register: (command) => {
+      if (commands.has(command.id)) throw new Error(`duplicate shortcut command: ${command.id}`)
+      // The live service validates EVERY profile's defaults at registration,
+      // not only the running one. A default that collides with another
+      // command's web binding therefore refuses registration on the desktop
+      // too — the failure the page-close seed below reproduces.
+      const normalize = (binding, platform) => {
+        const modifiers = new Set(binding.modifiers.map((value) => (value === 'primary' ? (platform === 'macos' ? 'meta' : 'control') : value)))
+        return { code: binding.code, modifiers: ['control', 'alt', 'shift', 'meta'].filter((value) => modifiers.has(value)) }
+      }
+      const overlaps = (left, right) => left.code === right.code && left.modifiers.join('+') === right.modifiers.join('+')
+      for (const runtime of ['desktop', 'web']) {
+        for (const platform of ['macos', 'windows', 'linux']) {
+          const mine = command.defaults[`${runtime}:${platform}`]
+          if (mine === undefined) continue
+          for (const existing of commands.values()) {
+            const other = existing.defaults[`${runtime}:${platform}`]
+            if (other === undefined) continue
+            if (overlaps(normalize(mine, platform), normalize(other, platform))) {
+              throw new Error(`Conflicting shortcut defaults: ${command.id} and ${existing.id} (${runtime}:${platform})`)
+            }
+          }
+        }
+      }
+      commands.set(command.id, command)
+      publish()
+      return () => { commands.delete(command.id); disposeCalls += 1; publish() }
+    },
+  }
+  return {
+    service,
+    commands,
+    rebind: (id, binding) => { overrides.set(id, binding); publish() },
+    subscribeCount: () => listeners.size,
+    disposeCalls: () => disposeCalls,
+  }
+}
+
 console.log(`running ${clientPath} in jsdom\n`)
 
 console.log('wide sidebar')
@@ -257,6 +357,414 @@ console.log('wide sidebar')
   check('it carries the shipped icon-button class', live.button?.className === 'iconButton')
   live.dispose()
   check('dispose removes it', parts.dom.window.document.querySelector('[data-wsl-desktop]') === null)
+}
+
+console.log('\nthe W shortcut hint')
+{
+  // One registered command, its effective catalog row, and the aria claim that
+  // turns the row into an assistive-technology shortcut.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: shortcuts.service })
+  await settle()
+  const command = shortcuts.commands.get('wsl.workspace.open')
+  check('the W button registers one shortcut command',
+    shortcuts.commands.size === 1 && command !== undefined, [...shortcuts.commands.keys()])
+  check('the shortcut defaults to Ctrl+Alt+W on the Windows desktop profile',
+    command?.defaults?.['desktop:windows']?.code === 'KeyW'
+    && command?.defaults?.['desktop:windows']?.modifiers?.join('+') === 'primary+alt',
+    command?.defaults)
+  check('the command declares no Web default, which page.close already owns as Ctrl+Alt+W',
+    command?.defaults?.['web:windows'] === undefined && command?.defaults?.['web:macos'] === undefined,
+    command?.defaults)
+  check('the command carries the W action label and both input regions',
+    command?.label?.() === 'Add a WSL workspace'
+    && command?.regions?.includes('page') === true
+    && command?.regions?.includes('editable') === true
+    && command?.regions?.includes('terminal') !== true,
+    { label: command?.label?.(), regions: command?.regions })
+  check('the command allows the sidebar modal, as the shipped add command does',
+    command?.modals?.includes('sidebar') === true, command?.modals)
+  check('the W button advertises the effective binding',
+    live.button?.getAttribute('aria-keyshortcuts') === 'Control+Alt+W',
+    live.button?.getAttribute('aria-keyshortcuts'))
+  check('the W button no longer depends on the native title tooltip',
+    live.button?.hasAttribute('title') !== true)
+
+  // The bubble itself: portaled, labelled, and carrying the catalog's keys.
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  const doc = parts.dom.window.document
+  const bubble = doc.querySelector('[data-wsl-shortcut-tooltip]')
+  check('hovering the W button reveals the shortcut tooltip',
+    bubble !== null && bubble.style.display !== 'none',
+    `display=${JSON.stringify(bubble?.style.display)}`)
+  check('the tooltip is portaled beside the page, not clipped inside the header',
+    bubble?.parentElement === doc.body && bubble?.style.position === 'fixed',
+    `parent=${bubble?.parentElement?.tagName} position=${bubble?.style.position}`)
+  check('the tooltip names the W action',
+    bubble?.querySelector('[data-wsl-tooltip-label]')?.textContent === 'Add a WSL workspace',
+    bubble?.querySelector('[data-wsl-tooltip-label]')?.textContent)
+  check('the tooltip renders the effective keycaps',
+    [...(bubble?.querySelectorAll('kbd') ?? [])].map((key) => key.textContent).join(' ') === 'Ctrl + Alt + W',
+    [...(bubble?.querySelectorAll('kbd') ?? [])].map((key) => key.textContent))
+  check('the tooltip is a visual aid, not a second accessible name',
+    bubble?.getAttribute('role') === 'tooltip' && bubble?.getAttribute('aria-hidden') === 'true')
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerleave'))
+  check('leaving the button hides the tooltip', bubble?.style.display === 'none')
+
+  // Keyboard focus raises the same bubble. A pointer-acquired focus stays
+  // quiet, so closing the picker back onto the button does not flash it.
+  doc.documentElement.dataset.inputModality = 'pointer'
+  live.button?.focus()
+  await new Promise((resolve) => { setTimeout(resolve, 20) })
+  check('a pointer-acquired focus does not raise the tooltip', bubble?.style.display === 'none')
+  delete doc.documentElement.dataset.inputModality
+  live.button?.blur()
+  live.button?.focus()
+  await new Promise((resolve) => { setTimeout(resolve, 20) })
+  check('keyboard focus raises the tooltip too',
+    bubble !== null && bubble.style.display !== 'none', bubble?.style.display)
+
+  // The shipped Tooltip keeps hover and focus as INDEPENDENT triggers: hovering
+  // away from a focused anchor must not drop the bubble, and blurring while the
+  // pointer is still over the anchor must not drop it either. Only the last
+  // trigger clearing withdraws it.
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerleave'))
+  check('pointer leave keeps the tooltip while the button stays focused',
+    bubble !== null && bubble.style.display !== 'none', bubble?.style.display)
+  live.button?.blur()
+  check('blur hides the tooltip once focus is gone', bubble?.style.display === 'none')
+
+  live.button?.focus()
+  await new Promise((resolve) => { setTimeout(resolve, 20) })
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  live.button?.blur()
+  check('blur keeps the tooltip while the pointer stays over the button',
+    bubble !== null && bubble.style.display !== 'none', bubble?.style.display)
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerleave'))
+  check('leaving hides the tooltip once focus is gone', bubble?.style.display === 'none')
+
+  // A rebind in the shortcut settings is a catalog replacement; the hint must
+  // follow it rather than keep the default it first saw.
+  shortcuts.rebind('wsl.workspace.open', { code: 'KeyW', modifiers: ['control', 'shift'] })
+  await settle()
+  check('rebinding updates aria-keyshortcuts',
+    live.button?.getAttribute('aria-keyshortcuts') === 'Control+Shift+W',
+    live.button?.getAttribute('aria-keyshortcuts'))
+  check('rebinding updates the visible keycaps',
+    [...(bubble?.querySelectorAll('kbd') ?? [])].map((key) => key.textContent).join(' ') === 'Ctrl + Shift + W',
+    [...(bubble?.querySelectorAll('kbd') ?? [])].map((key) => key.textContent))
+  shortcuts.rebind('wsl.workspace.open', null)
+  await settle()
+  check('clearing the binding drops the aria claim',
+    live.button?.hasAttribute('aria-keyshortcuts') !== true)
+  check('clearing the binding leaves only the action name on the tooltip',
+    bubble?.querySelectorAll('kbd')?.length === 0
+    && bubble?.querySelector('[data-wsl-tooltip-label]')?.textContent === 'Add a WSL workspace',
+    bubble?.querySelectorAll('kbd')?.length)
+
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerleave'))
+  check('the command and one catalog subscription are live while mounted',
+    shortcuts.commands.size === 1 && shortcuts.subscribeCount() === 1,
+    `commands=${shortcuts.commands.size} subscriptions=${shortcuts.subscribeCount()}`)
+  live.dispose()
+  check('dispose unregisters the shortcut command',
+    shortcuts.commands.size === 0 && shortcuts.disposeCalls() === 1,
+    `commands=${shortcuts.commands.size} disposals=${shortcuts.disposeCalls()}`)
+  check('dispose releases the catalog subscription and the tooltip bubble',
+    shortcuts.subscribeCount() === 0 && doc.querySelector('[data-wsl-shortcut-tooltip]') === null,
+    `subscriptions=${shortcuts.subscribeCount()} bubbles=${doc.querySelectorAll('[data-wsl-shortcut-tooltip]').length}`)
+}
+
+console.log('\nthe shortcut tooltip follows the button out of view')
+{
+  // Inline search expansion hides the shipped action cluster, and the plugin
+  // hides the companion with it. The pointer never leaves the button (it left
+  // the hit-test tree), so no pointerleave is guaranteed; the tooltip must be
+  // withdrawn by the same layout pass that hides the button.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: shortcuts.service })
+  await settle()
+  const doc = parts.dom.window.document
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  const bubble = doc.querySelector('[data-wsl-shortcut-tooltip]')
+  check('the tooltip is visible before the header hides it',
+    bubble !== null && bubble.style.display !== 'none', bubble?.style.display)
+  parts.cluster.classList.add('hidden')
+  parts.row.append(doc.createElement('i'))
+  await settle()
+  check('hiding the companion withdraws its tooltip',
+    bubble !== null && bubble.style.display === 'none', bubble?.style.display)
+
+  // The layout-driven withdrawal must also CLEAR the triggers, like the shipped
+  // Tooltip's disabled effect. Otherwise the stale hover survives the hide: after
+  // the header returns and the button is focused then blurred, the old hover
+  // would keep the bubble on screen with no pointer over the anchor.
+  parts.cluster.classList.remove('hidden')
+  parts.row.append(doc.createElement('i'))
+  await settle()
+  check('the companion returns when the header shows it again',
+    live.button?.style.display === '', live.button?.style.display)
+  live.button?.focus()
+  await new Promise((resolve) => { setTimeout(resolve, 20) })
+  check('focus after the return shows the hint again',
+    bubble !== null && bubble.style.display !== 'none', bubble?.style.display)
+  live.button?.blur()
+  check('blur after a layout-driven hide does not resurrect the stale hover',
+    bubble?.style.display === 'none', bubble?.style.display)
+  live.dispose()
+}
+{
+  // A React replacement can take the trigger (and the companion with it) out of
+  // the document while the tooltip is showing; the hint must not outlive it.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: shortcuts.service })
+  await settle()
+  const doc = parts.dom.window.document
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  const bubble = doc.querySelector('[data-wsl-shortcut-tooltip]')
+  check('the tooltip is visible before the anchor is detached',
+    bubble !== null && bubble.style.display !== 'none', bubble?.style.display)
+  parts.trigger.remove()
+  parts.row.append(doc.createElement('i'))
+  await settle()
+  check('removing the anchor withdraws the tooltip too',
+    bubble !== null && bubble.style.display === 'none', bubble?.style.display)
+  live.dispose()
+}
+
+console.log('\nthe shortcut tooltip refuses a zero-area anchor')
+{
+  // Closing the picker refocuses its opener. If that opener is inside a
+  // subtree that is already hidden, its box is zero; placing a fixed bubble
+  // from that box would paint it at the viewport origin.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: shortcuts.service })
+  await settle()
+  parts.dom.window.Element.prototype.getBoundingClientRect = function () {
+    return { x: 0, y: 0, width: 0, height: 0, left: 0, top: 0, right: 0, bottom: 0, toJSON: () => ({}) }
+  }
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  const bubble = parts.dom.window.document.querySelector('[data-wsl-shortcut-tooltip]')
+  check('a zero-area anchor does not raise the tooltip',
+    bubble === null || bubble.style.display === 'none', bubble?.style.display)
+  live.dispose()
+}
+
+{
+  // A media query can collapse the header on resize without a DOM mutation, so
+  // the layout pass never runs. The resize handler must not reposition a bubble
+  // from a zero box; it has to withdraw it.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: shortcuts.service })
+  await settle()
+  const doc = parts.dom.window.document
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  const bubble = doc.querySelector('[data-wsl-shortcut-tooltip]')
+  check('the tooltip is visible before the resize',
+    bubble !== null && bubble.style.display !== 'none', bubble?.style.display)
+  parts.dom.window.Element.prototype.getBoundingClientRect = function () {
+    return { x: 0, y: 0, width: 0, height: 0, left: 0, top: 0, right: 0, bottom: 0, toJSON: () => ({}) }
+  }
+  parts.dom.window.dispatchEvent(new parts.dom.window.Event('resize'))
+  check('a resize that collapses the anchor withdraws the tooltip',
+    bubble !== null && bubble.style.display === 'none', bubble?.style.display)
+  live.dispose()
+}
+
+console.log('\nthe degraded entry advertises the shortcut')
+{
+  // The fallback chip is the only visible entry while the sidebar anchor is
+  // missing; the shortcut still works then, so the claim belongs on it too.
+  const parts = fixture()
+  parts.trigger.remove()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  const realSetTimeout = parts.dom.window.setTimeout
+  parts.dom.window.setTimeout = (callback, ms, ...args) => realSetTimeout(callback, ms === 5000 ? 20 : ms, ...args)
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: shortcuts.service })
+  await new Promise((resolve) => { setTimeout(resolve, 100) })
+  const open = parts.dom.window.document.querySelector('[data-wsl-fallback-entry]')
+  check('the degraded entry carries the effective binding',
+    open?.getAttribute('aria-keyshortcuts') === 'Control+Alt+W',
+    open?.getAttribute('aria-keyshortcuts'))
+  shortcuts.rebind('wsl.workspace.open', { code: 'KeyW', modifiers: ['control', 'shift'] })
+  await settle()
+  check('a rebind reaches the degraded entry too',
+    open?.getAttribute('aria-keyshortcuts') === 'Control+Shift+W',
+    open?.getAttribute('aria-keyshortcuts'))
+  live.dispose()
+}
+
+console.log('\nthe shortcut catalog failing does not take the button down')
+{
+  // The shortcut service is injected, so a throwing catalog means the shell is
+  // already broken. The hint is still peripheral: a failed read must not abort
+  // the install that owns the W button and its picker.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const warnings = []
+  const originalWarn = parts.dom.window.console.warn
+  parts.dom.window.console.warn = (...args) => { warnings.push(args.map(String).join(' ')) }
+  const broken = {
+    register: () => () => {},
+    catalog: {
+      getSnapshot: () => { throw new Error('catalog down') },
+      subscribe: () => { throw new Error('subscribe down') },
+    },
+  }
+  let thrown = null
+  let live = null
+  try {
+    live = apply(parts.dom, { items: [] }, undefined, { shortcuts: broken })
+  } catch (error) {
+    thrown = error
+  }
+  await settle()
+  parts.dom.window.console.warn = originalWarn
+  check('a broken shortcut catalog does not take the W button down',
+    live?.button?.isConnected === true, thrown?.message)
+  check('a broken shortcut catalog does not claim a binding',
+    live?.button?.hasAttribute('aria-keyshortcuts') !== true)
+  check('a broken shortcut catalog is reported on the console',
+    warnings.some((line) => line.includes('快捷键')), warnings)
+  live?.dispose()
+}
+
+console.log('\nthe shortcut coexists with the shell page-close defaults')
+{
+  // ui-sidebar-right's page.close uses KeyW+primary+alt on web:windows (and
+  // web:macos); the live registry validates every profile's defaults, so a
+  // Ctrl+Alt+W web default on our command makes registration throw even on a
+  // desktop runtime. This is the live failure the jsdom fixture now models.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  shortcuts.service.register({
+    id: 'page.close',
+    label: () => 'Close page',
+    aliases: ['close', 'page'],
+    defaults: {
+      'desktop:windows': { code: 'KeyW', modifiers: ['primary'] },
+      'web:windows': { code: 'KeyW', modifiers: ['primary', 'alt'] },
+      'web:macos': { code: 'KeyW', modifiers: ['primary', 'alt'] },
+    },
+    regions: ['page'],
+    modals: [],
+    resolve: () => ({ status: 'pass' }),
+  })
+  const warnings = []
+  const originalWarn = parts.dom.window.console.warn
+  parts.dom.window.console.warn = (...args) => { warnings.push(args.map(String).join(' ')) }
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: shortcuts.service })
+  await settle()
+  parts.dom.window.console.warn = originalWarn
+  const command = shortcuts.commands.get('wsl.workspace.open')
+  check('the W shortcut registers beside page.close instead of being refused',
+    command !== undefined, warnings)
+  check('the W button still advertises Ctrl+Alt+W next to page.close',
+    live.button?.getAttribute('aria-keyshortcuts') === 'Control+Alt+W',
+    live.button?.getAttribute('aria-keyshortcuts'))
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  const bubble = parts.dom.window.document.querySelector('[data-wsl-shortcut-tooltip]')
+  check('the tooltip still carries the keycaps beside page.close',
+    [...(bubble?.querySelectorAll('kbd') ?? [])].map((key) => key.textContent).join(' ') === 'Ctrl + Alt + W',
+    [...(bubble?.querySelectorAll('kbd') ?? [])].map((key) => key.textContent))
+  live.dispose()
+}
+
+console.log('\nthe shortcut opens the picker')
+{
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const shortcuts = shortcutService()
+  const stub = routeStub({
+    bootstrap: () => healthyBootstrap(),
+    listDistros: () => ({ ok: true, value: [] }),
+    defaultDistro: () => ({ ok: true, value: { distro: 'debian' } }),
+  })
+  const live = apply(parts.dom, { items: [] }, stub, { shortcuts: shortcuts.service })
+  await settle()
+  const command = shortcuts.commands.get('wsl.workspace.open')
+  const resolution = command?.resolve?.({ region: 'page', modal: null, target: null })
+  check('the shortcut resolves as a handled action', resolution?.status === 'handled', resolution?.status)
+  resolution?.run?.()
+  await settle()
+  const dialog = parts.dom.window.document.querySelector('[role="dialog"]')
+  check('running the shortcut opens the same W dialog as the button',
+    dialog !== null && dialog.getAttribute('aria-label') === 'Add a WSL workspace',
+    dialog?.getAttribute('aria-label'))
+  check('the shortcut starts the picker bootstrap rather than a bare overlay',
+    stub.calls.includes('bootstrap') === true, stub.calls)
+  live.dispose()
+}
+
+console.log('\nthe W shortcut degrades without taking the button down')
+{
+  // A desktop whose shortcut catalog refuses this default (another plugin owns
+  // Ctrl+Alt+W) must keep the W button; only the keycap claim disappears.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const warnings = []
+  const originalWarn = parts.dom.window.console.warn
+  parts.dom.window.console.warn = (...args) => { warnings.push(args.map(String).join(' ')) }
+  const refusing = {
+    register: () => { throw new Error('reserved shortcut default') },
+    catalog: { getSnapshot: () => [], subscribe: () => () => {} },
+  }
+  const live = apply(parts.dom, { items: [] }, undefined, { shortcuts: refusing })
+  await settle()
+  parts.dom.window.console.warn = originalWarn
+  check('a refused registration leaves the W button mounted',
+    live.button?.isConnected === true)
+  check('a refused registration does not claim a shortcut',
+    live.button?.hasAttribute('aria-keyshortcuts') !== true)
+  check('a refused registration is reported on the console',
+    warnings.some((line) => line.includes('快捷键')), warnings)
+  live.dispose()
+}
+{
+  // The inject declaration gates activation on a real host, but the apply path
+  // still has to tolerate a context without the service (a harness that calls
+  // apply directly, or a future detached shell). The button and the label-only
+  // tooltip must work, and nothing may claim a key binding.
+  const parts = fixture()
+  layout(parts, 344, 60)
+  const live = apply(parts.dom)
+  await settle()
+  const doc = parts.dom.window.document
+  check('without the shortcut service the W button still mounts',
+    live.button?.isConnected === true)
+  check('without the shortcut service no aria binding is claimed',
+    live.button?.hasAttribute('aria-keyshortcuts') !== true)
+  live.button?.dispatchEvent(new parts.dom.window.Event('pointerenter'))
+  await new Promise((resolve) => { setTimeout(resolve, 600) })
+  const bubble = doc.querySelector('[data-wsl-shortcut-tooltip]')
+  check('without the shortcut service the tooltip still names the action',
+    bubble?.style.display !== 'none'
+    && bubble?.querySelector('[data-wsl-tooltip-label]')?.textContent === 'Add a WSL workspace',
+    bubble?.querySelector('[data-wsl-tooltip-label]')?.textContent)
+  check('without the shortcut service the tooltip carries no keycaps',
+    bubble?.querySelectorAll('kbd')?.length === 0,
+    bubble?.querySelectorAll('kbd')?.length)
+  live.dispose()
 }
 
 console.log('\ncollapsed rail (no room for a third icon)')

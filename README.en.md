@@ -86,6 +86,14 @@ A few details you will run into:
   this plugin does not override it.
 - Inside an open WSL workspace, the file list and the terminal are the distro's. PowerShell in Windows
   workspaces is unaffected.
+- **The W button has its own shortcut, and its hint follows a rebind.** The Windows desktop default is
+  `Ctrl+Alt+W` (the web profile declares none: the sidebar page-close command's web binding is the
+  same combination, and registration validates every profile's defaults, so declaring it would refuse
+  the command on the desktop too); hovering or focusing W shows the action name and keycaps the same way the
+  adjacent "+" does. The command is registered in Keyboard shortcuts, so rebinding or clearing it
+  updates the keycaps and `aria-keyshortcuts` immediately. When another command already owns the
+  default combination and registration is refused, the W button still works and merely omits the
+  keycaps; the shortcut service itself is a desktop dependency present since 0.1.7.
 
 ## What will surprise you
 

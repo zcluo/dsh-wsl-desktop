@@ -130,7 +130,8 @@ check('observes the document element, not a body that may not exist yet',
 // cannot be satisfied by prose.
 check('the steady-state visibility is a style write, and no interval drives the sync',
   !code.includes('setInterval')
-  && /button\.style\.display\s*=\s*fits\s*&&\s*triggerVisible\s*\?/.test(code))
+  && /const shown = fits && triggerVisible/.test(code)
+  && /button\.style\.display = shown \?/.test(code))
 check('follows the shipped actions when the header hides them',
   source.includes("getComputedStyle(trigger).visibility !== 'hidden'"))
 check('prefers the shipped cluster and stands down on an unrecognised duplicate',
@@ -304,6 +305,33 @@ check('the browse phase renders the advisory health strip', source.includes('dat
 check('a missing sidebar anchor has a visible fallback entry', source.includes('data-wsl-fallback-entry'))
 check('the W button advertises and tracks the dialog',
   source.includes("aria-haspopup") && source.includes("aria-expanded"))
+
+console.log('\nthe W shortcut')
+
+check('injects the shortcut service the hint reads',
+  injected.includes('shortcuts') && /ctx\.shortcuts(?![A-Za-z0-9_$])/.test(code),
+  `inject=[${injected.join(', ')}] reads=${reads.join(', ')}`)
+check('registers one stable W shortcut command through the service',
+  /const shortcuts = ctx\.shortcuts/.test(code) && code.includes('shortcuts.register({')
+  && source.includes("SHORTCUT_ID = 'wsl.workspace.open'"))
+const shortcutDefaults = /defaults:\s*\{([\s\S]*?)\},\s*regions:/.exec(source)?.[1] ?? ''
+check('binds Ctrl+Alt+W on the Windows desktop profile',
+  /\x27desktop:windows\x27:\s*\{\s*code:\s*\x27KeyW\x27,\s*modifiers:\s*\[\x27primary\x27,\s*\x27alt\x27\]\s*\}/.test(shortcutDefaults))
+check('declares no Web default that the shell page-close command already owns as Ctrl+Alt+W',
+  shortcutDefaults !== '' && !/\x27web:/.test(shortcutDefaults))
+const hardcodedKeyLabels = stringLiterals(source)
+  .map((literal) => literal.text)
+  .filter((literal) => /Ctrl\s*\+\s*Alt\s*\+\s*W|Control\+Alt\+W/.test(literal))
+check('shows the effective catalog binding instead of a hardcoded key label',
+  /ctx\.shortcuts\?\.catalog/.test(code) && hardcodedKeyLabels.length === 0,
+  hardcodedKeyLabels.join(' | '))
+check('the shortcut opens the same picker the button opens',
+  /resolve[\s\S]{0,240}openPicker\(ctx\)/.test(code))
+check('advertises the effective binding with aria-keyshortcuts',
+  source.includes('aria-keyshortcuts') && code.includes('row.aria'))
+check('releases the command, its subscription and the hint on dispose',
+  code.includes('disposeShortcut()') && code.includes('disposeCatalog()')
+  && code.includes('hint.dispose()'))
 
 console.log('\nlocalised copy and dialog accessibility')
 

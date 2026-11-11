@@ -28,6 +28,7 @@ harness 在会话**创建**时就把 preset 定下来（`SessionCreateRequest.ag
 - **隐藏必须用 `display`，不能用 `remove()`。** 观察器监听的是 `childList`，`remove()` 自己就是下一次触发，两者会以刷新率互相喂养（实测 52 次/2.6s，每次还带两次强制布局）。放不下时设 `display: none`，它不是 childList 变更，因此收敛。
 - **不要用定时器兜底。** 曾经的 `setInterval(sync, 2000)` 就是这个回路的种子；重新挂载/portal 都是被观察子树上的 childList 变更，定时器不解决任何真实情况。
 - 伴随按钮只在"+"可见时显示（内联搜索展开时随官方动作簇一起隐藏），并且当有第二个控件带同样图标几何时优先选 `*_headerActions` 簇里的那个，认不出来就整体让位而不是猜。
+- **快捷键是宿主命令目录里的一条命令，不是按钮自己的键盘监听。** `wsl.workspace.open` 以 `Ctrl+Alt+W` 作为 Windows 桌面的默认，经 `ctx.shortcuts.register()` 注册（Web 平台不声明默认：侧栏页面关闭（`page.close`）的 Web 组合也是 `Ctrl+Alt+W`，而注册会校验所有 profile 的默认值，声明它会让命令在桌面端也注册失败）：命令可在「快捷键」里改绑，提示里的键帽与 `aria-keyshortcuts` 都读目录里的**有效绑定**，所以改绑立即随动。提示是「+」按钮 tooltip 的 DOM 复刻（底部、500ms、portal、同一组主题 token），不是原生 `title`；默认组合被占用导致注册被拒时只写 `console`，W 按钮不受影响。
 
 ## 终端 registry 行
 
