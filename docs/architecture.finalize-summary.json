@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "docs/diagrams-src/architecture.json",
-    "sha256": "ac8cb6279bc94b4082a23c507235d5ad1d29c25466c046e1c2faa9eb3c7d63db",
+    "sha256": "229bce02f7c28f79d876edc06d6ff28e84d88fd6e4aa7899acebf89e5a7e1895",
     "bytes": 10460
   },
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "9377fae2035cafc7456bead9ea20e19690ee99d9ff7ec5dc56ab211cb2900fdd",
+    "sha256": "5ea3ccd1d2dc278a296dbce1b8c67dd441c618829e151d236e5883269bec0e7f",
     "bytes": 842896
   },
   "gates": {
@@ -37,13 +37,13 @@
     "installedVersion": "3.2.0",
     "availableVersion": "3.2.0",
     "releaseNotes": null,
-    "checkedAt": "2026-10-27T05:10:01.079Z",
-    "source": "cache",
+    "checkedAt": "2026-11-11T06:36:38.107Z",
+    "source": "network",
     "noticeRequired": false,
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 5929,
+  "durationMs": 5673,
   "browserCheck": {
     "requested": true,
     "ran": true

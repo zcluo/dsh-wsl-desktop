@@ -5,10 +5,11 @@
   "evidenceKind": "automated-browser",
   "status": "pass",
   "visualReview": "pending",
-  "provenance": "unknown",
+  "provenance": "current",
+  "deliveryReceiptId": "24080229-6563-494b-b214-0596191dd241",
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "d627ba3294e9da8017de7e0f192bf2c27707c5f6c5edacd16e2e46cbd9d1f2c4",
+    "sha256": "5ea3ccd1d2dc278a296dbce1b8c67dd441c618829e151d236e5883269bec0e7f",
     "bytes": 842896
   },
   "state": {
@@ -919,8 +920,8 @@
         "file": "architecture.visual-check.2048x1320.light.png"
       },
       {
-        "sha256": "c48a480c478142a09f73449e7f01691f32789dec72e269e3ae2916d569ef60f3",
-        "bytes": 240569,
+        "sha256": "ac58bcf83321a34ef26e1cab0f6cef19556e96809bc939a0ca34912682d8b2c1",
+        "bytes": 240550,
         "file": "architecture.visual-check.2048x1320.dark.png"
       }
     ]

@@ -5,15 +5,15 @@
   "status": "pass",
   "type": "architecture",
   "quality": "showcase",
-  "startedAt": "2026-10-27T08:35:41.325Z",
+  "startedAt": "2026-11-11T06:36:37.878Z",
   "specification": {
     "path": "docs/diagrams-src/architecture.json",
-    "sha256": "ac8cb6279bc94b4082a23c507235d5ad1d29c25466c046e1c2faa9eb3c7d63db",
+    "sha256": "229bce02f7c28f79d876edc06d6ff28e84d88fd6e4aa7899acebf89e5a7e1895",
     "bytes": 10460
   },
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "9377fae2035cafc7456bead9ea20e19690ee99d9ff7ec5dc56ab211cb2900fdd",
+    "sha256": "5ea3ccd1d2dc278a296dbce1b8c67dd441c618829e151d236e5883269bec0e7f",
     "bytes": 842896
   },
   "stages": {
@@ -40,7 +40,7 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "ac8cb6279bc94b4082a23c507235d5ad1d29c25466c046e1c2faa9eb3c7d63db",
+          "sha256": "229bce02f7c28f79d876edc06d6ff28e84d88fd6e4aa7899acebf89e5a7e1895",
           "bytes": 10460
         },
         "validation": {
@@ -56,7 +56,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1120,
+      "durationMs": 1064,
       "command": [
         "nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
@@ -72,18 +72,18 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "c46442de-31c0-4470-ba30-2e6e084f79ff",
+        "receiptId": "24080229-6563-494b-b214-0596191dd241",
         "ok": true,
         "command": "deliver",
         "type": "architecture",
         "input": "docs/diagrams-src/architecture.json",
         "output": "docs/architecture.html",
         "specification": {
-          "sha256": "ac8cb6279bc94b4082a23c507235d5ad1d29c25466c046e1c2faa9eb3c7d63db",
+          "sha256": "229bce02f7c28f79d876edc06d6ff28e84d88fd6e4aa7899acebf89e5a7e1895",
           "bytes": 10460
         },
         "artifact": {
-          "sha256": "9377fae2035cafc7456bead9ea20e19690ee99d9ff7ec5dc56ab211cb2900fdd",
+          "sha256": "5ea3ccd1d2dc278a296dbce1b8c67dd441c618829e151d236e5883269bec0e7f",
           "bytes": 842896
         },
         "validation": {
@@ -97,7 +97,7 @@
         "evidence": {
           "verified": true,
           "repository": "https://github.com/zcluo/dsh-wsl-desktop",
-          "revision": "2bd75e52bf026905b3002dde9719cb1ead349c6d",
+          "revision": "459c40d632c78a4ea3ba2bc42c89fc668a766625",
           "references": 13
         },
         "update": {
@@ -116,7 +116,7 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 266,
+      "durationMs": 280,
       "command": [
         "nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
@@ -128,7 +128,7 @@
         "ok": true,
         "file": "docs/architecture.html",
         "artifact": {
-          "sha256": "9377fae2035cafc7456bead9ea20e19690ee99d9ff7ec5dc56ab211cb2900fdd",
+          "sha256": "5ea3ccd1d2dc278a296dbce1b8c67dd441c618829e151d236e5883269bec0e7f",
           "bytes": 842896
         },
         "checks": [
@@ -359,13 +359,13 @@
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "c46442de-31c0-4470-ba30-2e6e084f79ff"
+        "deliveryReceiptId": "24080229-6563-494b-b214-0596191dd241"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 3927,
+      "durationMs": 3728,
       "command": [
         "nodejs/node.exe",
         ".superpowers/archify-3.2.0/extracted/archify/bin/archify.mjs",
@@ -383,10 +383,10 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "c46442de-31c0-4470-ba30-2e6e084f79ff",
+        "deliveryReceiptId": "24080229-6563-494b-b214-0596191dd241",
         "artifact": {
           "path": "docs/architecture.html",
-          "sha256": "9377fae2035cafc7456bead9ea20e19690ee99d9ff7ec5dc56ab211cb2900fdd",
+          "sha256": "5ea3ccd1d2dc278a296dbce1b8c67dd441c618829e151d236e5883269bec0e7f",
           "bytes": 842896
         },
         "state": {
@@ -1085,15 +1085,15 @@
     "browserCheckReceipt": "docs/architecture.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-10-27T08:35:47.255Z",
-  "durationMs": 5929,
+  "finishedAt": "2026-11-11T06:36:43.552Z",
+  "durationMs": 5673,
   "update": {
     "status": "current",
     "installedVersion": "3.2.0",
     "availableVersion": "3.2.0",
     "releaseNotes": null,
-    "checkedAt": "2026-10-27T05:10:01.079Z",
-    "source": "cache",
+    "checkedAt": "2026-11-11T06:36:38.107Z",
+    "source": "network",
     "noticeRequired": false,
     "noticeText": null
   }
