@@ -112,7 +112,11 @@
 
 1. 跑 `node scripts/release-check.mjs --version <目标>`；它会把 `minimumReleaseAge` 的 `readyAt` 算出来。
 2. 窗口没开（`ready === false`）就**不要** `remove_bundle`——那样 profile 会在一小时内没有任何插件。
-3. 窗口开了再按 `remove_bundle` → `install_bundle <目标>` → 重启 → `verify-post-restart` 的顺序做。
+3. 窗口开了再按 `remove_bundle` → `install_bundle <目标>` → 重启 的顺序做。
+
+**`verify-post-restart` 必须在切换之前跑，不能放在之后。** 它和整组 live 套件都靠开发令牌调用路由，而**发布出去的包里 `cordis.patch.yml` 没有 `config` 块，`developerTools` 是关闭的**——切到 registry 形态后开发令牌一律 401，`presetStatus` 等方法也不在浏览器命名空间里。实测（0.8.1，2026-11-15）：切换后立刻跑它，得到 `HTTP 401（围栏拒绝或方法被移出浏览器命名空间）`。
+
+正确的顺序是：**先在开发代次上跑完 live 门并留下收据，再切到 registry 形态**。切换之后能自动验证的只剩「bundle 已装且启用」，其余靠人工：点一次 W 按钮，确认对话框列出发行版。这不是妥协，而是两种形态本来就不同——开发代次多开一个令牌面，而用户拿到的那份没有。
 
 窗口是 pnpm 的供应链策略，不是 bug；绕开它需要显式修改 profile 的 `minimumReleaseAge`，那属于降低供应链保护，要单独决定。
 

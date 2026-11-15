@@ -105,7 +105,11 @@ When switching the profile back to a registry build after a release, **confirm t
 
 1. Run `node scripts/release-check.mjs --version <target>`; it computes the `minimumReleaseAge` `readyAt`.
 2. If the window is closed (`ready === false`), do **not** run `remove_bundle` — that leaves the profile with no plugin for up to an hour.
-3. Once the window is open, do `remove_bundle` → `install_bundle <target>` → restart → `verify-post-restart`.
+3. Once the window is open, do `remove_bundle` → `install_bundle <target>` → restart.
+
+**`verify-post-restart` has to run BEFORE the switch, not after.** It and the whole live group call the route with the development token, and **the published package's `cordis.patch.yml` carries no `config` block, so `developerTools` is off** — after switching to the registry shape the token is refused with 401 and `presetStatus` and friends are not in the browser namespace at all. Measured on 0.8.1 (2026-11-15): running it right after the switch gives `HTTP 401（围栏拒绝或方法被移出浏览器命名空间）`.
+
+The correct order is therefore: **run the live gate on the dev generation and keep its receipt, then switch to the registry shape**. Afterwards the only automatable claim left is "the bundle is installed and enabled"; the rest is manual — click W once and confirm the dialog lists the distributions. That is not a compromise but a difference between the two shapes: the dev generation opens a token surface the published one does not have.
 
 The window is pnpm's supply-chain policy, not a bug; bypassing it means explicitly changing the profile's `minimumReleaseAge`, which lowers supply-chain protection and is a separate decision.
 
