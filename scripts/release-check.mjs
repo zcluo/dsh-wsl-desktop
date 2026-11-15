@@ -14,7 +14,7 @@ import { userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { classifyPublish, installWindow } from '../lib/release-check.js'
+import { classifyPublish, installWindow, liveGateEvidence } from '../lib/release-check.js'
 
 const run = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -52,6 +52,53 @@ async function tryRun(command, args, cwd = pluginRoot) {
   }
 }
 
+/**
+ * Run an executable by absolute path, without the cmd.exe indirection.
+ *
+ * `tryRun` goes through cmd.exe because `npm` and `pnpm` are `.cmd` shims that
+ * cannot be spawned directly on Windows. That indirection is exactly what breaks
+ * a path containing spaces: cmd re-splits the command line, the spawn fails, and
+ * the caller reports "not on PATH" — the wrong cause. `execFile` quotes its argv
+ * correctly for a direct spawn, so anything that is already a real executable
+ * (node itself, or an explicit override path) takes this route instead.
+ * @param {string} file - the executable.
+ * @param {string[]} args - its arguments.
+ * @param {string} cwd - the working directory.
+ * @returns {Promise<string|null>} trimmed stdout, or null on failure.
+ */
+async function tryRunExec(file, args, cwd = pluginRoot) {
+  try {
+    const { stdout } = await run(file, args, { cwd, timeout: 30_000 })
+    return stdout.trim()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read one pnpm setting, honouring an explicit `DSH_PNPM` override.
+ *
+ * `pnpm` is not always on PATH: this machine's DSH ships pnpm as a bare `.mjs`
+ * under the runtime directory, with no `.cmd` shim, so a by-name spawn fails even
+ * though the plugin manager runs pnpm fine. Hard-coding that path would put one
+ * machine's layout in a public repository, so the override is explicit instead:
+ * `DSH_PNPM` may name a shim (spawned directly) or a `.mjs` (spawned through node).
+ * @param {string[]} args - pnpm arguments.
+ * @param {string} cwd - the working directory.
+ * @returns {Promise<string|null>} trimmed stdout, or null when pnpm is unusable.
+ */
+async function tryPnpm(args, cwd) {
+  const override = process.env.DSH_PNPM
+  if (override === undefined || override === '') return tryRun('pnpm', args, cwd)
+  // A `.mjs` is run by the node that is running this script, so no PATH lookup and
+  // no cmd.exe: `process.execPath` is an absolute executable even when it sits in
+  // a directory whose name contains spaces.
+  if (/\.m?js$/u.test(override)) return tryRunExec(process.execPath, [override, ...args], cwd)
+  // An explicit path needs no shim resolution either.
+  if (/[\\/]/u.test(override)) return tryRunExec(override, args, cwd)
+  return tryRun(override, args, cwd)
+}
+
 const facts = {
   target,
   authenticated: false,
@@ -79,8 +126,27 @@ try {
 } catch {
   facts.publishedAt = null
 }
-const age = await tryRun('pnpm', ['config', 'get', 'minimumReleaseAge'], profileRoot)
-facts.minimumReleaseAge = age !== null && age !== '' && !Number.isNaN(Number(age)) ? Number(age) : null
+// THREE outcomes, kept apart on purpose. Collapsing them into one "could not be
+// read" blocker cost real time on 2026-11-15: the message pointed at the profile's
+// configuration, while the actual cause was that `pnpm` is not on PATH in this
+// shell (the bundled pnpm is a `.mjs` invoked through node). A diagnostic that
+// names the wrong layer sends the reader to the wrong file.
+const age = await tryPnpm(['config', 'get', 'minimumReleaseAge'], profileRoot)
+if (age === null) {
+  facts.minimumReleaseAge = null
+  facts.minimumReleaseAgeCause = 'pnpm-unavailable'
+} else if (age === '' || age === 'undefined' || Number.isNaN(Number(age))) {
+  // ABSENT IS NOT UNKNOWN. pnpm's own source settles what an unset value means:
+  // `minimumReleaseAge: opts.minimumReleaseAge ?? 0`, and the age check is only
+  // active under `Boolean(opts.minimumReleaseAge)`. So a profile that sets
+  // nothing imposes no window at all, and blocking here would report a real
+  // state as an unknown one. (Measured 2026-11-15 in pnpm 11.28.5's dist.)
+  facts.minimumReleaseAge = 0
+  facts.minimumReleaseAgeCause = 'default-zero'
+} else {
+  facts.minimumReleaseAge = Number(age)
+  facts.minimumReleaseAgeCause = null
+}
 
 const verdict = classifyPublish({
   target,
@@ -92,7 +158,41 @@ const verdict = classifyPublish({
 })
 const blockers = [...verdict.blockers]
 if (!facts.authenticated) blockers.push('npm is not authenticated (npm whoami failed)')
-if (facts.minimumReleaseAge === null) blockers.push('pnpm minimumReleaseAge could not be read from the profile')
+// Only an unreadable value blocks. A profile that sets nothing has no window —
+// that is pnpm's documented default, not a gap in the facts.
+if (facts.minimumReleaseAge === null) {
+  blockers.push('pnpm is not on PATH, so pnpm\'s minimumReleaseAge — and therefore the install window after publishing — cannot be read. Point DSH_PNPM at the bundled pnpm.mjs, or put pnpm on PATH.')
+}
+
+// Live-gate evidence. The offline matrix cannot execute the route handler at all,
+// so the suites that can are the ones this project's worst defect escaped — see
+// `liveGateEvidence` for the measurement. A receipt from `--live` is the proof.
+// ONE flag, TWO accepted spellings. `verify-all.mjs` takes `--receipt[=path]`, so
+// a user who learned it there writes `--receipt=x.json` here too — and the earlier
+// `indexOf('--receipt')` read only the space form, silently ignoring the equals
+// form and falling back to the default path. The result was a FALSE BLOCKER on a
+// perfectly good receipt. Both forms are accepted now, and a bare `--receipt`
+// means the default path (matching `verify-all`), so there is no undefined-path
+// case left either.
+const receiptArg = process.argv.find((arg) => arg === '--receipt' || arg.startsWith('--receipt='))
+const receiptPath = (() => {
+  const fallback = join(pluginRoot, 'verify-receipt.json')
+  if (receiptArg === undefined) return fallback
+  const inline = receiptArg.startsWith('--receipt=') ? receiptArg.slice('--receipt='.length) : ''
+  if (inline !== '') return inline
+  const next = process.argv[process.argv.indexOf(receiptArg) + 1]
+  return next === undefined || next.startsWith('--') ? fallback : next
+})()
+let receipt = null
+try {
+  receipt = JSON.parse(await readFile(receiptPath, 'utf8'))
+} catch {
+  receipt = null
+}
+const evidence = liveGateEvidence({ receipt, target })
+blockers.push(...evidence.blockers)
+facts.receiptPath = receiptPath
+facts.liveEvidence = evidence.ready
 
 /**
  * Privacy scan: the published artifact must not carry secrets or the operator's
@@ -196,7 +296,8 @@ if (json) {
   console.log(`  target published: ${facts.published}`)
   console.log(`  tags:            local=${facts.localTag} remote=${facts.remoteTag}`)
   console.log(`  tracked changes: ${facts.dirty}`)
-  console.log(`  minimumReleaseAge: ${facts.minimumReleaseAge ?? 'unknown'}${window === null ? '' : ` (${window.detail})`}`)
+  console.log(`  minimumReleaseAge: ${facts.minimumReleaseAge ?? `unreadable (${facts.minimumReleaseAgeCause})`}${window === null ? '' : ` (${window.detail})`}`)
+  console.log(`  live gate receipt: ${facts.liveEvidence ? 'usable' : `NOT usable (${facts.receiptPath})`}`)
   if (blockers.length > 0) {
     console.log('\nBLOCKED:')
     for (const blocker of blockers) console.log(`  - ${blocker}`)

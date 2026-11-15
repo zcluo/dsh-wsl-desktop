@@ -10,7 +10,7 @@
  * Run: node scripts/verify-release-check.mjs
  */
 import { makeChecker } from './suite-shell.mjs'
-import { classifyPublish, compareVersions, installWindow } from '../lib/release-check.js'
+import { classifyPublish, compareVersions, installWindow, liveGateEvidence } from '../lib/release-check.js'
 
 const checker = makeChecker({ pass: 'PASS' })
 const { check } = checker
@@ -75,6 +75,75 @@ console.log('\nminimumReleaseAge window')
   check('a publish older than the window is installable', ready.ready === true, ready)
   check('an unreadable publish time is reported, not guessed',
     installWindow({ publishedAt: null, minimumReleaseAgeMinutes: 60, now: new Date() }).ready === null)
+}
+
+console.log('\nlive-gate evidence')
+
+{
+  /** A receipt that satisfies every condition, so each case below differs by ONE fact. */
+  const good = {
+    receiptVersion: 1,
+    version: '0.8.1',
+    liveRan: true,
+    counts: { total: 31, passed: 29, skipped: 2, failed: 0 },
+    rows: [
+      { suite: 'verify-route.mjs', outcome: 'passed', reason: '', detail: '', precondition: '' },
+      { suite: 'verify-modules.mjs', outcome: 'skipped', reason: 'declared-skip', detail: '', precondition: 'no node_modules' },
+    ],
+  }
+  check('a live run of the target version is evidence',
+    liveGateEvidence({ receipt: good, target: '0.8.1' }).ready === true,
+    liveGateEvidence({ receipt: good, target: '0.8.1' }))
+  // `liveRan` records the FLAG, not that anything ran. A receipt with no rows, or
+  // one whose covering suite skipped, would otherwise pass on a run that never
+  // reached the host at all — the same "green summary hides what did not run"
+  // failure the receipt exists to prevent, reintroduced one layer up.
+  check('a receipt with NO per-suite rows is refused',
+    liveGateEvidence({ receipt: { ...good, rows: [] }, target: '0.8.1' }).ready === false,
+    liveGateEvidence({ receipt: { ...good, rows: [] }, target: '0.8.1' }).blockers)
+  check('a receipt with no rows field at all is refused',
+    liveGateEvidence({ receipt: { ...good, rows: undefined }, target: '0.8.1' }).ready === false)
+  check('a receipt whose covering suite SKIPPED is refused, however green the counts',
+    liveGateEvidence({
+      receipt: { ...good, rows: [{ suite: 'verify-route.mjs', outcome: 'skipped', reason: 'declared-skip', detail: '', precondition: 'no host' }] },
+      target: '0.8.1',
+    }).ready === false,
+    liveGateEvidence({
+      receipt: { ...good, rows: [{ suite: 'verify-route.mjs', outcome: 'skipped', reason: 'declared-skip', detail: '', precondition: 'no host' }] },
+      target: '0.8.1',
+    }).blockers)
+  check('a receipt whose covering suite FAILED is refused',
+    liveGateEvidence({
+      receipt: { ...good, rows: [{ suite: 'verify-route.mjs', outcome: 'failed', reason: 'checks-failed', detail: '', precondition: '' }] },
+      target: '0.8.1',
+    }).ready === false)
+  check('a receipt that does not mention the covering suite is refused',
+    liveGateEvidence({ receipt: { ...good, rows: [{ suite: 'verify-protocol.mjs', outcome: 'passed' }] }, target: '0.8.1' }).ready === false)
+  check('and the refusal names the suite that carries the seam',
+    liveGateEvidence({ receipt: { ...good, rows: [] }, target: '0.8.1' }).blockers.some((line) => line.includes('verify-route.mjs')), null)
+  // A future receipt schema could redefine `counts` or `liveRan`; the gate reads
+  // those fields, so it must refuse a version it does not know how to read.
+  check('an unknown receipt schema version is refused rather than interpreted',
+    liveGateEvidence({ receipt: { ...good, receiptVersion: 99 }, target: '0.8.1' }).ready === false,
+    liveGateEvidence({ receipt: { ...good, receiptVersion: 99 }, target: '0.8.1' }).blockers)
+  // The whole reason this gate exists: on 2026-11-14 the offline matrix was
+  // green while every route call failed, because the covering suite sits in LIVE.
+  check('an offline-only run is NOT evidence, however green it is',
+    liveGateEvidence({ receipt: { ...good, liveRan: false }, target: '0.8.1' }).ready === false,
+    liveGateEvidence({ receipt: { ...good, liveRan: false }, target: '0.8.1' }).blockers)
+  check('and the refusal says why in terms of the seam it leaves uncovered',
+    liveGateEvidence({ receipt: { ...good, liveRan: false }, target: '0.8.1' })
+      .blockers.some((line) => line.includes('route-admission')), null)
+  check('a missing receipt is refused rather than assumed',
+    liveGateEvidence({ receipt: null, target: '0.8.1' }).ready === false)
+  check('a run with failures is not evidence',
+    liveGateEvidence({ receipt: { ...good, counts: { ...good.counts, failed: 1 } }, target: '0.8.1' }).ready === false)
+  check('an unreadable failure count is not evidence either',
+    liveGateEvidence({ receipt: { ...good, counts: undefined }, target: '0.8.1' }).ready === false)
+  // A receipt from an earlier build would otherwise vouch for a tree it never saw.
+  check('a receipt for a DIFFERENT version is refused',
+    liveGateEvidence({ receipt: { ...good, version: '0.8.0' }, target: '0.8.1' }).ready === false,
+    liveGateEvidence({ receipt: { ...good, version: '0.8.0' }, target: '0.8.1' }).blockers)
 }
 
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
