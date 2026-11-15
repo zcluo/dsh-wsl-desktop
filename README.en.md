@@ -133,10 +133,19 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
   target is invalidated by entry changes only** — adds, removes and renames are seen, a content change
   of a file inside it is not; watch that file's own path to follow content. Mechanisms and
   measurements are in [WSL file watching](docs/WATCH.md).
+- **Confined mode needs passwordless sudo; without it there is no fence, and it fails loudly.** The
+  default permission mode is `workspace-write`, which has to build a mount namespace inside the
+  distro — and the WSL kernel does not allow bind mounts in a user namespace, so `sudo -n` is the only
+  way. Without that grant a confined command **fails outright** (with a structured error code, never a
+  silent unfenced run). Two ways out: give the session user NOPASSWD sudo, or switch the permission
+  mode to full access, which needs no sudo at all. See
+  [Linux-side confinement](docs/CONFINEMENT.md).
 - **A desktop update can break the plugin.** The plugin depends on the desktop framework's APIs — the
   harness — and changes to them interrupt it (0.1.6 → 0.1.7 broke four places in one go). So after
-  updating the desktop, run `node scripts/verify-post-restart.mjs` once and only keep going when
-  everything is green.
+  updating the desktop, open the W dialog once and confirm it lists your distributions, that
+  `bootstrap` reports the `pluginVersion` you just installed, and that `capabilities.status` is not
+  `degraded`; if any of those is wrong, take the desktop and the plugin back to a matching pair — the
+  order is in [Compatibility and upgrades](docs/COMPATIBILITY.md).
 - **Failures now carry a code, so you can diagnose first.** The browser receives a stable code and
   the whitelisted params, never the host message, stderr or resolved paths; after the user is
   confirmed, the W dialog shows an advisory health check whose failed rows carry the fix. Codes,
@@ -164,9 +173,10 @@ These are real boundaries, not a disclaimer list. Each one tells you where to re
 - [Engineering notes](docs/ENGINEERING-NOTES.md) — measured constraints, repository layout, release flow, install shape
 - [Distro support matrix](docs/DISTRO-SUPPORT.md) — which distros were verified, and what each one needs
 - [Compatibility and upgrades](docs/COMPATIBILITY.md) — plugin/desktop version relation, upgrade order, rollback steps
-- [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) — the two proposals to the harness upstream
+- [Upstream API proposals](docs/UPSTREAM-PROPOSALS.md) — the proposals to the harness upstream, including the record that an execution-world plugin cannot declare its session's initial permission posture
 - [Upstream defect reports](issues/README.md) — the harness issues filed, their measured evidence, and how the local workarounds relate
 - [Architecture and flow diagrams](docs/diagrams.md) — interactive architecture, sequence and lifecycle diagrams
+- [Real-machine acceptance runbook](docs/ACCEPTANCE-RUNBOOK.md) — the checks that only run on Windows + WSL2, their expected output, and the misjudgement list (Chinese only)
 
 Three of the linked documents — the distro support matrix, the upstream proposals and the diagram
 index — are **Chinese-only**, because no English text for them exists. Translating them is a separate

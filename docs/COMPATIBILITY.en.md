@@ -73,9 +73,31 @@ to a reference with no `<path>` child at all:
 
 The plugin identified that button by a **path-data prefix**, so it found no anchor and the W button stood down entirely (the degraded entry only appeared five seconds later). The same change also cost the workspace rows their folder-icon weight, because row icons no longer carry an inline `path` either — a collapsed row painted the solid cloud. From 0.7.2 the client recognises **both generations**: the geometry prefix (old) and the sprite glyph name `project-add-outline` (new), and reads the row's weight off the **symbol artwork** the row icon references. The lesson: a second identity for a host control must not merely cover the generations seen so far — `verify-client-dom` now runs the inline and sprite fixtures side by side.
 
+### The 0.2.2-rc.3 route-admission refactor (2026-11-12, `71753fdf91`) — the most expensive one
+
+That commit changed three things at once. Any one of them would have broken this plugin; together they took down the **entire W dialog**:
+
+| # | Change | Consequence for this plugin |
+|---|---|---|
+| 1 | Route registration gained an `auth` field whose **omitted default is `required`** | The webserver refuses before the handler; the development-token arm (`fenceRejection` lets it replace a 401) becomes **unreachable** |
+| 2 | `connection.requestRejection()` was **removed** | The method the plugin called no longer exists — a `TypeError` even once admission passes |
+| 3 | Authentication became its own service, `connection.authentication`, read *inside* `connection.admit()` | Cordis resolves a service property against the **calling** context, so a plugin that never injected the sub-service makes `admit()` throw from inside: `cannot get property "connection.authentication" without inject` |
+
+**Why it was the most expensive**: the failure was **silent**. The host webserver's last-resort listener turns an escaping throw into an **empty-bodied 400** (`webserver/src/index.ts`: `dispatch().catch(() => res.writeHead(400)`), and the browser half's failed `json()` can only report that as `internal` with empty params. The dialog showed "plugin internal error" and **nothing anywhere pointed at the real cause**.
+
+**Handling (from 0.8.1)**: the route declares `auth: 'anonymous'` so admission returns to the plugin's own fence; `connection.admit()` replaces `requestRejection` (it predates the change, so it works on both host generations); `inject` gains `'connection.authentication'`; the admission section of the handler is wrapped so a throw can no longer escape as an empty 400 but answers JSON carrying a `step`; the stack is written to `$DSH_HOME/wsl-desktop-route-error.log` (the browser never receives host messages, so that file is the only diagnostic channel); and `verify-modules` gained three source pins.
+
+**The lesson matters more than the fix**: this path is **structurally invisible to the offline gate** — `verify-route` needs the development token, and the token path was itself blocked by defect #1, while `verify-post-restart` only compares client-bundle markers. It took a human clicking the W button once. During diagnosis, three successive reasoning-based edits each targeted the wrong place; only writing the exception to disk produced the answer in one step. **Changing code without evidence changes what you believe the bug is.**
+
 ## Release preflight
 
 `node scripts/release-check.mjs` at the repository root checks, before publishing: npm auth, the registry latest, whether the target version is already taken, local/remote tags, the working tree, pnpm's `minimumReleaseAge` window, and a privacy scan (secrets and machine paths in tracked files, test artifacts in the `npm pack` manifest). It is read-only and prints the next commands.
+
+When `pnpm` is not on PATH (this machine's DSH ships only `pnpm.mjs`, with no `.cmd` shim) the preflight says exactly that instead of blaming the configuration; point `DSH_PNPM` at a shim or at `pnpm.mjs`, so no machine's path has to enter the repository.
+
+**It also demands a live-gate receipt.** The reason is this repository's most expensive defect: on 2026-11-14 a host change broke every route method of the plugin while the **offline gate stayed green at 25/27** — `verify-route.mjs` had asserted exactly that all along, but the suite sits in `LIVE` and had never run. **The test was never missing; what was missing is a release path that required it.**
+
+A release now needs the receipt produced by `node scripts/verify-all.mjs --live --receipt`, satisfying all three of: `liveRan === true`, `counts.failed === 0`, and a `version` equal to the target — the last one stops an older build's receipt from vouching for new code. Any missing condition blocks, and the blocker names the seam left uncovered.
 
 ### Reinstall order (do not uninstall outside the window)
 

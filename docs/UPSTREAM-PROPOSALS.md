@@ -112,6 +112,35 @@ interface TerminalSendResult { /* … */ stderrTail?: string }
 | 5 | `ShellExecutor.run` → `execute`，且返回从 settled 结果变为**活动句柄**（`result()` 投影） | execute 重写为句柄；selftest/套件改经 `result()` 取结果 | 建议迁移文档列出句柄字段 |
 | 6 | 宿主根作用域注册 `shell`（bash-local）——Windows 会话的 `ctx.get('shell')` 从 undefined 变为宿主执行器 | 自测的 shell 断言从 `found === false` 改为「proto 不含 confinementFor」 | 提案 B（声明面对偶） |
 
+## 提案 D：执行世界类插件无法声明「这个会话的初始权限姿态」
+
+### 问题
+
+执行世界类插件（把会话搬进 WSL / 容器 / 远端的插件）有一个共同诉求：**它的世界有自己的隔离边界，宿主的文件沙箱语义在那个世界里不成立或不可用**。本插件为此走了四条路，**全部被源码证伪**（2026-11-13 实测记录如下，供上游判断这是否是一个真实的 API 缺口）：
+
+| 尝试 | 结论 | 证据 |
+|---|---|---|
+| 在预设的 isolate 组里挂一个 `sandbox-policy`，配 `mode: 'danger-full-access'` | **无效** | `SandboxPolicyService.resolve()` 的优先级是 `request.mode ?? 会话日志覆盖 ?? defaultMode`（`sandbox-policy/src/index.ts:215`），而 `permission-presets` 对每个新会话**无条件**写一条覆盖值（`interaction/permission-presets/src/index.ts:233-235` → `:442` `setSandboxMode`），且以 `{ prepend: true }` 注册。默认值永不被采用。 |
+| 在插件自己的 `ShellExecutor.resolve()` / `FileSystem.checkedTarget()` 里改「无 policy 时的回落值」 | **无效** | 两条主链路**永远传** policy：`shell/tool-bash/src/index.ts:230-231` 的 `resolveSandboxPolicy` 总调用 `sandboxPolicy?.resolve({session})`，`:520` 传入；`fs/tool-fs/src/sandbox.ts:89-97` 的 `resolvePolicy` 总返回 `standingPolicy`。「无 policy 回落」分支只服务 agentless / selftest 调用。 |
+| 在 `agent/created` 上抢先写 `danger-full-access` | **不可靠，放弃** | 对手用 `{ prepend: true }`，相对顺序取决于插件加载顺序，被覆盖时**无任何报错**。 |
+| 在会话创建请求里带初始权限模式 | **接口不存在** | `SessionCreateRequest` 只有 `workspaceId` / `cwd` / `sessionId` / `agentPreset`（`api/session-controller/src/types.ts:268-277`）；内层 `ApiSessionCreateRequest`（`src/agent.ts:56-69`）同样只有这四个。 |
+
+**后果（本插件当前的实际处境）**：WSL 会话的默认模式被宿主固定为部署级的 `workspace-write`。而受限模式要求发行版内有免密 sudo；没有就 fail-closed。于是第三方用户装完之后的第一体验是「什么都干不了」，唯一的出路是自己在权限菜单里找到「完全权限」。**插件没有任何合法接缝能改善这一点。**
+
+注意 `SandboxEnforcement` 的闭集是 `'full' | 'partial'`（`sandbox/src/index.ts:76`），且 `confine()` 契约禁止 silent unconfined passthrough，所以「如实声明不围栏」这条也没有出口。
+
+### 提案
+
+任选其一（都不破坏现有插件）：
+
+1. **`SessionCreateRequest` 增加一个可选的初始权限字段**（例如 `sandboxMode?: SandboxMode`），由 `permission-presets` 的 `pinInitialPermission` 尊重它而不是无条件写 `defaultPreset` 的值。这是最小、最干净的出口：它让「创建期事实」可用，而创建期正是唯一无竞争的时机。
+2. **`SandboxPolicyService` 增加一个「会话级默认」扩展点**：允许插件为一个会话注册默认模式，优先级位于「会话日志覆盖」之下、「部署 defaultMode」之上。
+3. **或者裁定「执行世界插件不应改变权限姿态」为正式语义**，并把「默认模式由部署决定」写进执行世界插件文档。那样本插件会**停止尝试**并改为纯文档引导用户设置 `DSH_PERMISSION_MODE` 或在菜单里选完全权限。
+
+### 为什么需要上游裁定，而不是插件各想办法
+
+四个插件级的做法都会踩到同一条边界：宿主的权限姿态是**部署级 + 会话日志 + 事件时序**三者共同决定的，而执行世界插件只在**预设变体**这一层有接缝。任何绕过都要么抢事件时序（不可靠），要么与 `permission-presets` 争夺同一份会话日志（语义冲突）。这是**架构层**的缺口，不是某个插件的实现问题。
+
 ## 请求的裁定
 
 - 提案 A：`readDefinition` 是否纳入 0.1.x 后续版本？（小 API 面，registry 内已有数据。）

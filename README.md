@@ -107,9 +107,16 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
   文件每 300ms `stat` 一次。**目录目标只对条目变化生效**——新增、删除、改名可见，目录里某个文件的
   内容变化不可见；要盯内容就按文件路径监听它。机制与实测见
   [WSL 文件变更监听](docs/WATCH.md)。
+- **受限模式要免密 sudo；没有就当不了围栏，而且会明确失败。** 默认权限模式是
+  `workspace-write`，它要求在发行版里搭 mount namespace，而 WSL 内核不允许在 user namespace
+  里做 bind mount，所以只能用 `sudo -n`。缺这份授权时受限命令**直接失败**（结构化错误码，
+  不是静默裸跑）。两条出路：给会话用户配 NOPASSWD sudo，或者把权限模式切到「完全权限」——
+  后者不需要任何 sudo。详见 [Linux 侧约束](docs/CONFINEMENT.md)。
 - **桌面更新后插件可能失效。** 插件依赖桌面内部的框架（harness）的 API，这些 API 变化会打断它
-  （0.1.6 → 0.1.7 一次断了四处）。所以更新桌面之后先跑一次
-  `node scripts/verify-post-restart.mjs`，全绿再继续用。
+  （0.1.6 → 0.1.7 一次断了四处）。所以更新桌面之后，先打开一次 W 对话框确认它能列出你的
+  发行版、`bootstrap` 里的 `pluginVersion` 是你刚装的版本、`capabilities.status` 不是
+  `degraded`；任何一项不对就把桌面和插件退回彼此匹配的版本，
+  顺序见 [兼容性与升级](docs/COMPATIBILITY.md)。
 - **失败现在带 code，可以先自己诊断。** 浏览器侧的错误只回稳定 code 与允许的 params，
   宿主 message、stderr 与解析后的路径不会过线；W 对话框在确认用户后会显示一条建议性的
   「环境检查」，失败项带修复命令。错误码、检查项与降级行为见 [诊断](docs/DIAGNOSTICS.md)。
@@ -134,9 +141,10 @@ plugin_manager install_bundle dsh-wsl-desktop@<version>
 - [工程笔记](docs/ENGINEERING-NOTES.md) — 实测约束、仓库布局、发版流程、安装形态
 - [发行版支持矩阵](docs/DISTRO-SUPPORT.md) — 哪些发行版验证过，每种缺什么
 - [兼容性与升级](docs/COMPATIBILITY.md) — 插件与桌面的版本关系、升级顺序、回退步骤
-- [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) — 对 harness 上游的两项提案
+- [上游 API 提案](docs/UPSTREAM-PROPOSALS.md) — 对 harness 上游的提案（含执行世界类插件无法声明初始权限姿态的记录）
 - [上游缺陷记录](issues/README.md) — 已上报 harness 的问题、实测证据与本地规避的关系
 - [架构与流程图](docs/diagrams.md) — 可交互的架构、时序与生命周期图
+- [真实机器验收手册](docs/ACCEPTANCE-RUNBOOK.md) — 只能在 Windows + WSL2 上跑的检查项、期望输出与误判清单
 
 其中三份——发行版支持矩阵、上游 API 提案、架构与流程图索引——**只有中文版**，因为目前没有对应的
 英文文本。把它们翻成英文是一件独立的工作，不是改个文件名。

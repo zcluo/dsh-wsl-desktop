@@ -5,7 +5,31 @@
 ```powershell
 node scripts/verify-all.mjs          # 全部离线套件（等价于下面这些）
 node scripts/verify-all.mjs --live   # 追加需要已安装插件 + 运行中宿主的套件
+node scripts/verify-all.mjs --receipt  # 同上，另写一份可分享收据到 verify-receipt.json
 ```
+
+## 收据：把「跑过」变成「别人能核对」
+
+这套门是**本机的**，所以第三方要判断「这些声明在他的机器上成不成立」，需要的不是一句通过，而是**什么跑了、什么没跑、为什么没跑**——最后一项在绿色的摘要里是看不见的。
+
+`--receipt[=路径]` 写出一份 JSON 收据（默认 `verify-receipt.json`），逐套件记录 `passed` / `skipped` / `failed` 与**判定的理由**：
+
+| reason | 含义 |
+|---|---|
+| `passed` | 退出码 0 |
+| `declared-skip` | 退出码 2，且 `DECLARED_SKIPS` 点了名——行里带着**允许它跳过的那条前提** |
+| `checks-failed` | 非零且非跳过：**它跑了，并且判错了** |
+| `undeclared-skip` | 退出码 2 却没声明：**判作 failed**，与聚合器的裁定一致 |
+| `stopped` | 被聚合器的上限杀死或收到信号：它**什么也没 establish**，所以是 failed，但理由与缺陷分开 |
+| `unstarted` | 进程**根本没起来**（EPERM、二进制缺失）：同样什么也没 establish，但「从未运行」与「跑错了」是两回事——收据存在的意义就是让人分得清这两者 |
+
+`stopped` / `unstarted` / `checks-failed` 三者**必须可区分**：把「没启动」归进「检查失败」正是这份产物要防的那种谎，`verify-receipt.mjs` 对三种结局各钉一条。
+
+**失败的原因随裁定一起走。** 聚合器以前用 `stdio: 'inherit'` 跑套件，于是它**一个字节都看不到**套件打印了什么，`checks-failed` 只能记成 `exit 1`，真正的 `FAIL` 行只存在于调用方碰巧留下的那段流里——一次偶发失败因此无法诊断（2026-11-15 实测：同一个门连续 20+ 次复现不出来，而当时的失败原因已经丢失）。现在聚合器捕获每个套件的输出并立即回显，`FAIL` 行进入收据的 `detail`。代价是套件的输出**按套件粒度出现**而不是逐行实时；每个套件前的 `=== 名称 ===` 仍标记进度，且 `scripts/` 里没有任何套件读 TTY 或 stdin（已核查）。这条由 `verify-all-skip.mjs` 的 C 段钉住：夹具套件故意失败，收据里必须带着它自己那句 `FAIL`。
+
+两条硬规则，都由 `verify-receipt.mjs` 钉住：**没跑的套件必须被点名**（不压缩成一个计数），**收据不得携带机器路径**（它是要贴进 issue 的，所以适用与受跟踪文件相同的隐私标准；命中即拒绝写出并以 1 退出）。
+
+收据**不进仓库**（`.gitignore` 里有 `verify-receipt*.json`）：它描述的是**一台机器的一次运行**，提交它会让某个操作者的环境看起来像项目本身的声明。
 
 **聚合器怎么读 SKIP（提交 `2d44dd6`）**：套件的退出码 2 是它自己的 SKIP（本机上评估不了某项检查），而聚合器只读退出码、看不见套件自己那段 `SKIP` 说明——所以一条跳过**只在** `scripts/verify-all.mjs` 的 `DECLARED_SKIPS` 点名了该套件、并给出允许它的**前提**时才算数。摘要行因此是 `N/M suites passed (K declared skip: <名称>)`，每条 `SKIP` 下面打印它声明的前提；**未声明**的跳过判红（`FAIL (undeclared skip) <套件>`，并打印「往 `DECLARED_SKIPS` 补一条，或去掉逼出这条跳过的前提」的修法），聚合以退出码 1 结束——退出码 0 从此不能与「有一条套件从未跑过」共存。声明的前提在本机不成立时该条**休眠**：套件照跑，只多打印一行 `NOTICE`，不判红。声明**失效**（套件改名 / 源码里已经没有 exit-2 分支 / 不在套件列表里）在**任何套件运行之前**判红，因为那是仓库自身的腐烂、操作者当场就能清掉。这套裁定由 `scripts/verify-all-skip.mjs` 钉住：它用夹具套件构建聚合器的副本（放在仓库外），读真进程的真退出码与真摘要。它还从真实的 `STANDALONE` 列表与各套件源码里的 exit-2 **形状**重新推导声明表的两个方向：能跳过却没声明的套件当场点名，声明了却没有该形状的条目同样点名。
 
@@ -38,6 +62,7 @@ node scripts/verify-search.mjs       # 发行版内搜索的纯逻辑：glob 翻
 node scripts/verify-protocol.mjs     # 浏览器错误目录与路由分类器：code、双语、remedy、安全 params、domain→wire 映射（从不跳过）
 node scripts/verify-release-preflight.mjs # 发布预检的纯逻辑：已装 patch 的 developerTools、bootstrap 信封分类、client 标记（从不跳过）
 node scripts/verify-world-errors.mjs # 注入 run 的 world 类型化失败：目录不存在 vs 发行版不可达、未知用户、默认用户探针失败（从不跳过）
+node scripts/verify-receipt.mjs       # 可分享收据的纯逻辑：计数、未声明跳过判红、被中止的套件与真失败区分、不含机器路径、同样输入字节相同（从不跳过）
 node scripts/verify-host-contract.mjs # 宿主 manifest 与代码互查；依赖可达时核对宿主包导出形状，只对解析不到的宿主包按模块 SKIP
 node scripts/verify-doctor.mjs       # 体检解析器、缓存与组装，外加一条 live 行（无法解析出发行版时按声明 SKIP）
 node scripts/verify-route.mjs        # 活体：验收路由（需要运行中的宿主）

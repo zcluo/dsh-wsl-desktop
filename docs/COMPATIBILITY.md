@@ -73,9 +73,38 @@
 
 插件当时按**路径数据前缀**认这个按钮，于是扫不到锚点、W 按钮整体退场（降级入口也只在 5 秒后才出现）。同一改动还让工作区行的云图标读不到文件夹图标的粗细（行图标也没有内联 `path` 了），折叠行会错误地画成实心云。0.7.2 起改为**两代都认**：几何前缀（旧代）+ sprite 符号名 `project-add-outline`（新代），行粗细则读行图标引用的**符号图形**本身。教训：认宿主控件时，可选的第二身份不能只覆盖出现过的代次——`verify-client-dom` 现在同时跑内联与 sprite 两套 fixture。
 
+### 0.2.2-rc.3 的路由准入重构（2026-11-12，`71753fdf91`）——最贵的一次
+
+这个 commit 同时改了三件事，每一件都足以打断本插件，而它们合起来让**整个 W 对话框失效**：
+
+| # | 变更 | 本插件的后果 |
+|---|---|---|
+| 1 | 路由注册新增 `auth` 字段，**省略时默认 `required`** | webserver 在 handler 之前就拦截；开发令牌那条路（`fenceRejection` 允许它替换 401）**永远走不到** |
+| 2 | 删除 `connection.requestRejection()` | 插件调用的方法不存在，即使放行也会 `TypeError` |
+| 3 | 认证下沉为独立服务 `connection.authentication`，`connection.admit()` 内部读取它 | Cordis 按**调用方**上下文解析服务属性，插件没 inject 该子服务 → `admit()` 从内部抛 `cannot get property "connection.authentication" without inject` |
+
+**为什么它是"最贵的一次"**：失败是**静默的**。宿主 webserver 的兜底监听器把逃逸的异常变成**空响应体的 400**（`webserver/src/index.ts`：`dispatch().catch(() => res.writeHead(400)`），而浏览器半边的 `json()` 解析失败只能把它报成 `internal` + 空 params。于是 UI 显示「插件内部错误」，**没有任何一处证据指向真正的原因**。
+
+**处置（0.8.1 起）**：
+
+- 路由显式声明 `auth: 'anonymous'`，把准入交回插件自己的围栏；
+- 用 `connection.admit()` 取代 `requestRejection`（`admit` 在这次变更之前就存在，因此对新旧两代宿主都成立）；
+- `inject` 补上 `'connection.authentication'`；
+- handler 的准入段整体包进 try/catch，异常**不再逃逸**成空体 400，改为带 `step` 的 JSON；
+- 异常栈写入 `$DSH_HOME/wsl-desktop-route-error.log`（浏览器永远拿不到宿主消息，这个文件是排查的唯一通道）；
+- `verify-modules` 增加三条源码钉子（`auth: 'anonymous'`、`.admit(` 且不含 `.requestRejection(`、inject 含子服务）。
+
+**教训（比结论更重要）**：这条路径**离线门结构上覆盖不到**——`verify-route` 需要开发令牌，而开发令牌恰好被缺陷 #1 挡住；`verify-post-restart` 只比对 client bundle 的标记串。它是**真人点一次 W 按钮**才暴露的。定位过程中连续三次基于推理改动都改错了位置，只有把异常落盘取证之后才一次命中：**没有证据就改代码，改的是自己以为的病灶。**
+
 ## 发布预检
 
 仓库根的 `node scripts/release-check.mjs` 会在发布前检查：npm 登录、registry 最新版、目标版本是否已占用、本地/远端 tag、工作树、pnpm 的 `minimumReleaseAge` 窗口，以及隐私扫描（已跟踪文件里的密钥与本机路径、`npm pack` 清单里的测试产物）。它只读，不改任何东西；输出会直接给出下一步命令。
+
+`pnpm` 不在 PATH 上时（本机的 DSH 只装了 `pnpm.mjs`，没有 `.cmd` 垫片），预检会如实说「pnpm 不在 PATH」而不是把它报成配置问题；用 `DSH_PNPM=<shim 或 pnpm.mjs 的路径>` 指定即可，不必把某台机器的路径写进仓库。
+
+**它还要求一份 live 门的收据。** 理由是本仓库最贵的一次缺陷：2026-11-14 宿主改了路由准入，插件每一个路由方法都失效，而**离线门 25/27 全绿**——能抓住它的 `verify-route.mjs` 早就写了那条断言，只是它在 `LIVE` 列表里、从来没跑过。**测试不缺，缺的是发布路径要求它。**
+
+所以现在发布前必须有 `node scripts/verify-all.mjs --live --receipt` 产出的收据，且同时满足三条：`liveRan === true`、`counts.failed === 0`、`version` 等于目标版本（最后一条防止旧构建的收据替新代码背书）。缺一条就阻断，阻断理由会写明它未覆盖的是哪条接缝。
 
 ### 回装顺序（别在窗口外卸载）
 
