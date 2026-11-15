@@ -38,8 +38,34 @@ import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const aggregateSource = readFileSync(join(here, 'verify-all.mjs'), 'utf8')
-/** The aggregate's own relative import; a copy of it needs this file beside it. */
-const sourceTextSource = readFileSync(join(here, 'source-text.mjs'), 'utf8')
+/**
+ * The aggregate's own relative imports; a copy of it needs each one beside it.
+ *
+ * DERIVED FROM THE AGGREGATE, not hand-listed: a new import (this pin missed
+ * `./receipt.mjs` exactly that way) makes every copy die at import time with
+ * ERR_MODULE_NOT_FOUND, and the failure surfaces as a FALSE RED in the unstarted
+ * scenario rather than as the copy being incomplete. Reading the specifiers out of
+ * the aggregate's source means the list cannot fall behind it.
+ *
+ * MULTI-LINE IMPORTS COUNT. The first spelling of this pattern required the whole
+ * statement on one line (`[^'\n]*`), which cannot see the brace-broken form this
+ * repository actually uses elsewhere — so a future multi-line relative import in
+ * the aggregate would have escaped the derivation and reproduced the very bug it
+ * exists to prevent. The span therefore crosses newlines.
+ *
+ * It can also cross a STATEMENT boundary, because this file is written without
+ * semicolons — an earlier draft claimed otherwise and pinned that claim with a
+ * semicolon-terminated fixture, which is not the style of the file it governs.
+ * The over-reach is harmless here: the pattern only ever captures the specifier of
+ * a `from './…'` clause, and such a clause appears nowhere else in the aggregate.
+ * What the derivation needs is the SET of specifiers, not the pairing between
+ * each one and its statement, and the checks below assert the set.
+ */
+const AGGREGATE_IMPORT = /^import\b[\s\S]*?\bfrom\s+'\.\/([\w.-]+\.mjs)'/gmu
+const AGGREGATE_DEPENDENCIES = [...aggregateSource.matchAll(AGGREGATE_IMPORT)]
+  .map((match) => match[1])
+  // The aggregate imports itself nowhere; dedupe defensively against a future double import.
+  .filter((name, index, all) => all.indexOf(name) === index)
 
 const checker = makeChecker({ pass: 'PASS', detail: (value) => detailText(value) })
 const { check } = checker
@@ -133,8 +159,50 @@ const FIXTURES = {
   ].join('\n'),
 }
 for (const [name, source] of Object.entries(FIXTURES)) writeFileSync(join(scratch, name), source)
-// The copies import it by that name, from their own directory (the scratch one).
-writeFileSync(join(scratch, 'source-text.mjs'), sourceTextSource)
+// The copies import the aggregate's own dependencies by those names, from their own
+// directory (the scratch one). Every one of them is written, not just the one this
+// file happens to read itself.
+for (const dependency of AGGREGATE_DEPENDENCIES) {
+  writeFileSync(join(scratch, dependency), readFileSync(join(here, dependency), 'utf8'))
+}
+check('every relative import of the aggregate was copied beside the copies',
+  AGGREGATE_DEPENDENCIES.length > 0 && AGGREGATE_DEPENDENCIES.every((name) => existsSync(join(scratch, name))),
+  `aggregate imports: ${AGGREGATE_DEPENDENCIES.join(', ') || '(none found)'}`)
+// The derivation is only as good as its pattern, so the pattern is pinned too:
+// a future tightening that silently stops seeing the brace-broken import form
+// would put this file straight back where it started.
+const importSpellings = [
+  ["import { a } from './one.mjs'", 'one.mjs'],
+  ["import {\n  a,\n  b,\n} from './two.mjs'", 'two.mjs'],
+  ["import {a} from './three.mjs'", 'three.mjs'],
+]
+check('the dependency pattern sees both the one-line and the multi-line import form',
+  importSpellings.every(([source, expected]) => {
+    const seen = [...source.matchAll(AGGREGATE_IMPORT)].map((match) => match[1])
+    return seen.length === 1 && seen[0] === expected
+  }),
+  importSpellings.map(([source]) => [...source.matchAll(AGGREGATE_IMPORT)].map((match) => match[1])))
+// The fixture is written the way the aggregate itself is written: no semicolons.
+// A semicolon-terminated fixture would have tested a style the governed file does
+// not use, which is how the earlier "stops at a statement boundary" claim passed
+// while being false.
+check('and the specifier SET stays right in a semicolon-free multi-import file',
+  [...[
+    "import { a } from 'node:fs'",
+    'import {',
+    '  b,',
+    "} from './one.mjs'",
+    "import { c } from './two.mjs'",
+    '',
+  ].join('\n').matchAll(AGGREGATE_IMPORT)].map((match) => match[1]).join(',') === 'one.mjs,two.mjs',
+  [...[
+    "import { a } from 'node:fs'",
+    'import {',
+    '  b,',
+    "} from './one.mjs'",
+    "import { c } from './two.mjs'",
+    '',
+  ].join('\n').matchAll(AGGREGATE_IMPORT)].map((match) => match[1]))
 
 /** The aggregate's suite list, as one line-per-entry array literal. */
 const STANDALONE_ANCHOR = /const STANDALONE = \[[\s\S]*?\n\]/
@@ -174,8 +242,8 @@ function buildAggregate(name, { suites, declarations, edits = [] }) {
  * @param {Record<string, string>} [env] - extra environment for the copy.
  * @returns {{code: number | null, out: string}} the run.
  */
-function runAggregate(name, env = {}) {
-  const run = spawnSync(process.execPath, [name], {
+function runAggregate(name, env = {}, args = []) {
+  const run = spawnSync(process.execPath, [name, ...args], {
     cwd: scratch,
     encoding: 'utf8',
     timeout: 120_000,
@@ -239,10 +307,27 @@ console.log('\n=== B. a suite that skips with a declaration ===')
 console.log('\n=== C. the existing failure and pass paths ===')
 {
   const copy = buildAggregate('C-fail.mjs', { suites: ['fixture-fail.mjs', 'fixture-pass.mjs'], declarations: [] })
-  const run = runAggregate(copy)
+  const receiptName = 'C-fail-receipt.json'
+  const run = runAggregate(copy, {}, [`--receipt=${receiptName}`])
   check('exit 1: the aggregate exits 1', run.code === 1, `exit ${String(run.code)}; the run ends:\n${run.out.slice(-1200)}`)
   check('exit 1: the summary still reports the suite with its own exit code',
     /^\s*FAIL \(exit 1\)\s+fixture-fail\.mjs$/m.test(run.out), run.out.slice(-1200))
+  // The reason has to travel with the verdict. `exited` used to record an empty
+  // note, so a receipt for a failed run said `checks-failed: exit 1` and nothing
+  // more — the suite's own FAIL line existed only in the stream above. That is
+  // precisely what made an intermittent failure here impossible to diagnose.
+  let failedReceipt = null
+  try {
+    failedReceipt = JSON.parse(readFileSync(join(scratch, receiptName), 'utf8'))
+  } catch {
+    failedReceipt = null
+  }
+  const failedRow = failedReceipt?.rows?.find((row) => row.suite === 'fixture-fail.mjs')
+  check('exit 1: the receipt carries the reason the suite gave, not a bare exit code',
+    typeof failedRow?.detail === 'string' && failedRow.detail.includes('the fixture check'),
+    failedRow)
+  check('exit 1: and the reason is classified as checks-failed, not as a stop',
+    failedRow?.reason === 'checks-failed', failedRow?.reason)
   const clean = runAggregate(buildAggregate('C-clean.mjs', { suites: ['fixture-pass.mjs'], declarations: [] }))
   check('clean run: the aggregate exits 0 and counts every suite passed',
     clean.code === 0 && /1\/1 suites passed/.test(clean.out), `exit ${String(clean.code)}; the run ends:\n${clean.out.slice(-800)}`)

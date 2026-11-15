@@ -40,3 +40,17 @@ lib/wsl/__pycache__/
 # never part of it — and a stale one is worse than noise: an older tarball can be
 # a build that cannot load at all, sitting there installable.
 *.tgz
+
+# Verification receipts (`verify-all.mjs --receipt`). A receipt describes ONE
+# machine's run — which suites passed, which skipped and why — so committing it
+# would make a claim about this operator's setup look like a claim about the
+# project. It is produced to be pasted into an issue, not stored.
+verify-receipt*.json
+.receipt-check.json
+
+# The diagram tooling's own working directory (archify inputs, receipts, the
+# sdd evidence tree). It is a TOOL WORKSPACE, not source: `release-check.mjs`
+# already refuses to ship anything under `.superpowers/`, and `docs/diagrams.md`
+# records that its measurement artefacts are observation, not deliverables.
+# Ignoring it here keeps `git status` readable — it is ~37 MB across 1000 files.
+.superpowers/

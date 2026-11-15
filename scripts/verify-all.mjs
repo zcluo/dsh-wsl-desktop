@@ -20,13 +20,34 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { blankLiterals, citationResolves } from './source-text.mjs'
+import { buildReceipt, machinePathMatches, receiptText } from './receipt.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const live = process.argv.includes('--live')
+/**
+ * Emit a shareable receipt of this run.
+ *
+ * The gate here is a local matrix, so the artefact a third party needs is not
+ * "it passed" but "here is what ran, what did not, and why" — the last part is
+ * invisible in a green summary. Written beside the repository rather than into
+ * it, because a receipt describes ONE machine and must not be committed as if
+ * it described the project.
+ */
+const RECEIPT_DEFAULT_PATH = 'verify-receipt.json'
+const receiptArg = process.argv.find((arg) => arg.startsWith('--receipt'))
+// `--receipt=` with nothing after the equals means "the default path", not the
+// empty string: an empty path reached `writeFileSync` and threw ENOENT with no
+// hint about which flag produced it.
+const receiptValue = receiptArg !== undefined && receiptArg.includes('=')
+  ? receiptArg.slice(receiptArg.indexOf('=') + 1)
+  : undefined
+const receiptPath = receiptArg === undefined
+  ? undefined
+  : (receiptValue === undefined || receiptValue === '' ? RECEIPT_DEFAULT_PATH : receiptValue)
 
 /**
  * The milliseconds one suite may run before this aggregate kills it.
@@ -68,6 +89,26 @@ const ceilingText = () => `${Number((SUITE_CEILING_MS / 1000).toFixed(1))}s`
  * @param {number} elapsedMs - how long the aggregate waited for it.
  * @returns {{suite: string, code: number, how: 'exited' | 'ceiling' | 'signalled' | 'unstarted', note: string}} the outcome.
  */
+/**
+ * The reason a suite gave for failing, taken from its own output.
+ *
+ * `exited` used to record `note: ''`, which meant a failing suite's REASON lived
+ * only in the stream above the summary. A caller that keeps the tail — a terminal,
+ * a CI log, the person reading a receipt — loses it, and the receipt then says
+ * `checks-failed: exit 1` with no cause at all. That is the opacity this project
+ * spent four debugging rounds learning to avoid, so the reason travels with the
+ * verdict now.
+ * @param {import('node:child_process').SpawnSyncReturns<Buffer>} run - the finished run.
+ * @returns {string} the first few FAIL lines, joined; empty when the suite printed none.
+ */
+function failureDetail(run) {
+  const text = `${run.stdout ?? ''}\n${run.stderr ?? ''}`
+  const fails = text.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('FAIL'))
+  if (fails.length === 0) return ''
+  const head = fails.slice(0, 3).join(' | ')
+  return head.length > 300 ? `${head.slice(0, 300)}…` : head
+}
+
 function outcomeOf(suite, run, elapsedMs) {
   const { status, signal } = run
   const error = run.error ?? null
@@ -78,7 +119,7 @@ function outcomeOf(suite, run, elapsedMs) {
   if (outOfTime) return { suite, code: 1, how: 'ceiling', note: `killed at this aggregate's ${ceilingText()} ceiling after ${seconds}s — the suite did not finish` }
   if (status === null && signal !== null) return { suite, code: 1, how: 'signalled', note: `killed by ${signal} after ${seconds}s — the suite did not finish` }
   if (status === null) return { suite, code: 1, how: 'unstarted', note: `could not be started${error === null ? ' (no exit status and no error)' : `: ${error.code ?? error.message}`}` }
-  return { suite, code: status, how: 'exited', note: '' }
+  return { suite, code: status, how: 'exited', note: status === 0 ? '' : failureDetail(run) }
 }
 
 /** Suites that run against the distribution and the source tree alone (verify-package needs only npm and the package root; verify-diagrams only git and the diagram source). */
@@ -107,6 +148,7 @@ const STANDALONE = [
   'verify-world-errors.mjs',
   'verify-release-preflight.mjs',
   'verify-release-check.mjs',
+  'verify-receipt.mjs',
   'verify-host-contract.mjs',
   'verify-doctor.mjs',
 ]
@@ -554,7 +596,22 @@ for (const suite of suites) {
   // A hard ceiling per suite (SUITE_CEILING_MS). What a stopped run MEANS is decided by
   // outcomeOf rather than by the exit code it does not have.
   const startedAt = Date.now()
-  const run = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit', timeout: SUITE_CEILING_MS, killSignal: 'SIGKILL' })
+  // Captured rather than inherited, because a failing suite's REASON is otherwise
+  // unreachable: with `stdio: 'inherit'` the aggregate never sees a byte the suite
+  // printed, so a failure could only be recorded as `exit 1` and the explanation
+  // lived solely in whatever the caller happened to keep. An intermittent failure
+  // in this gate was undiagnosable for exactly that reason. The cost is that a
+  // suite's output now appears when it finishes instead of streaming line by line;
+  // the per-suite header above still marks progress, and no suite reads a TTY or
+  // stdin (checked: no `isTTY`, no `process.stdin` anywhere in scripts/).
+  const run = spawnSync(process.execPath, [join(here, suite)], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: SUITE_CEILING_MS,
+    killSignal: 'SIGKILL',
+  })
+  process.stdout.write(run.stdout ?? '')
+  process.stderr.write(run.stderr ?? '')
   results.push(outcomeOf(suite, run, Date.now() - startedAt))
 }
 
@@ -621,4 +678,20 @@ console.log(`\n${passed.length}/${results.length} suites passed`
   + `${skipped.length === 0 ? '' : ` (${skipped.length} declared skip: ${skipped.map((entry) => entry.suite).join(', ')})`}`
   + `${failed.length + undeclared.length === 0 ? '' : ` (${failed.length + undeclared.length} failed: ${[...failed, ...undeclared].map((entry) => entry.suite).join(', ')})`}`
   + `${live ? '' : ' (live suites skipped; add --live to include them)'}`)
+
+if (receiptPath !== undefined) {
+  const text = receiptText(buildReceipt({ outcomes: results, declared: DECLARED_SKIPS, live }))
+  // The receipt is meant to be pasted into an issue, so it gets the same privacy
+  // bar as a tracked file. Refusing to write is the honest ending: a scrubbed
+  // receipt would describe a run whose paths no longer identify anything.
+  const leaks = machinePathMatches(text)
+  if (leaks.length > 0) {
+    console.log(`\nFAIL  the receipt carries machine layout (${leaks.length} pattern(s)); not written`)
+    console.log('      A receipt is meant to be pasted publicly. Report this as a defect: the')
+    console.log('      writer is supposed to carry suite names and verdicts only.')
+    process.exit(1)
+  }
+  writeFileSync(receiptPath, text, 'utf8')
+  console.log(`\nreceipt written to ${receiptPath} — paste it into an issue to make this run checkable`)
+}
 process.exit(failed.length === 0 && undeclared.length === 0 ? 0 : 1)
