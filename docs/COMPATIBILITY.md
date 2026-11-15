@@ -115,3 +115,5 @@
 3. 窗口开了再按 `remove_bundle` → `install_bundle <目标>` → 重启 → `verify-post-restart` 的顺序做。
 
 窗口是 pnpm 的供应链策略，不是 bug；绕开它需要显式修改 profile 的 `minimumReleaseAge`，那属于降低供应链保护，要单独决定。
+
+**0.8.1 的实测（2026-11-15）**：这个 profile **没有**配置 `minimumReleaseAge`（`pnpm config get` 打印 `undefined`），但 pnpm **仍然**执行了年龄检查——安装刚发布的 0.8.1 时它往 `pnpm-workspace.yaml` 写入了 `minimumReleaseAgeExclude: [dsh-wsl-desktop@0.8.1]`。也就是说存在一个**有效默认值**，而默认行为是**宽松的**：不设 `minimumReleaseAgeStrict: true` 时它记录排除项后继续，而不是阻断（pnpm 自己的提示是「set minimumReleaseAgeStrict to true to gate these updates with a prompt」）。所以「未配置」既不是「无窗口」，也不该被当成阻断理由——`release-check` 现在把它报成 `unset (pnpm default, permissive)` 并放行。

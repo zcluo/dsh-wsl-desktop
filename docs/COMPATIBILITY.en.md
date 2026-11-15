@@ -108,3 +108,5 @@ When switching the profile back to a registry build after a release, **confirm t
 3. Once the window is open, do `remove_bundle` → `install_bundle <target>` → restart → `verify-post-restart`.
 
 The window is pnpm's supply-chain policy, not a bug; bypassing it means explicitly changing the profile's `minimumReleaseAge`, which lowers supply-chain protection and is a separate decision.
+
+**Measured for 0.8.1 (2026-11-15)**: this profile does **not** configure `minimumReleaseAge` (`pnpm config get` prints `undefined`), yet pnpm still applied an age check — installing the freshly published 0.8.1 made it write `minimumReleaseAgeExclude: [dsh-wsl-desktop@0.8.1]` into `pnpm-workspace.yaml`. So an **effective default** exists, and its behaviour is **permissive**: without `minimumReleaseAgeStrict: true` it records the exclusion and proceeds instead of blocking (pnpm's own message: "set minimumReleaseAgeStrict to true to gate these updates with a prompt"). "Unset" is therefore neither "no window" nor a reason to block — `release-check` now reports `unset (pnpm default, permissive)` and lets the release through.

@@ -136,13 +136,19 @@ if (age === null) {
   facts.minimumReleaseAge = null
   facts.minimumReleaseAgeCause = 'pnpm-unavailable'
 } else if (age === '' || age === 'undefined' || Number.isNaN(Number(age))) {
-  // ABSENT IS NOT UNKNOWN. pnpm's own source settles what an unset value means:
-  // `minimumReleaseAge: opts.minimumReleaseAge ?? 0`, and the age check is only
-  // active under `Boolean(opts.minimumReleaseAge)`. So a profile that sets
-  // nothing imposes no window at all, and blocking here would report a real
-  // state as an unknown one. (Measured 2026-11-15 in pnpm 11.28.5's dist.)
-  facts.minimumReleaseAge = 0
-  facts.minimumReleaseAgeCause = 'default-zero'
+  // ABSENT IS NOT UNKNOWN, and it is not zero either. Measured on 2026-11-15 by
+  // publishing and installing: the profile set nothing, `pnpm config get
+  // minimumReleaseAge` printed `undefined`, and pnpm STILL applied an age policy
+  // -- installing the just-published 0.8.1 made it write
+  // `minimumReleaseAgeExclude: [dsh-wsl-desktop@0.8.1]` into pnpm-workspace.yaml.
+  // So an effective default exists, and it is PERMISSIVE: without
+  // `minimumReleaseAgeStrict: true` pnpm records the exclusion and proceeds
+  // rather than blocking ("set minimumReleaseAgeStrict to true to gate these
+  // updates with a prompt", pnpm's own message). The install therefore is not
+  // gated, which is what this preflight needs to know -- but the reason is the
+  // permissive default, NOT a window of zero.
+  facts.minimumReleaseAge = 'unset (pnpm default, permissive)'
+  facts.minimumReleaseAgeCause = 'default-permissive'
 } else {
   facts.minimumReleaseAge = Number(age)
   facts.minimumReleaseAgeCause = null
