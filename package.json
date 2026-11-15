@@ -1,6 +1,6 @@
 {
   "name": "dsh-wsl-desktop",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "type": "module",
   "main": "lib/index.js",
   "icon": "./lib/icon.svg",
@@ -13,8 +13,19 @@
     "prepack": "node -e \"const fs=require('node:fs'),p=require('node:path');(function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){if(e.isDirectory()){const f=p.join(d,e.name);if(e.name==='__pycache__'){fs.rmSync(f,{recursive:true,force:true})}else{w(f)}}}})('lib')\""
   },
   "engines": {
-    "node": ">=22.19"
+    "node": ">=22.19",
+    "dsh": ">=0.1.7-0"
   },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "wsl",
+    "wsl2",
+    "workspace",
+    "execution-world",
+    "windows"
+  ],
   "files": [
     "lib",
     "cordis.patch.yml",
