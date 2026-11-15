@@ -424,5 +424,38 @@ console.log('\nworld rows constant')
 check('world rows exclude the WSL tool ids', !WORLD_ROWS.has('tool-bash-wsl') && WORLD_ROWS.has('tool-pwsh'))
 check('persona sentence names the UNC spelling', WSL_PERSONA_SENTENCE.includes('wsl.localhost'))
 
+// --- the post-hoc binding fallback must not lose its race -------------------
+//
+// `api-session/added` fires BEFORE the harness registers the session's agent, so
+// a one-shot `agents.get` lost that race EVERY time and the session stayed in the
+// Windows world for good (a preset is fixed at creation). Measured on Desktop
+// 0.2.2-rc.3: a session in a WSL-UNC workspace recorded `ok:false`. The wait is
+// bounded so a registry that never answers cannot hang the fallback either.
+{
+  const { waitForAgent } = await import('../lib/host/state.js')
+  const noSleep = async () => {}
+  const immediate = { get: () => ({ id: 'a' }) }
+  check('an already-registered agent is returned without waiting',
+    (await waitForAgent(immediate, 's', { sleep: noSleep }))?.id === 'a')
+
+  let reads = 0
+  const late = { get: () => (++reads >= 3 ? { id: 'late' } : undefined) }
+  check('an agent that appears a few reads later is still bound',
+    (await waitForAgent(late, 's', { deadlineMs: 1000, pollMs: 1, sleep: noSleep }))?.id === 'late',
+    { reads })
+
+  let clock = 0
+  const never = { get: () => undefined }
+  const waited = await waitForAgent(never, 's', {
+    deadlineMs: 100,
+    pollMs: 10,
+    now: () => clock,
+    sleep: async (ms) => { clock += ms },
+  })
+  check('a registry that never answers gives up at the bound instead of hanging',
+    waited === undefined && clock <= 110, { waited, clock })
+  check('and it gives up by TIME, not by attempt count', clock >= 100, clock)
+}
+
 console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
 process.exit(checker.failures === 0 ? 0 : 1)
