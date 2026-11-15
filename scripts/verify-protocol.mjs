@@ -96,6 +96,25 @@ check('every code has a params allowlist',
 check('the allowlist names only real codes',
   Object.keys(SAFE_PARAMS).every((code) => CODES.includes(code)), Object.keys(SAFE_PARAMS))
 check('internal allows the ref', SAFE_PARAMS.internal.includes('ref'), SAFE_PARAMS.internal)
+// The route answers a failed admission with a `step` so a browser can report
+// WHERE it broke; without the allowlist entry the param would be dropped and the
+// refusal would be as opaque as the empty-bodied 400 it replaced.
+check('internal allows the admission step', SAFE_PARAMS.internal.includes('step'), SAFE_PARAMS.internal)
+// ...and the allowlist must be what actually lets it through. Appending `step`
+// to the envelope AFTER `browserFailure` returned would have made the entry
+// decorative: the filter would never see it, so the entry would document a rule
+// the code does not follow. This asserts the whole path instead.
+{
+  const enveloped = browserFailure(new WslRouteError('internal', { step: 'admit' }), { discovery: false })
+  check('an internal failure carrying a step keeps it through the allowlist filter',
+    enveloped.code === 'internal' && enveloped.params.step === 'admit', enveloped)
+  check('and it still carries the correlation ref that internal always has',
+    typeof enveloped.params.ref === 'string' && enveloped.params.ref.length > 0, enveloped.params)
+  check('and a step the code did not put there is still dropped by the filter',
+    browserFailure(new WslRouteError('internal', { step: 'admit', hostPath: '/home/someone' }), { discovery: false })
+      .params.hostPath === undefined,
+    'the allowlist is the boundary; a param it does not name must not survive')
+}
 check('user-unknown allows only the user', SAFE_PARAMS['user-unknown'].join(',') === 'user',
   SAFE_PARAMS['user-unknown'])
 

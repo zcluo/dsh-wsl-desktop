@@ -288,6 +288,28 @@ for (const relative of ALL) {
       && /if \(rejection !== undefined\) \{/.test(code)
       && /res\.writeHead\(rejection,/.test(code),
     'text cannot prove the call site is right in every shape; verify-route.mjs covers this seam behaviourally')
+  // Host drift, measured 2026-11-14 on Desktop 0.2.2-rc.3: the harness commit
+  // 71753fdf91 ("centralize route admission with required policy") BOTH removed
+  // `connection.requestRejection` and made an omitted route `auth` default to
+  // `required`. The two changes compose into a route that never runs its own
+  // handler: the webserver refuses the request first, and the browser sees an
+  // empty-bodied 401 that the client can only report as `internal`. Both pins
+  // below exist because the failure is silent — the W dialog rendered, and only
+  // a real browser call showed that every method was refused.
+  check('SOURCE-TEXT: the route declares its own auth policy instead of inheriting the host default',
+    /auth: 'anonymous'/.test(code),
+    'an omitted `auth` defaults to `required` on 0.2.2-rc.3+, which gates the request before the handler and makes the development-token arm unreachable')
+  check('SOURCE-TEXT: the fence reads the admission the host still exposes',
+    /\.admit\(req\)/.test(code) && !/\.requestRejection\(/.test(code),
+    'connection.requestRejection was removed in 71753fdf91; calling it throws, and the route then answers 500 instead of the fence\'s 401/403')
+  // Cordis resolves a service property against the CALLING context, so calling
+  // `admit` — which reads `connection.authentication` internally — requires the
+  // caller to inject that sub-service as well. Omitting it does not fail at load
+  // time: it fails on the FIRST REQUEST, from inside admit, with
+  // `cannot get property "connection.authentication" without inject`.
+  check('SOURCE-TEXT: the plugin injects the authentication sub-service that admit reads',
+    /export const inject = \[[^\]]*'connection\.authentication'[^\]]*\]/.test(code),
+    'admit reads connection.authentication; without the inject, every route call throws before the fence can answer')
 }
 
 // The distribution a session runs in must survive the shell→subprocess seam.
