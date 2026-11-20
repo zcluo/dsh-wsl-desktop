@@ -89,6 +89,20 @@ That commit changed three things at once. Any one of them would have broken this
 
 **The lesson matters more than the fix**: this path is **structurally invisible to the offline gate** — `verify-route` needs the development token, and the token path was itself blocked by defect #1, while `verify-post-restart` only compares client-bundle markers. It took a human clicking the W button once. During diagnosis, three successive reasoning-based edits each targeted the wrong place; only writing the exception to disk produced the answer in one step. **Changing code without evidence changes what you believe the bug is.**
 
+### 0.2.2-rc.5: the module graph moved from an HTTP stream to a Remote service (2026-11-20)
+
+The `/plugins/events` HTTP SSE endpoint was removed and the module graph is now served by `pluginEvents`, a `TypertRemoteService` (harness commit `bd1d6dcd0c`). **The plugin itself is unaffected**: on rc.5 `verify-route` passes and 56 of `verify-post-restart`'s host checks pass — preset generation, session binding, confinement, PTY, the Windows world staying unchanged, and the contract probe. What broke was **this repository's verification tooling**: `scripts/live-client.mjs` still read the path that no longer exists, so three suites reported "the plugin is not in the graph" when the truth was "no graph was read".
+
+**Handling**: three outcomes, and only the middle one reddens.
+
+| Outcome | Meaning | Behaviour |
+|---|---|---|
+| Graph readable, plugin present | normal | PASS |
+| Graph readable, plugin absent | **a defect of this plugin** | FAIL |
+| Graph unreadable (404 / refused / stream ended) | this host publishes no graph | **unmeasurable** — counted as neither a pass nor a failure |
+
+`verify-live-env` (whose entire subject is the served client) and `inspect-live-client` therefore exit 2, each with a `DECLARED_SKIPS` entry naming that host's precondition; `verify-post-restart` marks only that group of six as unevaluated and prints why, leaving its other fifty-one checks to speak. **"Cannot measure" must not be reported as "is broken"** — the exact lie this repository keeps having to remove.
+
 ## Release preflight
 
 `node scripts/release-check.mjs` at the repository root checks, before publishing: npm auth, the registry latest, whether the target version is already taken, local/remote tags, the working tree, pnpm's `minimumReleaseAge` window, and a privacy scan (secrets and machine paths in tracked files, test artifacts in the `npm pack` manifest). It is read-only and prints the next commands.

@@ -192,6 +192,26 @@ const LIVE = ['verify-live-env.mjs', 'verify-route.mjs', 'inspect-live-client.mj
  */
 const DECLARED_SKIPS = [
   {
+    // verify-live-env.mjs — the branch is `error instanceof ClientGraphUnavailableError`,
+    // thrown when `/plugins/events` is not a readable graph. Desktop 0.2.2-rc.5 replaced
+    // that HTTP SSE stream with the `pluginEvents` Remote service (harness bd1d6dcd0c),
+    // so an upgraded host answers 404 and the suite's whole subject — the browser half
+    // the page receives — cannot be measured there. It exits 2 rather than reddening,
+    // because nothing about the plugin follows from a graph that was never read.
+    suite: 'verify-live-env.mjs',
+    branch: ['error instanceof ClientGraphUnavailableError'],
+    precondition: 'the host publishes no readable client module graph (Desktop 0.2.2-rc.5 moved /plugins/events to the pluginEvents Remote service), so the served browser half cannot be measured here',
+  },
+  {
+    // inspect-live-client.mjs — the same precondition, on the diagnostic tool that
+    // reports which markers the served bundle carries. It has nothing else to say
+    // when there is no bundle to inspect, so it exits 2 rather than inventing a
+    // verdict about a client half it never read.
+    suite: 'inspect-live-client.mjs',
+    branch: ['error instanceof ClientGraphUnavailableError ? 2 : 1'],
+    precondition: 'the host publishes no readable client module graph (Desktop 0.2.2-rc.5 moved /plugins/events to the pluginEvents Remote service), so there is no served bundle to inspect',
+  },
+  {
     // verify-modules.mjs — the branch tests `!existsSync(DSH_WSL_DEPS ?? <plugin root>/node_modules)`,
     // which is true when the plugin root carries no node_modules AND when an override names a
     // directory that is not there. Either way lib/index.js cannot be imported, which is the
@@ -348,6 +368,15 @@ const DECLARED_SKIPS = [
 ]
 
 const suites = live ? [...STANDALONE, ...LIVE] : STANDALONE
+/**
+ * Every suite this aggregate CAN run, regardless of this invocation's selection.
+ *
+ * The stale-declaration audit below asks a property of the REPOSITORY — "can this
+ * suite still skip at all" — not of this run, so it must not judge a live suite by
+ * an offline invocation's list. A declaration naming `verify-live-env.mjs` is
+ * honest on `--live` runs and merely dormant here.
+ */
+const allSuites = [...STANDALONE, ...LIVE]
 const results = []
 /** The declaration of one suite, by name. */
 const declarations = new Map(DECLARED_SKIPS.map((entry) => [entry.suite, entry]))
@@ -556,8 +585,8 @@ function canExitTwo(source) {
 {
   const stale = []
   for (const { suite, branch } of DECLARED_SKIPS) {
-    if (!suites.includes(suite)) {
-      stale.push(`${suite} is not in the suite list, so the declaration can never apply`)
+    if (!allSuites.includes(suite)) {
+      stale.push(`\ is not in the suite list, so the declaration can never apply`)
       continue
     }
     let source = null

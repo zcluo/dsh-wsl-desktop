@@ -14,7 +14,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { makeChecker } from './suite-shell.mjs'
 import { DEV_TOKEN_HEADER, dshHome, ensureDevToken } from './dev-token.mjs'
-import { readServedClient } from './live-client.mjs'
+import { ClientGraphUnavailableError, readServedClient } from './live-client.mjs'
 import {
   REQUIRED_CLIENT_MARKERS,
   classifyBootstrap,
@@ -82,13 +82,27 @@ try {
     served.bundle.length > 0 && missingClientMarkers(served.bundle).length === 0,
     missingClientMarkers(served.bundle))
 } catch (error) {
-  check('the page is served the current browser half', false, error?.message ?? error)
+  if (error instanceof ClientGraphUnavailableError) {
+    // NOT a failure of the plugin. This suite's whole subject is the served client,
+    // and the host publishes no graph to read it from, so the suite evaluated
+    // nothing about it — which is exactly what exit 2 + a declared precondition is
+    // for. Desktop 0.2.2-rc.5 moved the graph to the `pluginEvents` Remote service.
+    console.log('  SKIP  the page is served the current browser half')
+    console.log(`        ${error.message}`)
+    console.log('        The HOST publishes no readable graph, so the served client cannot be')
+    console.log('        measured here. That is a precondition of this host, not a defect of the plugin.')
+    checker.skip(1)
+  } else {
+    check('the page is served the current browser half', false, error?.message ?? error)
+  }
 }
 
 if (verdict.kind === 'ready' && served !== null && missingClientMarkers(served.bundle).length === 0) {
   console.log(`\nready: host ${expectedVersion}, client rev ${served.entry.rev}, ${served.bundle.length} bytes`)
 }
 
-const code = checker.failures > 0 ? 1 : 0
-console.log(`\n${checker.passed} passed, ${checker.failures} failed`)
+// 1 when a check failed, 2 when a precondition stopped one, 0 otherwise: the
+// aggregate reads exit 2 as the suite's own SKIP and requires a declaration.
+const code = checker.failures > 0 ? 1 : (checker.skipped > 0 ? 2 : 0)
+console.log(`\n${checker.passed} passed, ${checker.failures} failed${checker.skipped === 0 ? '' : `, ${checker.skipped} skipped`}`)
 process.exitCode = code

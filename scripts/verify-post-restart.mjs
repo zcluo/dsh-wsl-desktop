@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { resolveDistro, resolveLinuxHome } from './env.mjs'
 import { DEV_TOKEN_HEADER, ensureDevToken } from './dev-token.mjs'
 import { CHECK_IDS } from '../lib/protocol.js'
+import { ClientGraphUnavailableError, readClientGraph } from './live-client.mjs'
 import { makeChecker } from './suite-shell.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -781,41 +782,28 @@ console.log('\nhost contract (bootstrap)')
 
 console.log('\nbrowser half served to the page')
 
-/**
- * Read the live client module graph from the page's own refresh stream.
- * @returns {Promise<object|null>} the plugin's graph entry, or null when the stream carries none.
- */
-async function liveClientEntry() {
-  const abort = new AbortController()
-  const timer = setTimeout(() => { abort.abort() }, 8000)
-  try {
-    const response = await fetch(`${baseUrl}/plugins/events`, { signal: abort.signal })
-    const reader = response.body.getReader()
-    let buffered = ''
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) return null
-      buffered += Buffer.from(value).toString('utf8')
-      let end
-      while ((end = buffered.indexOf('\n')) >= 0) {
-        const line = buffered.slice(0, end)
-        buffered = buffered.slice(end + 1)
-        if (!line.startsWith('data: ')) continue
-        const payload = JSON.parse(line.slice(6))
-        if (payload.type !== 'graph') continue
-        return (payload.graph.entries ?? []).find((entry) => entry.id === 'dsh-wsl-desktop') ?? null
-      }
-    }
-  } finally {
-    clearTimeout(timer)
-    abort.abort()
-  }
-}
-
 // The host caches each client bundle in memory, so this is the only automated
 // proof that the page receives the browser half currently on disk.
-const clientEntry = await liveClientEntry().catch(() => null)
-check('the client half is in the served module graph', clientEntry !== null, 'no dsh-wsl-desktop entry in /plugins/events')
+//
+// THREE outcomes, and only the middle one is a defect: the host may publish no
+// graph at all (Desktop 0.2.2-rc.5 moved `/plugins/events` to the `pluginEvents`
+// Remote service, so the path answers 404), the graph may omit this plugin, or
+// the entry may be there. The six checks in this section are NOT counted when the
+// graph is unreadable — reporting "cannot measure" as "is missing" reddened this
+// suite on a host where the other fifty-one checks passed. The manual W-button
+// step at the end of this file still covers the browser half.
+const graph = await readClientGraph(baseUrl)
+  .catch((error) => ({ kind: 'unmeasurable', status: 0, reason: error?.message ?? String(error) }))
+if (graph.kind === 'unmeasurable') {
+  console.log('  SKIP  the client half is in the served module graph')
+  console.log(`        ${new ClientGraphUnavailableError(graph.status).message}`)
+  console.log('        The six client-bundle checks below are NOT evaluated and are NOT counted as')
+  console.log('        passing or failing: this host publishes no graph to read them from.')
+}
+const clientEntry = graph.kind === 'ok' ? graph.entry : null
+if (graph.kind !== 'unmeasurable') {
+  check('the client half is in the served module graph', clientEntry !== null, 'no dsh-wsl-desktop entry in /plugins/events')
+}
 if (clientEntry !== null) {
   // 0.1.7's graph entries may carry a path without the leading slash; the
   // joined URL must not lose the separator between origin and path.

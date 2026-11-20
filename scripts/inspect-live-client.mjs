@@ -14,7 +14,7 @@
  * place the default is spelled.
  */
 
-import { readServedClient } from './live-client.mjs'
+import { ClientGraphUnavailableError, readServedClient } from './live-client.mjs'
 
 // The harness exports DSH_WEB_URL for the host it just started, and `verify-all --live`
 // runs this suite with NO argv (its spawnSync inherits the environment). Reading only
@@ -32,7 +32,8 @@ try {
   served = await readServedClient(baseUrl)
 } catch (error) {
   console.log(error?.message ?? error)
-  process.exit(1)
+  // Exit 2 = this host publishes no readable graph, so nothing about the plugin follows.
+  process.exit(error instanceof ClientGraphUnavailableError ? 2 : 1)
 }
 console.log(`entry rev ${served.entry.rev}  ${served.entry.url}`)
 console.log(`served ${served.status}, ${served.bundle.length} bytes`)

@@ -206,11 +206,21 @@ check('and the specifier SET stays right in a semicolon-free multi-import file',
 
 /** The aggregate's suite list, as one line-per-entry array literal. */
 const STANDALONE_ANCHOR = /const STANDALONE = \[[\s\S]*?\n\]/
+/**
+ * The aggregate's LIVE list, same shape.
+ *
+ * A declaration may name a live suite too: `verify-live-env.mjs` exits 2 when the
+ * host publishes no readable client module graph, which is a precondition of the
+ * HOST rather than a defect of the plugin. Reading only STANDALONE made the
+ * membership row refuse that declaration, so the two lists are read together.
+ */
+const LIVE_ANCHOR = /const LIVE = \[[\s\S]*?\n\]/
 /** The aggregate's declaration table, same shape. */
 const DECLARED_ANCHOR = /const DECLARED_SKIPS = \[[\s\S]*?\n\]/
 
-const anchorsPresent = STANDALONE_ANCHOR.test(aggregateSource) && DECLARED_ANCHOR.test(aggregateSource)
-check('the aggregate still spells the two tables this pin rewrites (STANDALONE and DECLARED_SKIPS)',
+const anchorsPresent = STANDALONE_ANCHOR.test(aggregateSource) && LIVE_ANCHOR.test(aggregateSource)
+  && DECLARED_ANCHOR.test(aggregateSource)
+check('the aggregate still spells the tables this pin rewrites (STANDALONE, LIVE and DECLARED_SKIPS)',
   anchorsPresent,
   'the copies below cannot carry their fixture declarations, so every "declared" assertion would be vacuous')
 
@@ -468,8 +478,11 @@ function tableProblems(standaloneBlock, declaredBlock, readSuite) {
 console.log('\n=== E. the declarations in scripts/verify-all.mjs ===')
 {
   const standaloneBlock = STANDALONE_ANCHOR.exec(aggregateSource)?.[0] ?? ''
+  const liveBlock = LIVE_ANCHOR.exec(aggregateSource)?.[0] ?? ''
   const declaredBlock = DECLARED_ANCHOR.exec(aggregateSource)?.[0] ?? ''
-  const standaloneSuites = [...standaloneBlock.matchAll(/'([^']+\.mjs)'/g)].map((match) => match[1])
+  // Both lists, because the aggregate runs both and a declaration may name either.
+  const runSuites = `${standaloneBlock}\n${liveBlock}`
+  const standaloneSuites = [...runSuites.matchAll(/'([^']+\.mjs)'/g)].map((match) => match[1])
   const declaredSuites = [...declaredBlock.matchAll(/suite:\s*'([^']+)'/g)].map((match) => match[1])
   const preconditions = [...declaredBlock.matchAll(/precondition:\s*'([^']*)'/g)].map((match) => match[1])
   check('the table declares at least one suite (an empty table accepts no skip at all)',
@@ -479,7 +492,7 @@ console.log('\n=== E. the declarations in scripts/verify-all.mjs ===')
     `missing: ${declaredSuites.filter((suite) => !existsSync(join(here, suite))).join(', ') || '(none)'}`)
   check('every declared suite is in the suite list the aggregate runs',
     declaredSuites.every((suite) => standaloneSuites.includes(suite)),
-    `not in STANDALONE: ${declaredSuites.filter((suite) => !standaloneSuites.includes(suite)).join(', ') || '(none)'}`)
+    `not in STANDALONE or LIVE: ${declaredSuites.filter((suite) => !standaloneSuites.includes(suite)).join(', ') || '(none)'}`)
   // This row used to measure the precondition's LENGTH and say the skip was "justified".
   // A static reader cannot judge justification — only a human reading the branch can — so
   // the row now measures the part that is checkable (the entry is tied to its suite and to
@@ -487,7 +500,7 @@ console.log('\n=== E. the declarations in scripts/verify-all.mjs ===')
   const readSuiteOf = (suite) => {
     try { return readFileSync(join(here, suite), 'utf8') } catch { return null }
   }
-  const tableIssues = tableProblems(standaloneBlock, declaredBlock, readSuiteOf)
+  const tableIssues = tableProblems(runSuites, declaredBlock, readSuiteOf)
   check('the declaration table is sound: every entry names a suite this directory runs, cites branch text that suite still carries, and carries its own precondition tied to that suite',
     tableIssues.length === 0, tableIssues.join('; '))
   console.log(`        ${standaloneSuites.length} standalone suite(s), ${declaredSuites.length} declared`)

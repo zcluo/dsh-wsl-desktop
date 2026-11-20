@@ -96,6 +96,20 @@
 
 **教训（比结论更重要）**：这条路径**离线门结构上覆盖不到**——`verify-route` 需要开发令牌，而开发令牌恰好被缺陷 #1 挡住；`verify-post-restart` 只比对 client bundle 的标记串。它是**真人点一次 W 按钮**才暴露的。定位过程中连续三次基于推理改动都改错了位置，只有把异常落盘取证之后才一次命中：**没有证据就改代码，改的是自己以为的病灶。**
 
+### 0.2.2-rc.5：模块图从 HTTP 流迁到 Remote 服务（2026-11-20）
+
+`/plugins/events` 这个 HTTP SSE 端点被删掉，模块图改由 `pluginEvents` 这个 `TypertRemoteService` 提供（harness 提交 `bd1d6dcd0c`）。**插件本身不受影响**——rc.5 上 `verify-route` 通过，`verify-post-restart` 的 56 项宿主检查全过（预设生成、会话绑定、围栏、PTY、Windows 世界未污染、契约探测）。受影响的是**本仓库的验证工具**：`scripts/live-client.mjs` 还在读那个已经不存在的路径，于是三套件把「读不到图」报成「插件不在图里」。
+
+**处置**：把三种结局分开，只让中间那种变红。
+
+| 结局 | 含义 | 行为 |
+|---|---|---|
+| 图读得到、插件在 | 正常 | PASS |
+| 图读得到、插件不在 | **插件缺陷** | FAIL |
+| 图读不到（404 / 连接失败 / 流提前结束） | 该宿主不发布图 | **不可测**，不计入通过也不计入失败 |
+
+`verify-live-env`（整套主题就是被服务的客户端）与 `inspect-live-client` 因此 exit 2，并在 `DECLARED_SKIPS` 里各自带一条点名该宿主的前提；`verify-post-restart` 只把那一组 6 项标成未评估并打印原因，其余 51 项照常给结论。**「测不了」不能报成「坏了」**——这正是这个仓库反复在治的那类谎。
+
 ## 发布预检
 
 仓库根的 `node scripts/release-check.mjs` 会在发布前检查：npm 登录、registry 最新版、目标版本是否已占用、本地/远端 tag、工作树、pnpm 的 `minimumReleaseAge` 窗口，以及隐私扫描（已跟踪文件里的密钥与本机路径、`npm pack` 清单里的测试产物）。它只读，不改任何东西；输出会直接给出下一步命令。
