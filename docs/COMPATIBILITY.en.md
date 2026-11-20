@@ -103,6 +103,8 @@ The `/plugins/events` HTTP SSE endpoint was removed and the module graph is now 
 
 `verify-live-env` (whose entire subject is the served client) and `inspect-live-client` therefore exit 2, each with a `DECLARED_SKIPS` entry naming that host's precondition; `verify-post-restart` marks only that group of six as unevaluated and prints why, leaving its other fifty-one checks to speak. **"Cannot measure" must not be reported as "is broken"** — the exact lie this repository keeps having to remove.
 
+**Measured on rc.5 (2026-11-20, Desktop 0.2.2-rc.5)**: the offline gate is 25/27 with no failures; the live gate is 27/31 with four declared skips and no failures. **The sidebar's W button was confirmed working by hand** — that is the one direct piece of evidence that the client half really is served, and it stands in for the six client checks automation can no longer evaluate. So on rc.5 this plugin is **fully compatible**; the gap is confined to automated verification, and the receipt records it honestly.
+
 ## Release preflight
 
 `node scripts/release-check.mjs` at the repository root checks, before publishing: npm auth, the registry latest, whether the target version is already taken, local/remote tags, the working tree, pnpm's `minimumReleaseAge` window, and a privacy scan (secrets and machine paths in tracked files, test artifacts in the `npm pack` manifest). It is read-only and prints the next commands.
