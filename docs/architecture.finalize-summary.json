@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "docs/diagrams-src/architecture.json",
-    "sha256": "3e176aa4f217e30fe7aebd0eba213e4aeefd2814148cb14b0c2418caa0ce916c",
+    "sha256": "778e5b89eed93d174c31b9c274b108e82d9896c5f0b51506076f2581893fb333",
     "bytes": 10460
   },
   "artifact": {
     "path": "docs/architecture.html",
-    "sha256": "34ade018b0bba8d767c8934a6529e87cf67ab1d761578b9bfeb9870b313ef19c",
+    "sha256": "f80a45944d6347df113896c55d787aee47f26b0d82139fedc5e2610312820cd0",
     "bytes": 842896
   },
   "gates": {
@@ -40,13 +40,13 @@
     "severity": "normal",
     "summary": "Polishes automatic Architecture layout, spine labels, crossing reduction, and Classic styling, and deduplicates cited Explainer files.",
     "checkedAt": "2026-11-25T14:52:14.927Z",
-    "source": "network",
+    "source": "cache",
     "noticeRequired": true,
-    "noticeText": "Archify update: 3.2.0 → 3.3.1. A newer release is available. Release notes: https://github.com/tt-a1i/archify/releases/tag/v3.3.1. Would you like me to update Archify?",
+    "noticeText": "Archify update: 3.2.0 → 3.3.1. A previous check at 2026-11-25T14:52:14.927Z found a newer release. Release notes: https://github.com/tt-a1i/archify/releases/tag/v3.3.1. Would you like me to update Archify?",
     "eventKey": "archify@sha256:b92b4d55446966fd74e5338a45d6de9a7a1b194420cd5eb14d2cdc39f1053b80"
   },
   "visualReview": "not-requested",
-  "durationMs": 10095,
+  "durationMs": 5246,
   "browserCheck": {
     "requested": true,
     "ran": true
