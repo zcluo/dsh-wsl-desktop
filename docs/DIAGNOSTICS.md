@@ -88,6 +88,10 @@ W 按钮通过宿主的快捷键服务注册一条命令 `wsl.workspace.open`。
 
 侧栏锚点找不到时（桌面改动把「添加工作区」入口换掉），除了宿主日志，还会出现一枚可关闭的浮动「WSL」入口；真实入口后来出现时它会自动移除。关闭浏览器半边的注入失败（cordis 不调用 `apply`）是外部边界：这一层没有产品内信号，只有宿主日志与 post-restart 检查。
 
+**降级卡不是唯一失效形态**：上面这些是插件**已经激活**、只是宿主能力不全。还有一类失效发生在激活之前——插件**模块级** `inject` 里声明了一个宿主从未提供的服务，fiber 永久 `pending`，连 `apply()` 都不执行。那时没有对话框、没有降级卡，只有启动日志里一行 `warning: 1 entry did not activate` 与 `pending (waiting for service: …)`。这一层在插件内部拿不到任何信号（代码根本没跑），所以判据只能是那一行日志；0.8.1 就是这样在所有已发布宿主上失效的（见 [兼容性与升级](COMPATIBILITY.md) 的「0.8.1 的致命缺陷」），现在由 `verify-modules` 的 inject 白名单挡在发布前。
+
+**两者的区别只在「模块级」还是「函数级」**：`ctx.inject(names, fn)`（函数级）缺失服务只让那个**子 fiber** pending，父 fiber 照常 `apply()`、照常注册路由，且不打印任何日志。本插件正是靠这个在 master 代宿主上拿到 `connection.authentication`（`lib/host/http.js` 的 `openAdmission()`），同时不让发布代宿主上出现上面那行致命警告。
+
 ## 隐私边界
 
 - 浏览器只收到 `{ ok: false, code, params }`；`SAFE_PARAMS` 是硬白名单，值是调用者自己提交的短文本（截断 200 字符）。

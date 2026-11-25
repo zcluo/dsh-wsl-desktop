@@ -88,6 +88,10 @@ At startup the host probes its declared symbols. A missing symbol degrades by fe
 
 When the sidebar anchor is missing (a desktop change replaced the "add workspace" entry), the host log is no longer the only signal: a dismissible floating "WSL" entry appears, and it is removed automatically when the real entry appears. A client injection that never resolves (cordis never calls `apply`) is an external boundary: there is no in-product signal for it, only the host log and the post-restart check.
 
+**The degraded card is not the only failure shape.** The rows above cover a plugin that **has activated** but finds an incomplete host. There is another class that happens *before* activation: the plugin's **module-level** `inject` names a service the host never provides, so the fiber stays `pending` forever and `apply()` never runs. There is no dialog and no degraded card then — only one line in the startup log: `warning: 1 entry did not activate` plus `pending (waiting for service: …)`. Inside the plugin that layer has no signal at all (its code never runs), so that log line is the only diagnostic; it is how 0.8.1 died on every published host (see "The fatal 0.8.1 defect" in [Compatibility](COMPATIBILITY.en.md)), and it is now blocked before release by the `verify-modules` inject allowlist.
+
+**The difference is only "module-level" versus "function-level".** With `ctx.inject(names, fn)` a missing service leaves just that **child fiber** pending: the parent still runs `apply()`, still registers its route, and prints nothing at all. That is how this plugin obtains `connection.authentication` on a master-built host (`openAdmission()` in `lib/host/http.js`) without producing the fatal warning above on a published one.
+
 ## Privacy boundary
 
 - The browser receives only `{ ok: false, code, params }`; `SAFE_PARAMS` is a hard whitelist and values are the caller's own short text (truncated to 200 characters).

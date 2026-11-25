@@ -53,7 +53,7 @@ node scripts/verify-terminal.mjs     # PTY 桥：resize / 前台进程组 / 信�
 node scripts/verify-pty-handle.mjs   # JS 终端句柄（对着真实桥跑）
 node scripts/verify-client-ui.mjs    # 浏览器半边的静态检查（不注册槽位、定位几何、宿主调用、快捷键注册与清理）
 node scripts/verify-client-dom.mjs   # 浏览器半边的行为检查：在 jsdom 里跑真实 factory（挂载位置 / 放不下时的收敛 / 隐藏跟随 / 工作区行图标 / 快捷键提示与打开对话框）
-node scripts/verify-modules.mjs      # 宿主半边的结构性钉子：发行版接缝 + `exports` 清单（`./client` 是硬契约）
+node scripts/verify-modules.mjs      # 宿主半边的结构性钉子：发行版接缝 + `exports` 清单（`./client` 是硬契约）+ 授权准入（inject 白名单，以及 `rejectRequest` 对两种访问器的行为与失败方向）
 node scripts/verify-docs.mjs         # 文档对一致性：声明过的双语文档必须命名同一组产物（语言后缀规范化 + 全角标点分词）
 node scripts/verify-sync.mjs         # 对一次性 profile 跑真 sync.ps1：代次保留四场景（链接可用 / 悬空 / 无链接 / 从未 stage 过）
 node scripts/verify-all-skip.mjs     # 聚合器对 SKIP 的裁定：未声明的跳过判红 / 已声明的报 SKIP 并点名前提 / 失效声明在任何套件运行之前先判红

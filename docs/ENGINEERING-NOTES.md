@@ -21,6 +21,17 @@
 > ```
 > v0.2.0 的「release readiness」元数据改造（`38e6356`）删掉了整个 `exports` 块，0.2.0 与 0.2.1 因此**装上去就起不来**；`main` 顶不了这个位置——Node 解析 `./client` 子路径时不看它。`scripts/verify-modules.mjs` 现在钉住这条（`./client` 与 `.` 都在、client 入口不是 host 入口、文件真实存在、platform 为 web），发版前跑它即可拦住。**`cordis.patch.yml` 与 `lib/` 之外，`package.json` 也是投放面的一部分**：`verify-post-restart.mjs` 会把运行中的 manifest 与 checkout 逐字节比对。
 
+## 交付事故：`inject` 里写了一个「只有 master 才提供」的服务
+
+> ⚠️ **`inject` 只能写已发布宿主真的提供的顶层服务；缺一个就是永久 `pending`。** 0.8.1 为了修复一次路由准入事故，把 `'connection.authentication'` 加进了 `inject`。那个服务只存在于**从 harness master 构建**的桌面里，而 npm/官网发布的每一代 0.2.1/0.2.2 都把凭据校验器留在 `connection` 内部（构造器绑定的 `BrowserAuth`）。结果：插件在所有已发布宿主上**连 `apply()` 都不执行**——没有报错，只有启动日志一行 `warning: 1 entry did not activate` 与 `pending (waiting for service: connection.authentication)`；W 按钮点了没反应，`wsl-*` 预设也不存在（`Unknown agent preset: wsl-standard`）。
+>
+> 两件事必须一起记住：
+>
+> 1. **Cordis 的 `inject` 是许愿，不是版本门控**——没有「这个宿主没有就跳过」的写法，服务缺失只会让 fiber 停在 `PENDING`。所以 inject 里的每个名字都得是**发布版真的提供**的东西；`scripts/verify-modules.mjs` 现在用白名单钉住这条，出现白名单外的名字立刻判红。
+> 2. **「子服务该不该 inject」这件事，第一轮修反了方向，第二轮才修对。** master 代的 `admit()` 确实经由**调用方上下文**读 `connection.authentication`（Cordis 的 traceable proxy 把 `this` 换成 shadow），所以调用方**需要**它——但只能通过**函数级** `ctx.inject([...], fn)`（子 fiber，缺失只让子 fiber pending，父 fiber 照常 `apply()`），不能写进模块级 `inject`。`lib/host/http.js` 的 `openAdmission()` 就是这件事，它在 master 代用子 fiber 的句柄、在发布代回落到插件自己的句柄。第一轮把「不需要 inject」写成了结论，连同验证钉子一起固化了——两个方向各错一次。
+> >
+> > 版本号救不了这类问题：同一个 `0.2.2-rc.5` 既可能是 tag 构建也可能是 master 构建，`engines.dsh` 表达不了这项差异。判据只能是「名字在已发布宿主里存在吗」，而取证方法是读 `app.asar` 里的宿主包。
+
 ## 一次已修的偶发失败：verify-terminal
 
 **已知不稳定 → 已修，多轮验证稳定**：`verify-terminal.mjs` 曾偶发失败（实测 6 次里 1 次）。根因在宿主侧 `lib/wsl/pty.js`，不是桥：分配失败路径不终止已 spawn 的数据进程，泄漏的桥会干扰后续运行；且控制应答不携带请求 id，一次超时之后迟到的应答会被下一条请求消费，整个控制通道从此错位。修复：失败路径终止并等待两个进程退出；每个请求带 id、桥回显同一 id，超时先摘除条目、迟到应答直接丢弃。修复后历经今日十余轮全量套件（含多次背靠背）无一复现，结论稳定。

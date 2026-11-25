@@ -64,7 +64,7 @@ const METHODS = {
 }
 
 /**
- * The harness fence, as connection.requestRejection returns it: 403 for an
+ * The harness fence, as the connection service's admission returns it: 403 for an
  * authority that is not loopback, else 401 because a scripted caller has no
  * browser cookie.
  * @param {import('node:http').IncomingMessage} req - the request.

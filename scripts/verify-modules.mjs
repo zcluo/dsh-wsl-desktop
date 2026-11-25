@@ -233,9 +233,9 @@ for (const relative of ALL) {
     /isLexicallyUnderHost/.test(fence) && /startsWith\(bounded\)/.test(fence))
 }
 
-// The transport fence binds EVERY caller. `connection.requestRejection` returns
-// one of exactly two arms from a single call — 403 when the Host/Origin is not
-// trusted (the DNS-rebinding defence) and 401 when the browser session is not
+// The transport fence binds EVERY caller. The connection service returns one of
+// exactly two arms from a single call — 403 when the Host/Origin is not trusted
+// (the DNS-rebinding defence) and 401 when the browser session is not
 // authenticated — and the route applied it only when `!developer`, so a
 // development token skipped BOTH. A local script can always present a trusted
 // Host, so the token only ever needed to replace the 401 arm.
@@ -288,28 +288,201 @@ for (const relative of ALL) {
       && /if \(rejection !== undefined\) \{/.test(code)
       && /res\.writeHead\(rejection,/.test(code),
     'text cannot prove the call site is right in every shape; verify-route.mjs covers this seam behaviourally')
-  // Host drift, measured 2026-11-14 on Desktop 0.2.2-rc.3: the harness commit
-  // 71753fdf91 ("centralize route admission with required policy") BOTH removed
-  // `connection.requestRejection` and made an omitted route `auth` default to
-  // `required`. The two changes compose into a route that never runs its own
-  // handler: the webserver refuses the request first, and the browser sees an
-  // empty-bodied 401 that the client can only report as `internal`. Both pins
-  // below exist because the failure is silent — the W dialog rendered, and only
-  // a real browser call showed that every method was refused.
-  check('SOURCE-TEXT: the route declares its own auth policy instead of inheriting the host default',
+  // Host drift, measured 2026-11-14 on a MASTER-BUILT Desktop whose version
+  // string read 0.2.2-rc.3: the harness commit 71753fdf91 ("centralize route
+  // admission with required policy") BOTH removed `connection.requestRejection`
+  // and made an omitted route `auth` default to `required`. It is in no released
+  // 0.2.2 tag, so the published generation has neither change. On a drifting host
+  // the two compose into a route that never runs its own handler: the webserver
+  // refuses the request first, and the browser sees an empty-bodied 401 that the
+  // client can only report as `internal`. Both pins below exist because the
+  // failure is silent — the W dialog rendered, and only a real browser call
+  // showed that every method was refused.
+  check('SOURCE-TEXT: the route declares its own auth policy instead of inheriting a host default',
     /auth: 'anonymous'/.test(code),
-    'an omitted `auth` defaults to `required` on 0.2.2-rc.3+, which gates the request before the handler and makes the development-token arm unreachable')
-  check('SOURCE-TEXT: the fence reads the admission the host still exposes',
-    /\.admit\(req\)/.test(code) && !/\.requestRejection\(/.test(code),
-    'connection.requestRejection was removed in 71753fdf91; calling it throws, and the route then answers 500 instead of the fence\'s 401/403')
-  // Cordis resolves a service property against the CALLING context, so calling
-  // `admit` — which reads `connection.authentication` internally — requires the
-  // caller to inject that sub-service as well. Omitting it does not fail at load
-  // time: it fails on the FIRST REQUEST, from inside admit, with
-  // `cannot get property "connection.authentication" without inject`.
-  check('SOURCE-TEXT: the plugin injects the authentication sub-service that admit reads',
-    /export const inject = \[[^\]]*'connection\.authentication'[^\]]*\]/.test(code),
-    'admit reads connection.authentication; without the inject, every route call throws before the fence can answer')
+    'on a master-built host an omitted `auth` defaults to `required`, which gates the request before the handler and makes the development-token arm unreachable; published builds ignore the field entirely, so declaring it costs nothing there')
+  check('SOURCE-TEXT: the fence goes through the pinned admission helper',
+    /import \{[^}]*\bopenAdmission\b[^}]*\} from '\.\/host\/http\.js'/.test(code)
+      && /const admission = openAdmission\(ctx\)/.test(code)
+      && /admission\(connection, req\)/.test(code)
+      // The helper's answer must reach `fenceRejection` as its `rejection`: the
+      // three facts together are the minimum that still says "one admission
+      // call, chosen in one place". The VALUE between the braces is not pinned,
+      // because binding it to a local is how the `step` vocabulary stays honest
+      // (a throw inside the helper must not be reported as a fence failure).
+      && /fenceRejection\(\{\s*rejection:/.test(code),
+    'the accessor choice AND the generation probe belong in one place; inlining either in the handler is how the two generations drifted apart last time')
+
+  // A Cordis `inject` entry is a WISH, not a requirement declaration: a service
+  // name nothing ever provides leaves this plugin's fiber PENDING forever — no
+  // error, no `apply()`, no route, no presets — and the only trace is one
+  // `warning: 1 entry did not activate`. That is what 0.8.1 shipped:
+  // `'connection.authentication'`, a sub-service that exists ONLY in Desktop
+  // builds made from harness master (commit 71753fdf91, which no 0.2.2 release
+  // tag contains). On every 0.1.x/0.2.1/0.2.2 published host the credential
+  // verifier is a constructor-bound `BrowserAuth` on `connection` itself, so the
+  // name was supplied nowhere and the whole W dialog vanished behind
+  // `pending (waiting for service: connection.authentication)`.
+  //
+  // The rule this pins: ONLY top-level services a PUBLISHED host really provides
+  // may enter the module-level `inject`. A sub-service there costs activation on
+  // every host that does not have it.
+  //
+  // Function-level `ctx.inject([...], fn)` is a different mechanism and is NOT
+  // covered by this rule: an absent service there leaves only that child fiber
+  // pending while `apply()` — and therefore the route — still runs. That
+  // mechanism is exactly how `openAdmission` (lib/host/http.js) supplies the
+  // master generation with the `connection.authentication` its `admit()` needs,
+  // without making the whole plugin depend on it. (The earlier claim that the
+  // caller never needs that name was wrong — see the comment there.)
+  const PUBLISHED_SERVICES = ['webServer', 'connection']
+  const declaredInject = /export const inject = \[([^\]]*)\]/.exec(code)
+  // BOTH quote styles: `inject` is hand-written source and a regression may
+  // arrive in either spelling. Matching only `'…'` (as the first version of this
+  // pin did) misses `"connection.authentication"` entirely and reports PASS —
+  // measured, after the defect this pin exists to catch had already shipped once.
+  // Anything that is not a plain quoted literal is UNPARSEABLE rather than
+  // ignored: a name this suite cannot read is a name it cannot clear.
+  const injectLiterals = declaredInject === null ? [] : [...declaredInject[1].matchAll(/'([^']*)'|"([^"]*)"/g)]
+    .map((match) => match[1] ?? match[2])
+  const leftover = declaredInject === null
+    ? ''
+    : declaredInject[1].replace(/'([^']*)'|"([^"]*)"/g, '').replace(/[\s,]/g, '')
+  const injectNames = declaredInject === null ? null : injectLiterals
+  const injectReadable = injectNames !== null && leftover === '' && injectNames.length > 0
+  check('SOURCE-TEXT: the module-level inject names only services a published host provides',
+    injectReadable && injectNames.every((name) => PUBLISHED_SERVICES.includes(name)),
+    injectNames === null
+      ? 'no `export const inject` found'
+      : leftover !== ''
+        ? `inject=[${declaredInject[1].trim()}] carries an element this pin cannot read as a quoted name`
+        : `inject=[${injectNames.join(', ')}] allowed=[${PUBLISHED_SERVICES.join(', ')}]`)
+  check('SOURCE-TEXT: the never-provided authentication sub-service is not declared in inject',
+    injectReadable && !injectNames.includes('connection.authentication'),
+    'no 0.1.x/0.2.1/0.2.2 published host provides connection.authentication; declaring it keeps the plugin pending forever and takes the whole W dialog with it')
+
+  // The accessor choice is BEHAVIOURAL, not just a spelling: `admit` on any
+  // published release and on master, `requestRejection` only on the published
+  // ones. Drive the real helper against both fake handles so a rewrite that
+  // silently drops the fallback (and thus the 0.1.7 floor this plugin promises)
+  // reddens here instead of on a user's desktop.
+  const http = await import(pathToFileURL(join(pluginRoot, 'lib/host/http.js')).href)
+  const rejectRequest = typeof http.rejectRequest === 'function'
+    ? http.rejectRequest
+    : () => 'lib/host/http.js exports no rejectRequest'
+  const fakeRequest = { method: 'POST', headers: {} }
+  // Every probe answers with its verdict OR the thrown value. A missing export
+  // or a helper that throws must FAIL the check with that reason: an exception
+  // escaping the suite reports nothing about the rule, and the rule is the whole
+  // subject here (the same convention the fence block above follows).
+  const probe = (handle) => {
+    try {
+      return rejectRequest(handle, fakeRequest)
+    } catch (error) {
+      return `threw ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+  check('rejectRequest reads the arms from admit, the accessor every published host has',
+    probe({ admit: () => ({ rejection: 401 }) }) === 401
+      && probe({ admit: () => ({ rejection: 403 }) }) === 403,
+    probe({ admit: () => ({ rejection: 401 }) }))
+  check('rejectRequest passes an admitted request through',
+    probe({ admit: () => ({ peer: { id: 'peer' } }) }) === undefined,
+    probe({ admit: () => ({ peer: { id: 'peer' } }) }))
+  // FAILURE DIRECTION, which is the whole point of the helper: an admission this
+  // build does not recognise must never read as "admitted". Each of these used to
+  // return `undefined` while the first version of this helper shipped, so a host
+  // that changed the union's shape would have run the command unauthenticated.
+  // The expected answer is a throw, and a throw is what the route's guard turns
+  // into a JSON `internal` instead of a silent pass.
+  for (const [name, answer] of [
+    ['undefined', undefined],
+    ['null', null],
+    ['a bare string', 'allow'],
+    ['an empty object', {}],
+    ['an object with an unrelated key', { allowed: true }],
+  ]) {
+    const verdict = probe({ admit: () => answer })
+    check(`rejectRequest refuses to read ${name} as an admission`,
+      typeof verdict === 'string' && verdict.startsWith('threw '),
+      verdict)
+  }
+  check('rejectRequest honours requestRejection\'s own undefined-means-admitted contract',
+    probe({ requestRejection: () => undefined }) === undefined,
+    'requestRejection answers the status directly, so undefined is its documented "admitted", not an unknown shape')
+  check('rejectRequest falls back to requestRejection for a host too old to have admit',
+    probe({ requestRejection: () => 403 }) === 403
+      && probe({ requestRejection: () => undefined }) === undefined,
+    probe({ requestRejection: () => 403 }))
+  check('rejectRequest prefers admit when a host exposes both',
+    probe({ admit: () => ({ rejection: 401 }), requestRejection: () => 403 }) === 401,
+    'admit answers from the same two arms; a host that has it must not be re-gated by the older spelling')
+  check('rejectRequest fails loudly when the composition exposes no admission at all',
+    typeof probe(undefined) === 'string' && probe(undefined).startsWith('threw '),
+    'silently admitting instead would run commands on an unauthenticated request')
+
+  // openAdmission: the generation probe. A fake ctx records the names the child
+  // fiber asks for and whether it resolved, so both generations are exercised
+  // without a host. This is the seam the 0.8.2 release died on: the module-level
+  // inject cannot carry the sub-service, and the master host's admit() throws
+  // unless the CALLING fiber has it.
+  const openAdmission = typeof http.openAdmission === 'function'
+    ? http.openAdmission
+    : () => () => 'lib/host/http.js exports no openAdmission'
+  {
+    /** A ctx whose child fiber resolves with `childCtx`, or never resolves. */
+    const fakeCtx = (names, childCtx) => ({
+      requested: null,
+      inject(requested, callback) {
+        this.requested = requested
+        if (childCtx !== undefined) callback(childCtx)
+      },
+    })
+    const settle = async (call) => {
+      try {
+        return await call()
+      } catch (error) {
+        return `threw ${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+
+    // Master generation: the child resolves and ITS handle must be used, because
+    // only that handle's fiber named the sub-service.
+    const masterCtx = fakeCtx(undefined, undefined)
+    openAdmission(masterCtx)
+    check('openAdmission asks a child fiber for both services, not the module inject',
+      Array.isArray(masterCtx.requested)
+        && masterCtx.requested.includes('connection')
+        && masterCtx.requested.includes('connection.authentication'),
+      `requested=${JSON.stringify(masterCtx.requested)}`)
+    {
+      const childHandle = { admit: () => ({ rejection: 403 }) }
+      const ctx = { inject(names, callback) { callback({ connection: childHandle }) } }
+      const admit = openAdmission(ctx)
+      const own = { admit: () => ({ rejection: 401 }) }
+      const answer = await settle(() => admit(own, fakeRequest))
+      check('openAdmission uses the child fiber\'s handle when the child resolved',
+        answer === 403,
+        `got ${answer}; the child handle is the only one whose fiber named the sub-service, so it must win`)
+    }
+
+    // Published generation: the child never resolves. The parent's own handle
+    // must be used, and it must still work (that generation reads a bound field).
+    const publishedCtx = fakeCtx()
+    const publishedAdmit = openAdmission(publishedCtx)
+    const fallbackAnswer = await settle(() => publishedAdmit({ admit: () => ({ rejection: 403 }) }, fakeRequest))
+    const admitAnswer = await settle(() => publishedAdmit({ admit: () => ({ peer: { id: 'p' } }) }, fakeRequest))
+    check('openAdmission falls back to the plugin\'s own handle when the child never resolves',
+      fallbackAnswer === 403 && admitAnswer === undefined,
+      `rejection=${fallbackAnswer} admitted=${admitAnswer}; a pending child must not disable admission on the published generation`)
+
+    // FAILURE DIRECTION, again: the fallback runs through `rejectRequest`, so an
+    // own handle with no accessor must throw rather than admit.
+    const failClosed = await settle(() => publishedAdmit({}, fakeRequest))
+    check('openAdmission\'s fallback keeps rejectRequest\'s fail-closed answer',
+      typeof failClosed === 'string' && failClosed.startsWith('threw '),
+      failClosed)
+  }
 }
 
 // The distribution a session runs in must survive the shell→subprocess seam.

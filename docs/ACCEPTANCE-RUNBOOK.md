@@ -118,9 +118,13 @@ node scripts/verify-doctor.mjs
 
 2026-11-14 的 GUI 核验在这三条上**全部失败**，而当时的离线门是 25/27 全绿、`verify-client-ui` 与 `verify-client-dom` 也全绿。
 
-原因是宿主 0.2.2-rc.3 的路由准入重构（`71753fdf91`）：省略 `auth` 的路由被默认 `required` 拦截、`connection.requestRejection` 被删除、认证下沉成独立服务而插件没有 inject 它。三者叠加让**每一个路由方法都失败**，而浏览器只能显示「插件内部错误 / internal」。完整分析见 [兼容性与升级](COMPATIBILITY.md) 的「0.2.2-rc.3 的路由准入重构」。
+当时记下的原因是「宿主 0.2.2-rc.3 的路由准入重构（`71753fdf91`）」。**那次记录错了一半**：`71753fdf91` 不是任何 `dsh-v0.2.2-rc.*` tag 的祖先，被测桌面是从 **master** 构建、但版本号仍写 `0.2.2-rc.3` 的二进制（两代宿主的结构差异见 [兼容性与升级](COMPATIBILITY.md) 的「路由准入的两代设计」）。据此写出的 0.8.1 修复里，`inject` 补 `'connection.authentication'` 这一条是净损失——它让插件在**所有已发布宿主**上永久 `pending`，正是 issue #3 报告的现场。
+
+真正成立、并被 0.8.2 保留的部分：路由显式声明 `auth: 'anonymous'`（新代把准入交回插件自己的围栏，旧代忽略该字段）；准入统一走 `rejectRequest()`（优先 `admit`，旧代回落 `requestRejection`）；准入段的异常不逃逸成空体 400，而是带 `step` 的 JSON，并落盘到 `$DSH_HOME/wsl-desktop-route-error.log`。
 
 **这条路径对离线门是结构性不可见的**：`verify-route` 需要开发令牌，而开发令牌那条路恰好被同一个缺陷挡住。所以本节的三条手工核验不是"补充"，是**唯一能覆盖它的手段**。
+
+**人工核验必须连构建来源一起记**：这一节的结论只有在写清楚「被测桌面二进制是 tag 构建还是 master 构建」之后才有传递性。版本字符串区分不了两者，取证方法是直接读 `app.asar` 里宿主那两个包的实现（判据见 [兼容性与升级](COMPATIBILITY.md) 的「教训二」一段）。
 
 ---
 

@@ -53,7 +53,7 @@ node scripts/verify-terminal.mjs     # PTY bridge: resize / foreground process g
 node scripts/verify-pty-handle.mjs   # the JS terminal handle (run against the real bridge)
 node scripts/verify-client-ui.mjs    # browser-half static checks (no slot registration, locator geometry, host calls, shortcut registration and cleanup)
 node scripts/verify-client-dom.mjs   # browser-half behavior checks: the real factory run in jsdom (mount location / convergence when out of room / hiding follows / shortcut hint and dialog opening)
-node scripts/verify-modules.mjs      # host-half structural pins: the distro seam + the `exports` map (`./client` is a hard contract)
+node scripts/verify-modules.mjs      # host-half structural pins: the distro seam + the `exports` map (`./client` is a hard contract) + route admission (the inject allowlist, and `rejectRequest`'s behaviour on both accessors plus its failure direction)
 node scripts/verify-docs.mjs         # document-pair parity: a declared bilingual pair must name the same artifacts (language-suffix normalization + full-width punctuation in the splitter)
 node scripts/verify-sync.mjs         # runs the real sync.ps1 against a disposable profile: four generation-retention scenarios (link resolves / dangling / no link / never staged into)
 node scripts/verify-all-skip.mjs     # the aggregate's ruling on a SKIP: an undeclared skip fails / a declared one is reported with its precondition / a dead declaration fails before any suite runs

@@ -428,9 +428,10 @@ check('persona sentence names the UNC spelling', WSL_PERSONA_SENTENCE.includes('
 //
 // `api-session/added` fires BEFORE the harness registers the session's agent, so
 // a one-shot `agents.get` lost that race EVERY time and the session stayed in the
-// Windows world for good (a preset is fixed at creation). Measured on Desktop
-// 0.2.2-rc.3: a session in a WSL-UNC workspace recorded `ok:false`. The wait is
-// bounded so a registry that never answers cannot hang the fallback either.
+// Windows world for good (a preset is fixed at creation). Measured on a
+// master-built Desktop labelled 0.2.2-rc.3: a session in a WSL-UNC workspace
+// recorded `ok:false`. The wait is bounded so a registry that never answers
+// cannot hang the fallback either.
 {
   const { waitForAgent } = await import('../lib/host/state.js')
   const noSleep = async () => {}
