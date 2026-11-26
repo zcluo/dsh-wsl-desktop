@@ -10,7 +10,7 @@
  * WHAT IS REWRITTEN: only path-valued fields. Shas and byte counts are untouched, so
  * the receipt still proves exactly what was measured.
  *
- *   repository-absolute  E:\projects\dsh-wsl-desktop\docs\x.json  ->  docs/x.json
+ *   repository-absolute  <repo-root>\docs\x.json                 ->  docs/x.json
  *   tool binary         C:\Program Files\nodejs\node.exe          ->  node
  *   browser binary      C:\Program Files\...\msedge.exe          ->  msedge
  *   scratch tool path   ...\.superpowers\archify-3.2.0\...\archify.mjs -> archify
